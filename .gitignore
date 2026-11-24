@@ -1,0 +1,18 @@
+# Своё у каждой установки: конфиг проекта, его код-надстройка и папка проекта.
+# Ядро пользователь не правит — поэтому `git pull` конструктора остаётся возможным.
+/dispatcher.project.json
+/dispatcher.project.json.prev
+/dispatcher.project.mjs
+/project/
+/setup/answers.json
+
+# Список частных слов для ворот публикации: сам список публиковать нельзя.
+/.private-denylist
+
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Инструменты разового переноса из исходного репозитория (нужен TypeScript как разборщик; в конструктор не входит).
+/.import/

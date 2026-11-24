@@ -1,0 +1,38 @@
+/* backlog.css — стили раздела «Бэклог»; подключает ui/backlog.js при установке раздела. */
+.bl-root{display:grid;gap:10px;min-width:0}
+.bl-root>*{min-width:0}
+.bl-quick{display:grid;gap:6px;background:var(--soft);border-radius:var(--r-in);padding:8px}
+.bl-quick textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);resize:vertical;min-height:62px}
+.bl-quick .sub{font-size:11px;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace}
+.bl-f{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.bl-f select,.bl-ep select,.bl-ep input{font:inherit;font-size:12px;padding:3px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:100%}
+.bl-list{display:grid;gap:6px}
+.bl-row{background:var(--soft);border-radius:var(--r-in);padding:7px 10px;cursor:pointer;border-left:4px solid var(--line);display:grid;gap:3px}
+.bl-row:hover{background:var(--chip)}
+.bl-rh{display:flex;gap:6px;align-items:center;font-size:12px}
+.bl-rh .sp,.bl-ch .sp,.bl-sh .sp{flex:1}
+.bl-rt{font-size:13px;color:var(--ink);line-height:1.35}
+.bl-ar{display:flex;gap:4px;flex-wrap:wrap}
+.bl-tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;background:var(--chip);color:var(--text-2);font-family:ui-monospace,monospace;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0}
+button.bl-tag{cursor:pointer;color:var(--accent)}
+.bl-card{display:grid;gap:8px;min-width:0}
+.bl-card .chips{flex-wrap:wrap}
+.bl-ch{display:flex;gap:8px;align-items:center}
+.bl-title{font-weight:650;font-size:14.5px;color:var(--ink);line-height:1.35}
+.bl-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px}
+.bl-path{font-size:11px;word-break:break-all}
+.bl-acts{gap:6px}
+.bl-ep .chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.bl-ep select{width:100%}
+.bl-ep{min-width:0;display:grid;gap:6px;background:var(--accent-soft);border-radius:var(--r-in);padding:8px 10px}
+.bl-sec{border-top:1px solid var(--line);padding-top:6px}
+.bl-sh{display:flex;align-items:center;gap:6px;font-weight:700;font-size:12.5px;color:var(--text-2);text-transform:uppercase;letter-spacing:.02em;margin-bottom:4px}
+.bl-md{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.bl-md h1,.bl-md h2,.bl-md h3{font-size:13.5px;margin:8px 0 4px}
+.bl-agent{border-top:1px solid var(--line);padding-top:6px}
+.bl-agent>summary{cursor:pointer;display:flex;gap:8px;align-items:center;list-style:none}
+.bl-agent>summary::before{content:"▸";color:var(--text-3)} .bl-agent[open]>summary::before{content:"▾"}
+.bl-agent .chatslot{margin-top:6px}
+.bl-agent .chat.inline{height:clamp(320px,55vh,640px)}
+
+.chat[data-key="backlog"] [data-chat="prompt"],.chat[data-key="backlog"] [data-chat="where"]{display:none}

@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "name": "demo-shop",
+  "repo": {
+    "main": "~/code/demo-shop",
+    "worktrees": "~/code/demo-shop-wt",
+    "remote": "origin",
+    "upstream": { "staging": "develop", "main": "main" }
+  },
+  "agent": { "runtime": "claude" },
+  "areas": {
+    "api": { "title": "API", "paths": ["apps/api/**", "packages/**"], "denyEdit": ["apps/web/**"], "build": true, "tasks": ["api-test"] },
+    "web": { "title": "Витрина", "paths": ["apps/web/**"], "denyEdit": ["apps/api/**", "packages/**"], "tasks": ["web-test"] }
+  },
+  "deny": {
+    "commands": ["npx jest", "npx vitest", "npm test"],
+    "edit": ["/package.json", "/package-lock.json", "/.github/**"]
+  },
+  "protected": ["deploy*.sh"],
+  "slotPrepare": [
+    { "run": "npm ci --prefer-offline" },
+    { "run": "npm run build --workspaces --if-present", "when": "build" }
+  ],
+  "tasks": {
+    "api-test": { "label": "API: тесты по шаблону", "group": "Тесты", "run": "npx jest {input}", "input": { "label": "шаблон пути", "placeholder": "wv-0001" }, "cwd": "apps/api", "lane": "db", "parser": "jest" },
+    "web-test": { "label": "Витрина: тесты по фильтру", "group": "Тесты", "run": "npx vitest run {input}", "input": { "label": "подстрока спеки" }, "cwd": "apps/web", "parser": "vitest" },
+    "lint": { "label": "Линтер", "group": "Гарды", "run": "npm run lint", "gate": true },
+    "typecheck": { "label": "Типы", "group": "Гарды", "run": "npm run typecheck", "gate": true }
+  },
+  "machines": {
+    "local": { "workers": 4 }
+  },
+  "limits": { "slots": 3 }
+}

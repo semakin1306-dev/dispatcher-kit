@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Диспетчерская</title>
+<meta name="dash-token" content="__TOKEN__">
+<meta name="theme-color" content="#f4511e">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxOTIgMTkyIiB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmY3YTNkIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZTI0MTFhIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjE5MiIgaGVpZ2h0PSIxOTIiIHJ4PSI0NCIgZmlsbD0idXJsKCNnKSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48cGF0aCBkPSJNNDQgNjBoMTA0TTQ0IDk2aDEwNE00NCAxMzJoMTA0Ii8+PC9nPjxnIGZpbGw9IiNmZmYiPjxjaXJjbGUgY3g9IjcyIiBjeT0iNjAiIHI9IjEzIi8+PGNpcmNsZSBjeD0iMTE2IiBjeT0iOTYiIHI9IjEzIi8+PGNpcmNsZSBjeD0iODgiIGN5PSIxMzIiIHI9IjEzIi8+PC9nPjxjaXJjbGUgY3g9IjE1MyIgY3k9IjE1MyIgcj0iMjIiIGZpbGw9IiNmZmYiLz48Y2lyY2xlIGN4PSIxNTMiIGN5PSIxNTMiIHI9IjE0LjUiIGZpbGw9IiMxMmExNTAiLz48L3N2Zz4=">
+<script>
+  // тема ставится ДО отрисовки, иначе тёмная тема моргает белым
+  try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t } catch {}
+</script>
+<link rel="stylesheet" href="/ui/dash.css?v=__UIVER__">
+<link rel="stylesheet" href="/ui/review.css?v=__UIVER__">
+</head>
+<body>
+<div id="boot"><div class="bootbox">
+<svg class="bpanel" viewBox="0 0 560 300" role="img" aria-label="Пульт диспетчерской запускается">
+  <defs>
+    <pattern id="bgrid" width="20" height="20" patternUnits="userSpaceOnUse"><path class="grid" d="M20 0H0V20"/></pattern>
+    <radialGradient id="bsw" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(280 150) scale(46)"><stop offset="0" stop-color="var(--accent)" stop-opacity=".55"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></radialGradient>
+    <clipPath id="bscope"><rect x="24" y="252" width="160" height="34" rx="5"/></clipPath>
+  </defs>
+  <rect class="frame" x="4" y="4" width="552" height="292" rx="16"/>
+  <rect x="4" y="4" width="552" height="292" rx="16" fill="url(#bgrid)"/>
+    <path class="link" d="M246 136 C200 110 170 80 150 78"/><path class="flow" d="M246 136 C200 110 170 80 150 78"/>
+  <path class="link" d="M314 136 C360 110 380 80 400 78"/><path class="flow r" d="M314 136 C360 110 380 80 400 78"/>
+  <path class="link" d="M314 164 C360 190 380 220 400 222"/><path class="flow g r s" d="M314 164 C360 190 380 220 400 222"/>
+    <g>
+    <rect class="slot" x="196" y="22" width="14" height="14" rx="3" fill="#e5484d" style="animation-delay:0s"/>
+    <rect class="slot" x="216" y="22" width="14" height="14" rx="3" fill="#3e63dd" style="animation-delay:.25s"/>
+    <rect class="slot" x="236" y="22" width="14" height="14" rx="3" fill="#8e4ec6" style="animation-delay:.5s"/>
+    <rect class="slot" x="256" y="22" width="14" height="14" rx="3" fill="#f76b15" style="animation-delay:.75s"/>
+    <rect class="slot" x="276" y="22" width="14" height="14" rx="3" fill="#ffc53d" style="animation-delay:1s"/>
+    <rect class="slot" x="296" y="22" width="14" height="14" rx="3" fill="#30a46c" style="animation-delay:1.25s"/>
+    <rect class="slot" x="316" y="22" width="14" height="14" rx="3" fill="#a18072" style="animation-delay:1.5s"/>
+    <rect class="slot" x="336" y="22" width="14" height="14" rx="3" fill="#d6409f" style="animation-delay:1.75s"/>
+    <path class="link" d="M280 40 V112" stroke-dasharray="2 4"/><path class="flow s" d="M280 40 V112"/>
+  </g>
+    <circle class="ring2" cx="280" cy="150" r="56"/>
+  <circle class="ring" cx="280" cy="150" r="44"/>
+  <circle class="hub" cx="280" cy="150" r="34"/>
+  <g class="sweep"><path d="M280 150 L314 150 A34 34 0 0 0 304 126 Z"/></g>
+  <text class="hubt" x="280" y="154" text-anchor="middle">ПУЛЬТ</text>
+    <g class="node"><rect x="40" y="58" width="110" height="40" rx="9"/><circle class="lamp" cx="56" cy="78" r="5"/><text x="68" y="76">Пульт</text><text class="k" x="68" y="89">git · очередь</text></g>
+  <g class="node"><rect x="400" y="58" width="140" height="40" rx="9"/><circle class="lamp d2" cx="416" cy="78" r="5"/><text x="428" y="76">Агенты</text><text class="k" x="428" y="89">слоты · прогоны</text></g>
+  <g class="node"><rect x="400" y="202" width="140" height="40" rx="9"/><circle class="lamp d3" cx="416" cy="222" r="5"/><text x="428" y="220">staging</text><text class="k" x="428" y="233">линия влива</text></g>
+    <g><circle class="lamp" cx="222" cy="268" r="4"/><circle class="lamp d1" cx="238" cy="268" r="4"/><circle class="lamp d2" cx="254" cy="268" r="4"/><circle class="lamp d3" cx="270" cy="268" r="4"/><circle class="lamp d4" cx="286" cy="268" r="4"/><circle class="lamp d5" cx="302" cy="268" r="4"/><circle class="lamp d1" cx="318" cy="268" r="4"/><circle class="lamp d3" cx="334" cy="268" r="4"/></g>
+    <rect x="24" y="252" width="160" height="34" rx="5" fill="var(--canvas)" stroke="var(--line)"/>
+  <g clip-path="url(#bscope)"><path class="wave" d="M24 269 l10 0 l5 -11 l6 22 l5 -11 l14 0 l10 0 l5 -11 l6 22 l5 -11 l14 0 l10 0 l5 -11 l6 22 l5 -11 l14 0 l10 0 l5 -11 l6 22 l5 -11 l14 0 l10 0 l5 -11 l6 22 l5 -11 l14 0"/></g>
+    <path d="M494 284 A26 26 0 0 1 546 284" fill="none" stroke="var(--line)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M494 284 A26 26 0 0 1 520 258" fill="none" stroke="var(--good)" stroke-width="4" stroke-linecap="round" opacity=".7"/>
+  <g class="needle"><line x1="520" y1="284" x2="520" y2="262" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/></g>
+  <circle cx="520" cy="284" r="3" fill="var(--ink)"/>
+</svg>
+<div class="bstep" id="bootstep">Поднимаю пульт…</div>
+<div class="bbar"><i></i></div>
+<div class="sub" id="bootsub">Сервер собирает снимок git по всем папкам, это до минуты после запуска.</div>
+</div></div>
+<header>
+  <span class="logo"><i></i> <span id="logoText">Диспетчерская</span></span>
+  <button class="sm icon" id="burger" title="Меню: индикаторы, кнопки, эпики, тема" aria-label="Меню">☰</button>
+  <span class="seg" id="viewSeg"><button data-view="dash" title="Дашборд: линии веток и всё остальное" aria-label="Дашборд">▤</button><button data-view="kanban" title="Канбан: кто из веток на какой станции" aria-label="Канбан">▥</button></span>
+  <span class="pill" id="mem" data-act="anchor" data-to="mc-pc" style="cursor:pointer" title="Сколько памяти система ещё даст процессам. Клик — карточка машины в мониторе">память: —</span>
+  <span class="pill" id="queue" data-act="anchor" data-to="tasks" style="cursor:pointer" title="Клик — колонка «Задачи»">очередь: —</span>
+  <button class="sm" id="sideBtn" title="Чат оркестратора слева">💬<span class="lbl"> Оркестратор</span></button>
+  <button class="sm" id="tasksBtn" title="Колонка задач: что идёт, что ждёт, что упало">📋<span class="lbl"> Задачи</span></button>
+  <button class="sm" id="monBtn" title="Монитор машины справа: процессор, память, службы, прогоны">📊<span class="lbl"> Монитор</span></button>
+  <button class="sm" data-act="shardopen" data-mod="machines" hidden title="Полный прогон staging по машинам прогонов">🖧<span class="lbl"> Машины</span></button>
+  <button class="sm" data-act="collapseall" title="Свернуть всё: чаты слотов и подробности веток. Агенты не останавливаются, просто закрываются панели">⊟<span class="lbl"> Свернуть всё</span></button>
+  <span class="sp"></span>
+  <span id="net" title="идёт обмен с сервером"></span>
+  <span class="pill" id="upd">—</span>
+  <span class="pill bad" id="corruptPill" style="display:none"></span>
+  <button class="sm icon" id="reloadBtn" title="Обновить дашборд: сбросить кеши, заново прочитать git и перезагрузить страницу">↻</button>
+  <button class="sm" id="fetchBtn" title="git fetch: скачивает сведения о ветках проекта с remote (только чтение). Ваши ветки и файлы не меняются. Нужен, чтобы увидеть, что кто-то запушил вперёд.">⟳<span class="lbl"> git fetch</span></button>
+  <span class="seg" id="theme" title="Тема">
+    <button data-theme="light" title="Светлая тема" aria-label="Светлая тема">☀</button><button data-theme="auto" title="Как в системе" aria-label="Тема как в системе">◐</button><button data-theme="dark" title="Тёмная тема" aria-label="Тёмная тема">☾</button>
+  </span>
+  <div id="epics" class="epics"></div>
+</header>
+<div class="app" id="app">
+<nav id="rail"></nav>
+<aside id="side"><div class="sh" id="sidehead">🟥 Оркестратор <span class="sub" style="font-weight:400">чат прямо здесь · папка эпика + staging для чтения</span></div><div id="sidebody" style="min-height:0"></div><div id="sidepanel"></div></aside>
+<main>
+  <section><h2>Требует внимания</h2><div class="att" id="att"></div></section>
+  <section id="ggsec" class="ggc"><h2 data-act="ggtoggle" style="cursor:pointer;user-select:none" title="Свернуть или развернуть граф">Git-граф · staging, прод-ветка и ветки эпика <span id="ggarrow">▸</span></h2><div class="card"><div class="gg-head" id="ggh"></div><div class="gg" id="gg"><div class="sub">Загружаю историю…</div></div></div></section>
+  <section><h2>Линии слотов · клик по станции отмечает её вручную</h2><div class="lines" id="lines"></div></section>
+  <section id="kbsec"><h2>Канбан · ветки по станциям пути <span class="sub" style="font-weight:400;text-transform:none">клик по карточке — открыть ветку в дашборде</span></h2><div id="ordermap"></div><div class="kb" id="kb"></div></section>
+</main>
+<div id="right"><aside id="tasks"></aside><aside id="mon"></aside></div>
+</div>
+<nav id="bnav">
+  <button data-pv="lines"><span class="ic">🌿</span>Ветки<span class="bd" id="bd-lines" hidden></span></button>
+  <button data-pv="tasks"><span class="ic">📋</span>Задачи<span class="bd" id="bd-tasks" hidden></span></button>
+  <button data-pv="orch"><span class="ic">💬</span>Оркестратор<span class="bd" id="bd-orch" hidden></span></button>
+  <button data-pv="runs"><span class="ic">▶</span>Запуски</button>
+  <button data-pv="mon"><span class="ic">📊</span>Монитор</button>
+</nav>
+<div id="drawer"><div id="dh"></div><pre id="log"></pre></div>
+<div id="chg"><div class="cg" id="cg"></div></div>
+<div id="stn"></div>
+<div id="modal"><div class="mb" id="mb"></div></div>
+<div id="relayfx"></div>
+<div id="toast"></div>
+
+<script type="module" src="/ui/v__UIVER__/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,97 @@
+/* review.css — стили окна разметки владельца (ui/review.js): блоки документа, строки диффа, замечания. */
+#annot{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:30;padding:16px}
+#annot.on{display:flex}
+#annot .an-box{margin:auto;width:100%;max-width:1500px;height:100%;background:var(--card);color:var(--ink);border-radius:var(--r-card);box-shadow:var(--shadow);display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;font:14px/1.5 var(--font)}
+#annot .an-h{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line)}
+#annot .an-b{display:grid;grid-template-columns:minmax(0,1fr) 360px;min-height:0}
+#annot .an-sp{flex:1}
+#annot .an-mute{color:var(--text-2);font-size:12.5px}
+#annot .an-mono{font-family:var(--mono);font-size:12px}
+#annot .an-empty{padding:24px;color:var(--text-2)}
+#annot .an-hint{font-size:12px;color:var(--text-3);margin:0 0 10px}
+#annot .an-chip{font-size:12px;padding:2px 10px;border-radius:var(--r-pill);background:var(--chip);border:0;color:var(--ink)}
+#annot .an-chip.ok{background:var(--good-bg);color:var(--good)}
+#annot .an-chip.warn{background:var(--warn-bg);color:var(--warn-text);cursor:pointer}
+#annot .an-seg{display:inline-flex;background:var(--chip);border-radius:var(--r-pill);padding:2px}
+#annot .an-seg button{border:0;background:transparent;padding:3px 12px;border-radius:var(--r-pill);cursor:pointer;color:var(--text-2);font:inherit;font-size:12.5px}
+#annot .an-seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+#annot .an-btn{font:inherit;font-size:12.5px;padding:4px 12px;border-radius:var(--r-pill);border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+#annot .an-btn.primary{background:var(--action-bg);color:var(--action-fg);border-color:var(--action-bg)}
+#annot .an-btn.ok{background:var(--good-bg);color:var(--good);border-color:transparent}
+#annot .an-btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+#annot .an-btn:disabled{opacity:.45;cursor:default}
+#annot .an-btn.busy{opacity:.6}
+#annot .an-x{border:0;background:transparent;color:var(--text-2);cursor:pointer;font-size:12px;padding:0 4px}
+#annot .an-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+#annot .an-stt{display:flex;gap:6px;align-items:center;font-weight:600;font-size:12.5px;margin-bottom:4px}
+
+#annot .an-doc{overflow:auto;padding:14px 20px 40px;min-height:0;outline:none}
+#annot .an-blk{position:relative;display:grid;grid-template-columns:54px minmax(0,1fr) auto;gap:8px;padding:2px 6px;border-radius:8px;border-left:3px solid transparent;cursor:pointer}
+#annot .an-blk:hover{background:var(--soft)}
+#annot .an-blk.sel{background:var(--accent-soft);border-left-color:var(--accent)}
+#annot .an-blk.has{border-left-color:var(--warn)}
+#annot .an-blk.chg{box-shadow:inset 0 0 0 1px var(--good);background:var(--good-bg)}
+#annot .an-ln{font:11px var(--mono);color:var(--text-3);text-align:right;padding-top:4px;user-select:none}
+#annot .an-in{min-width:0}
+#annot .an-in p{margin:2px 0}
+#annot .an-in code{font-family:var(--mono);font-size:12.5px;background:var(--chip);padding:0 4px;border-radius:4px}
+#annot .an-h1{font-size:21px;font-weight:700;margin:8px 0 2px}
+#annot .an-h2{font-size:17px;font-weight:700;margin:8px 0 2px}
+#annot .an-h3,#annot .an-h4,#annot .an-h5,#annot .an-h6{font-size:15px;font-weight:600;margin:4px 0 0}
+#annot .an-li{display:flex;gap:8px}
+#annot .an-mk{color:var(--text-2);min-width:14px}
+#annot .an-tr{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:10px;font-size:13px;border-bottom:1px solid var(--line);padding:2px 0}
+#annot .an-tr.head{font-weight:600}
+#annot .an-code,#annot .an-fm{font:12px/1.45 var(--mono);background:var(--soft);padding:8px 10px;border-radius:8px;margin:2px 0;white-space:pre-wrap}
+#annot .an-fm{color:var(--text-2)}
+#annot blockquote{margin:2px 0;padding-left:10px;border-left:3px solid var(--line);color:var(--text-2)}
+#annot .an-cnt{font-size:11px;background:var(--warn);color:#111;border-radius:var(--r-pill);padding:0 7px;height:18px;align-self:start;margin-top:3px}
+#annot .an-tb{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px 62px;padding:6px 8px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);position:sticky;bottom:6px;z-index:2;font-family:var(--font);white-space:normal}
+#annot .an-comp{margin:4px 0 10px 62px;padding:10px;border:1px solid var(--accent);border-radius:12px;background:var(--card);display:grid;gap:6px;font-family:var(--font);white-space:normal}
+#annot textarea,#annot select{font:inherit;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);width:100%;box-sizing:border-box;resize:vertical}
+#annot select{width:auto}
+#annot .an-chg{border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-bottom:12px;background:var(--soft)}
+#annot .an-chg pre{font:12px/1.45 var(--mono);margin:0;max-height:300px;overflow:auto;white-space:pre-wrap}
+#annot .an-chg .a{background:var(--good-bg);display:block}
+#annot .an-chg .d{background:var(--bad-bg);display:block;text-decoration:line-through;opacity:.8}
+#annot .an-chg .n{display:inline-block;width:46px;color:var(--text-3)}
+#annot .an-chg .gap,#annot .an-chg .c{display:block}
+#annot .an-chg .gap{color:var(--text-3)}
+
+#annot .an-side{border-left:1px solid var(--line);padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto;background:var(--soft)}
+#annot .an-notes{display:grid;gap:6px;align-content:start}
+#annot .an-note{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;padding:6px 8px;cursor:pointer;font-size:12.5px}
+#annot .an-note.k-question{border-left-color:var(--run)}
+#annot .an-note.k-delete{border-left-color:var(--bad)}
+#annot .an-note.k-replace{border-left-color:var(--accent)}
+#annot .an-nh{display:flex;gap:6px;align-items:center}
+#annot .an-q{color:var(--text-2);font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;max-height:3.2em;overflow:hidden}
+#annot .an-t{white-space:pre-wrap}
+#annot .an-pv pre{font:11.5px/1.45 var(--mono);white-space:pre-wrap;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px;max-height:320px;overflow:auto;margin:0}
+
+#annot .an-dwrap{display:grid;grid-template-columns:300px minmax(0,1fr);min-height:0}
+#annot .an-files{overflow:auto;border-right:1px solid var(--line);padding:6px}
+#annot .an-f{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto;gap:6px;align-items:center;padding:3px 6px;border-radius:8px;cursor:pointer;font-size:12px}
+#annot .an-f.on{background:var(--accent-soft)}
+#annot .an-f:hover{background:var(--soft)}
+#annot .an-c{font-weight:700;color:var(--text-2)}
+#annot .an-fp{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+#annot .an-dl{font:12px/1.5 var(--mono);margin:0;white-space:pre}
+#annot .an-dl .dl{display:block;cursor:pointer;padding-right:8px}
+#annot .an-dl .dl .n{display:inline-block;width:52px;color:var(--text-3);text-align:right;margin-right:8px;user-select:none}
+#annot .an-dl .dl.a{background:var(--good-bg)}
+#annot .an-dl .dl.d{background:var(--bad-bg)}
+#annot .an-dl .dl.h{color:var(--run);cursor:default;background:var(--run-bg)}
+#annot .an-dl .dl.m{color:var(--text-3);cursor:default}
+#annot .an-dl .dl.sel{outline:2px solid var(--accent);outline-offset:-2px}
+#annot .an-dl .dl.has{box-shadow:inset 3px 0 0 var(--warn)}
+#annot .an-inote{display:block;margin:2px 0 4px 60px;padding:3px 8px;border-radius:8px;background:var(--warn-bg);color:var(--ink);font-family:var(--font);font-size:12.5px;white-space:pre-wrap}
+#annot .an-inote.k-question{background:var(--run-bg)}
+#annot .an-inote.k-delete{background:var(--bad-bg)}
+@media (max-width:900px){
+  #annot{padding:0}
+  #annot .an-b{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}
+  #annot .an-side{border-left:0;border-top:1px solid var(--line);max-height:45vh}
+  #annot .an-dwrap{grid-template-columns:1fr;grid-template-rows:120px minmax(0,1fr)}
+  #annot .an-tb,#annot .an-comp{margin-left:0}
+}

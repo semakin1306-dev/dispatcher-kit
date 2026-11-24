@@ -1,0 +1,15 @@
+{"at":1795003200000,"type":"owner.answer","key":"orchestrator@demo","epic":"demo"}
+{"at":1795003260000,"type":"agent.turn","key":"orchestrator@demo","epic":"demo","act":true,"cr":50000}
+{"at":1795005000000,"type":"agent.message","key":"orchestrator@demo","epic":"demo","kind":"msg","brief":"Ответ слота П1: готово, тесты зелёные"}
+{"at":1795005060000,"type":"agent.turn","key":"orchestrator@demo","epic":"demo","act":true,"cr":60000}
+{"at":1795006800000,"type":"dispatcher.message","key":"orchestrator@demo","epic":"demo"}
+{"at":1795006860000,"type":"agent.turn","key":"orchestrator@demo","epic":"demo","act":true,"cr":40000}
+{"at":1795008600000,"type":"job.start","id":"j1","epic":"demo","tree":"wv0001-a"}
+{"at":1795009200000,"type":"agent.turn","key":"wv0001-a","epic":"demo","act":true,"cr":30000}
+{"at":1795011180000,"type":"job.end","id":"j1","epic":"demo","tree":"wv0001-a"}
+{"at":1795011960000,"type":"agent.message","key":"orchestrator@demo","epic":"demo","kind":"nudge","brief":"[Диспетчерская, сторож простоя] в эпике никто не работает"}
+{"at":1795011990000,"type":"agent.turn","key":"orchestrator@demo","epic":"demo","act":false,"cr":270000}
+{"at":1795015560000,"type":"agent.message","key":"orchestrator@demo","epic":"demo","kind":"nudge","brief":"[Диспетчерская, сторож простоя] в эпике никто не работает"}
+{"at":1795015590000,"type":"agent.turn","key":"orchestrator@demo","epic":"demo","act":false,"cr":270000}
+{"at":1795019160000,"type":"agent.message","key":"orchestrator@demo","epic":"demo","kind":"nudge","brief":"[Диспетчерская, сторож простоя] в эпике никто не работает"}
+{"at":1795019190000,"type":"agent.turn","key":"orchestrator@demo","epic":"demo","act":false,"cr":270000}

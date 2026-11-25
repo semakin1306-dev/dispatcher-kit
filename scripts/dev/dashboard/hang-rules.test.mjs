@@ -9,7 +9,13 @@ const HEAD = "[сервер] клетка памяти: 9 ГБ без подка
 test("partialSpecs: список спек под «ЧАСТИЧНЫЙ прогон»; без него — пусто", () => {
     assert.deepEqual(partialSpecs(HEAD), ["components/Layout/__tests__/wv-1073-plan-usage-footer.spec.ts", "utils/__tests__/wv-0984-help-public.spec.ts"]);
     assert.deepEqual(partialSpecs(" RUN v2.1.9\n ✓ a.spec.ts"), []);
-    assert.deepEqual(partialSpecs("⚠ ЧАСТИЧНЫЙ прогон витрины: …\n   · pages/programs/[slug]/__tests__/wv-1068-first-step.spec.ts\n"), ["pages/programs/[slug]/__tests__/wv-1068-first-step.spec.ts"], "скобки в пути");
+    assert.deepEqual(
+        partialSpecs(
+            "⚠ ЧАСТИЧНЫЙ прогон витрины: …\n   · pages/programs/[slug]/__tests__/wv-1068-first-step.spec.ts\n",
+        ),
+        ["pages/programs/[slug]/__tests__/wv-1068-first-step.spec.ts"],
+        "скобки в пути",
+    );
 });
 
 test("hungSpecs и hangDue: неотчитавшиеся спеки и тишина дольше порога", () => {

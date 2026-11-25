@@ -1,6 +1,7 @@
 // backlog-rules.mjs — чистые правила бэклога: формат элемента (frontmatter, разделы), статусы и их переходы, проверка
 // правок, разбор карточек ретро последнего закрытого эпика, разрешения агента бэклога (пишет только файлы элементов,
 // команды — только чтение) и тексты его подсказок.
+import { prompt } from "../prompts.mjs";
 export const STATUSES = ["new", "researching", "researched", "planned", "in-wave", "done", "rejected", "dropped"];
 export const STATUS_WORD = { new: "новый", researching: "исследуется", researched: "исследован", planned: "в эпике", "in-wave": "в волне", done: "готово", rejected: "отказ", dropped: "отклонён" };
 export const FIELDS = ["id", "type", "status", "reason", "area", "epic", "wave", "source", "retro", "created", "research"];
@@ -159,12 +160,62 @@ export function ownerPart(body) {
 
 export function itemOf(file, text) {
     const p = parseItem(text), m = p.meta, id = m.id || (FILE_RE.exec(file) || [])[1] || "";
-    return { id, file, type: m.type || "backlog", status: isStatus(m.status) ? m.status : "new", reason: m.reason || "", retro: retroOfMeta(m), area: areaList(m.area), epic: m.epic || "", wave: m.wave ? m.wave.toUpperCase() : "", source: m.source || "", created: m.created || "", research: m.research || "", title: titleOf(p.body) || id,
+    return {
+        id,
+        file,
+        type: m.type || "backlog",
+        status: isStatus(m.status) ? m.status : "new",
+        reason: m.reason || "",
+        retro: retroOfMeta(m),
+        area: areaList(m.area),
+        epic: m.epic || "",
+        wave: m.wave ? m.wave.toUpperCase() : "",
+        source: m.source || "",
+        created: m.created || "",
+        research: m.research || "",
+        title: titleOf(p.body) || id,
         owner: ownerPart(p.body).replace(/^#\s+[^\n]*\n*/, ""),
-        researchText: getSection(p.body, SECTION_RESEARCH) || "", planText: getSection(p.body, SECTION_PLAN) || "", meta: m };
+        researchText: getSection(p.body, SECTION_RESEARCH) || "",
+        planText: getSection(p.body, SECTION_PLAN) || "",
+        meta: m,
+    };
 }
 
-const TR = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "c", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
+const TR = {
+    а: "a",
+    б: "b",
+    в: "v",
+    г: "g",
+    д: "d",
+    е: "e",
+    ё: "e",
+    ж: "zh",
+    з: "z",
+    и: "i",
+    й: "y",
+    к: "k",
+    л: "l",
+    м: "m",
+    н: "n",
+    о: "o",
+    п: "p",
+    р: "r",
+    с: "s",
+    т: "t",
+    у: "u",
+    ф: "f",
+    х: "h",
+    ц: "c",
+    ч: "ch",
+    ш: "sh",
+    щ: "sch",
+    ъ: "",
+    ы: "y",
+    ь: "",
+    э: "e",
+    ю: "yu",
+    я: "ya",
+};
 
 export function slugOf(s, max = 48) {
     const t = String(s || "").toLowerCase().split("").map((c) => TR[c] ?? c).join("").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -195,7 +246,18 @@ export function newItemText({ id, text, source = "", area = "", retro = "", at =
         throw new Error("пустой текст");
     if (retro && !EPIC_ID_RE.test(retro))
         throw new Error("retro — id эпика из реестра");
-    const fm = ["---", "id: " + id, "type: backlog", "status: new", ...(areaList(area).length ? ["area: " + areaList(area).join(", ")] : []), "source: " + (String(source || "").trim() || "владелец, быстрый ввод " + dmy(at)), ...(retro ? ["retro: " + retro] : []), "created: " + ymd(at), "research: needed", "---"];
+    const fm = [
+        "---",
+        "id: " + id,
+        "type: backlog",
+        "status: new",
+        ...(areaList(area).length ? ["area: " + areaList(area).join(", ")] : []),
+        "source: " + (String(source || "").trim() || "владелец, быстрый ввод " + dmy(at)),
+        ...(retro ? ["retro: " + retro] : []),
+        "created: " + ymd(at),
+        "research: needed",
+        "---",
+    ];
     return fm.join("\n") + "\n\n# " + firstLine(body) + "\n\n## " + SECTION_OWNER + "\n\n" + body + "\n";
 }
 
@@ -245,14 +307,36 @@ export function retroTriage(items, epics, epicId = "") {
     if (!e)
         return null;
     const mine = (items || []).filter((it) => it && !it.error && it.retro === e.id);
-    return { epic: e.id, title: e.title || e.id, total: mine.length, open: mine.filter((it) => TRIAGE_OPEN.includes(it.status)).map((it) => ({ id: it.id, title: String(it.title || "").slice(0, 160), status: it.status })) };
+    return {
+        epic: e.id,
+        title: e.title || e.id,
+        total: mine.length,
+        open: mine
+            .filter((it) => TRIAGE_OPEN.includes(it.status))
+            .map((it) => ({ id: it.id, title: String(it.title || "").slice(0, 160), status: it.status })),
+    };
 }
 
 export function retroGateWhy(tr, cli = "scripts/dev/backlog.mjs") {
     if (!tr || !tr.open.length)
         return "";
-    return "ретро эпика «" + tr.title + "» (" + tr.epic + "): " + tr.open.length + " из " + tr.total + " карточек ждут решения — " + tr.open.map((x) => x.id).join(", ") +
-        ". Разбор: node " + cli + " triage; «берём» — set BL-NNNN status=planned epic=<эпик> (или status=in-wave wave=WV-NNNN), «отказ» — set BL-NNNN --status rejected --reason \"…\". Обход — только по слову владельца: --skip-retro";
+    return (
+        "ретро эпика «" +
+        tr.title +
+        "» (" +
+        tr.epic +
+        "): " +
+        tr.open.length +
+        " из " +
+        tr.total +
+        " карточек ждут решения — " +
+        tr.open.map((x) => x.id).join(", ") +
+        ". Разбор: node " +
+        cli +
+        " triage; «берём» — set BL-NNNN status=planned epic=<эпик> (или status=in-wave wave=WV-NNNN), " +
+        '«отказ» — set BL-NNNN --status rejected --reason "…". Обход — только по слову владельца: ' +
+        "--skip-retro"
+    );
 }
 
 export function splitShell(cmd) {
@@ -360,7 +444,24 @@ export const isBacklogFile = (p, dir) => {
 };
 
 const LOCAL_RO = /^(cat|head|wc|ls|stat|file|tree|pwd|echo|basename|dirname|realpath|uniq|cut|tr|nl|du|diff|cmp)$/;
-const GIT_RO = new Set(["log", "show", "diff", "blame", "grep", "ls-files", "ls-tree", "rev-parse", "status", "shortlog", "describe", "cat-file", "rev-list", "merge-base", "name-rev", "for-each-ref"]);
+const GIT_RO = new Set([
+    "log",
+    "show",
+    "diff",
+    "blame",
+    "grep",
+    "ls-files",
+    "ls-tree",
+    "rev-parse",
+    "status",
+    "shortlog",
+    "describe",
+    "cat-file",
+    "rev-list",
+    "merge-base",
+    "name-rev",
+    "for-each-ref",
+]);
 
 /** Одна команда строки оболочки: null — можно, иначе причина отказа (она уйдёт вопросом владельцу). */
 export function localSegOk(ts, ctx) {
@@ -378,7 +479,16 @@ export function localSegOk(ts, ctx) {
         if (ts[i] === "--no-pager")
             i++;
         const sub = ts[i];
-        if (!GIT_RO.has(sub) && !(sub === "branch" && ts.slice(i + 1).every((x) => /^(--show-current|-a|-r|--list|-v|--contains|--merged|[\w./-]+)$/.test(x)) && !ts.slice(i + 1).some((x) => /^-[dDmMcC]$|^--(delete|move|copy|set-upstream)/.test(x))))
+        if (
+            !GIT_RO.has(sub) &&
+            !(
+                sub === "branch" &&
+                ts
+                    .slice(i + 1)
+                    .every((x) => /^(--show-current|-a|-r|--list|-v|--contains|--merged|[\w./-]+)$/.test(x)) &&
+                !ts.slice(i + 1).some((x) => /^-[dDmMcC]$|^--(delete|move|copy|set-upstream)/.test(x))
+            )
+        )
             return "git " + (sub || "") + " — только чтение (log, show, diff, blame, grep, ls-files, status…)";
         if (ts.some((t) => /^--output(=|$)|^-O|^--open-files-in-pager|^--ext-diff$/.test(t)))
             return "git с записью в файл или внешней программой";
@@ -451,28 +561,40 @@ export function backlogDecide(req, ctx) {
 
 /** Системная подсказка агента бэклога: постоянная, без дат и номеров (её начало кешируется рантаймом). */
 export function backlogSystemPrompt({ dir, cwd, main, cli }) {
-    return [
-        "Ты — агент бэклога диспетчерской. Владелец между волнами записывает сюда замечания из тестирования продукта и задачи «из головы» — элементы бэклога (BL). Твоя работа по элементу: исследовать и подготовить заготовку для плана волны, чтобы оркестратор эпика мог включить элемент в волну. Код продукта ты не правишь никогда.",
-        "ГДЕ. Элементы — файлы " + dir + "/BL-NNNN-<слаг>.md: frontmatter (id, type: backlog, status: new|researching|researched|planned|in-wave|done|rejected|dropped, reason, area, epic, wave, source, retro, created, research) и текст владельца под заголовком «# …». Писать можно ТОЛЬКО в эти файлы: любая другая запись станет вопросом владельцу и будет отклонена. Рабочая папка " + cwd + " — отдельное дерево проекта на коде staging (диспетчерская обновляет его перед каждым исследованием): только чтение — ничего в нём не меняй и git-команды, меняющие дерево, не запускай. Планы волн и история эпиков — " + main + "/.claude/plans/waves (только чтение), история кода — git log/show/blame в рабочей папке.",
-        "ЗАДАЧА ПО ЭЛЕМЕНТУ. 1) Прочитай файл элемента целиком: текст владельца не переписывай и не сокращай; заголовок «# …» можно уточнить, если первой строкой он неудачен (смысл не меняй). 2) Собери факты: код (чтение файлов по частям, поиск), история волн (планы, git log). 3) Допиши в конец файла раздел «## Исследование»: факты со ссылками — файл:строки, даты и коммиты; что проверить не удалось — отдельным пунктом. 4) Раздел «## Предзаготовка плана»: затронутые места кода (модули, маршруты, страницы); тесты — какие есть, какой нужен первым красным; варианты решения (2–3, плюсы и минусы, рекомендация); риски (деньги, права, данные, миграции, приёмка); оценка (S/M/L, ~число файлов); в какой эпик или волну напрашивается; с какими другими BL можно объединить (BL-NNNN — почему). 5) Смени статус командой: node " + cli + " set BL-NNNN status=researched (и area=<области через запятую>, если поле пустое). Повторное исследование — те же разделы переписываются целиком, не дублируются.",
-        "ИНСТРУМЕНТЫ. Чтение и поиск по файлам; из оболочки — только чтение: git log/show/diff/blame/grep, grep, ls, cat, head, tail, sed -n. Целый большой файл — последний шаг. Список элементов: node " + cli + " list [--status S] [--area A]; один — node " + cli + " show BL-NNNN. На другие машины не ходи. Секреты (пароли, токены, ключи, строки подключения, cookie) и персональные данные (почта, телефоны) в файл и ответ не переносить: заменяй на «***».",
-        "ВОПРОСЫ ВЛАДЕЛЬЦУ. Что требует решения владельца (UX, деньги, права, что считать правильным поведением), пиши разделом: строка «Вопросы владельцу:», под ней нумерованные пункты с вариантами и твоей рекомендацией, после — пустая строка. Диспетчерская вынесет раздел карточкой во «Ждут вашего действия»; ответ придёт сообщением. Если без ответа исследование не закончить — запиши в файл то, что уже нашёл, задай вопрос и остановись; статус не меняй.",
-        "ОТВЕТ. Коротко: что найдено, что записано в файл (разделы), новый статус. Оркестратору ничего не передавай и блоков slot: не пиши — элемент в эпик включает владелец.",
-    ].join("\n\n");
+    return prompt("backlog-system", { dir, cwd, main, cli });
 }
 
 export function orchBacklogSection({ dir, cli }) {
-    return "БЭКЛОГ. Задачи владельца, записанные между волнами, лежат в " + dir + "/BL-NNNN-<слаг>.md (frontmatter: id, status new|researching|researched|planned|in-wave|done|rejected|dropped, reason, area, epic, wave, retro; разделы «Исследование» и «Предзаготовка плана» пишет агент бэклога). Читай списком: node " + cli + " list --status researched [--area …] [--epic …]; один элемент — node " + cli + " show BL-NNNN. Когда владелец при планировании волн говорит «посмотри бэклог» (или «возьми из бэклога»), возьми researched-элементы (и planned своего эпика), предложи группировку в волны: какие BL в какую волну и почему вместе, что из «Предзаготовки плана» берёшь в план. Включая элемент в волну, ставь его командой node " + cli + " set BL-NNNN epic=<id эпика> wave=WV-NNNN status=in-wave (эпик без волны — status=planned; после влива волны — status=done). Файлы бэклога руками не правь — только этой командой. Карточки ретро закрытого эпика (поле retro) разбираются до нового эпика — epic.mjs new без этого откажет: список — node " + cli + " triage; «берём» — status=planned/in-wave, «отказ» — node " + cli + " set BL-NNNN --status rejected --reason \"причина одной строкой\" (решение — владельца: предложи, не решай за него).";
+    return prompt("orch-backlog", { dir, cli });
 }
 
 export const RESEARCH_HEAD = "ИССЛЕДОВАНИЕ ЭЛЕМЕНТА БЭКЛОГА. Порядок и формат — в системной подсказке («Задача по элементу»). Элемент и дерево кода — в конце сообщения.";
 
 export function researchMessage({ id, file, sha = "", notes = "" }) {
-    return [RESEARCH_HEAD, "Элемент: " + id + " · файл " + file + (sha ? "\nДерево кода: staging " + sha : ""), notes ? "Замечания владельца к прошлому исследованию:\n" + notes : ""].filter(Boolean).join("\n\n");
+    return [
+        RESEARCH_HEAD,
+        "Элемент: " + id + " · файл " + file + (sha ? "\nДерево кода: staging " + sha : ""),
+        notes ? "Замечания владельца к прошлому исследованию:\n" + notes : "",
+    ]
+        .filter(Boolean)
+        .join("\n\n");
 }
 
-export const EPIC_HEAD = "БЭКЛОГ → ЭПИК. Владелец включил элемент бэклога в твой эпик. Прочитай его разделы «Исследование» и «Предзаготовка плана» (node <backlog.mjs> show) и учти при планировании волн; если указана волна — добавь элемент в её план (источник, решения) и скажи владельцу, что поменялось. Владельцу — только решения.";
+export const EPIC_HEAD = prompt("backlog-epic-head");
 
 export function epicMessage({ id, title, file, epic, wave = "", status, cli }) {
-    return [EPIC_HEAD.replace("<backlog.mjs>", cli), "Элемент: " + id + " «" + title + "» · файл " + file + "\nЭпик: " + epic + (wave ? " · волна " + wave : " · волна не выбрана") + " · статус " + status].join("\n\n");
+    return [
+        EPIC_HEAD.replace("<backlog.mjs>", cli),
+        "Элемент: " +
+            id +
+            " «" +
+            title +
+            "» · файл " +
+            file +
+            "\nЭпик: " +
+            epic +
+            (wave ? " · волна " + wave : " · волна не выбрана") +
+            " · статус " +
+            status,
+    ].join("\n\n");
 }

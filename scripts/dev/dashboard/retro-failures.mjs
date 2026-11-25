@@ -53,7 +53,19 @@ export function failSignatures(job, logText, { roots = [] } = {}) {
             if (seen.has(key))
                 continue;
             seen.add(key);
-            out.push({ key, cat: generic ? "spec" : "test", kind, label: generic ? spec : kind === "tsc" ? f.what.split(" ")[0] + " " + normReason(first, rel) : normReason(first, rel), reason: rel(first).slice(0, 240), test: f.what.slice(0, 200), files: [...new Set([...(files || []), spec].filter(Boolean))].map(rel).slice(0, 5) });
+            out.push({
+                key,
+                cat: generic ? "spec" : "test",
+                kind,
+                label: generic
+                    ? spec
+                    : kind === "tsc"
+                      ? f.what.split(" ")[0] + " " + normReason(first, rel)
+                      : normReason(first, rel),
+                reason: rel(first).slice(0, 240),
+                test: f.what.slice(0, 200),
+                files: [...new Set([...(files || []), spec].filter(Boolean))].map(rel).slice(0, 5),
+            });
         }
     }
     if (!out.length && job.status === "fail")
@@ -95,6 +107,22 @@ export function groupFailures(entries) {
         // прогоны на самой staging (ключ оркестратора) — не агент слота
         const repeated = [...g.perTree.entries()].filter(([t, l]) => !/^orchestrator/.test(t) && new Set(l.map((x) => x.fp).filter(Boolean)).size >= 2).map(([t]) => t);
         const reasons = [...(g.why || new Map()).values()].sort((a, b) => b.n - a.n);
-        return { key: g.key, cat: g.cat, kind: g.kind, label: g.label, reason: g.reason, reasons, test: g.test, n: g.n, jobs: g.jobs, trees: [...g.trees].sort(), tasks: [...g.tasks].sort(), files: [...g.files].sort(), first: g.first, last: g.last, repeated: repeated.sort() };
+        return {
+            key: g.key,
+            cat: g.cat,
+            kind: g.kind,
+            label: g.label,
+            reason: g.reason,
+            reasons,
+            test: g.test,
+            n: g.n,
+            jobs: g.jobs,
+            trees: [...g.trees].sort(),
+            tasks: [...g.tasks].sort(),
+            files: [...g.files].sort(),
+            first: g.first,
+            last: g.last,
+            repeated: repeated.sort(),
+        };
     }).sort((a, b) => b.n - a.n || b.trees.length - a.trees.length || a.key.localeCompare(b.key));
 }

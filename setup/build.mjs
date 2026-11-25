@@ -109,19 +109,33 @@ export function buildProject({ repo, answers, facts = null }) {
       remote: need("git.remote", "имя remote"),
       upstream: { staging: need("git.integration", "интеграционная ветка"), main: production || null },
     },
-    agent: { runtime: A("agent.runtime", "claude"), ...(A("agent.proxy", "") ? { proxy: A("agent.proxy", "") } : {}), ...(A("agent.network", false) ? { network: true } : {}), ...(Object.keys(A("agent.models", {})).length ? { models: A("agent.models", {}) } : {}) },
+    agent: {
+      runtime: A("agent.runtime", "claude"),
+      ...(A("agent.proxy", "") ? { proxy: A("agent.proxy", "") } : {}),
+      ...(A("agent.network", false) ? { network: true } : {}),
+      ...(Object.keys(A("agent.models", {})).length ? { models: A("agent.models", {}) } : {}),
+    },
     areas: A("areas", {}),
     deny: { commands: A("deny.commands", []), edit: A("deny.edit", []) },
-    slotPrepare: A("slotPrepare", []).map((s) => typeof s === "string" ? { run: s } : s),
+    slotPrepare: A("slotPrepare", []).map((s) => (typeof s === "string" ? { run: s } : s)),
     tasks: A("tasks", {}),
     machines,
     limits: { slots: A("limits.slots", 3) },
-    ci: { kind: A("ci.kind", "none"), ...(A("ci.runners", "") ? { runners: A("ci.runners", "") } : {}), ...(facts && facts.ci.files.length ? { files: facts.ci.files } : {}) },
+    ci: {
+      kind: A("ci.kind", "none"),
+      ...(A("ci.runners", "") ? { runners: A("ci.runners", "") } : {}),
+      ...(facts && facts.ci.files.length ? { files: facts.ci.files } : {}),
+    },
   }
   if (standRun || prodRun || pushDeploys) {
     project.release = {}
     if (standRun) project.release.stand = { run: standRun, ...(A("stand.url", "") ? { url: A("stand.url", "") } : {}) }
-    if (prodRun || pushDeploys || A("prod.verify", "")) project.release.prod = { ...(prodRun ? { run: prodRun } : {}), ...(production && A("prod.verify", "") ? { verify: A("prod.verify", "") } : {}), pushDeploys }
+    if (prodRun || pushDeploys || A("prod.verify", ""))
+      project.release.prod = {
+        ...(prodRun ? { run: prodRun } : {}),
+        ...(production && A("prod.verify", "") ? { verify: A("prod.verify", "") } : {}),
+        pushDeploys,
+      }
   }
   if (acceptRun) project.accept = { run: acceptRun, ...(A("stand.url", "") ? { standUrl: A("stand.url", "") } : {}) }
 

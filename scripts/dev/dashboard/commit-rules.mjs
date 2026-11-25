@@ -1,19 +1,17 @@
 // commit-rules.mjs — чистые правила коммитов агента слота: режим settings.selfCommit (station — сам после каждой станции
 // плана, free — сам по усмотрению, word — только по слову человека), форма команды коммита, проверка и починка подписи
 // (строка «Wave: WV-NNNN» в последнем абзаце — её ставит хук commit-msg), признак «волна закончена» для ворот заморозки и поезда.
-// Без импортов: модуль грузит и хук commit-msg, которому нельзя зависеть от конфига диспетчерской.
+// Из импортов — только тексты подсказок (prompts.mjs, без конфига): модуль грузит и хук commit-msg, которому нельзя
+// зависеть от конфига диспетчерской.
+import { prompt } from "../prompts.mjs";
 export const SELF_COMMIT_MODES = ["station", "free", "word"];
 export const SELF_COMMIT_DEFAULT = "station";
 export const selfCommitMode = (s) => (s && SELF_COMMIT_MODES.includes(s.selfCommit) ? s.selfCommit : SELF_COMMIT_DEFAULT);
 export const selfCommitOn = (s) => selfCommitMode(s) !== "word";
 
 export function selfCommitRule(mode = SELF_COMMIT_DEFAULT) {
-    const tail = " Подпись — по навыку slot-commit: тема «тип(область): WV-NNNN STn: суть». Строку «Wave: WV-NNNN» в последний абзац ставит хук коммита сам — номером волны (у поезда — вагона в работе) из реестра: свою можешь не писать, неверную он исправит. Только `git add <пути>` и `git commit` в своей папке: без -A, без -a, без --no-verify (без хука у коммита не будет строки Wave). Пуш, слияние, rebase, reset, чужие ветки, staging и main — нельзя: влив в staging и выкат — по слову владельца.";
-    if (mode === "word")
-        return "КОММИТ. Сам по своей инициативе не коммить: коммитишь, когда пришло сообщение «Владелец нажал кнопку «Коммит» в дашборде» (тот же текст присылают автопоезд и команда оркестратора «КОММИТ ПN») или владелец прямо написал «коммить»; тогда выполни навык slot-commit." + tail;
-    if (mode === "free")
-        return "КОММИТ. Коммить сам в своей ветке, когда работа дошла до цельного состояния; перед докладом «ГОТОВО» рабочее дерево чистое (всё своё закоммичено)." + tail;
-    return "КОММИТ. Коммить сам в своей ветке, без слова владельца: после каждой законченной станции плана (ST) — отдельный коммит этой станции; перед докладом «ГОТОВО» рабочее дерево чистое (всё своё закоммичено). Промежуточный коммит волну не замораживает: проверки диспетчерская ставит до твоего доклада «ГОТОВО»." + tail;
+    const head = mode === "word" ? prompt("commit-word") : mode === "free" ? prompt("commit-free") : prompt("commit-station");
+    return head + " " + prompt("commit-tail");
 }
 
 export const WAVE_LINE_RE = /^Wave:\s*(WV-?\d{3,4})\s*$/i;
@@ -29,7 +27,14 @@ export function commitMessageCheck(msg, wave = "") {
         return { ok: false, why: "пустая подпись коммита", wave: "" };
     const last = paras[paras.length - 1].split("\n").map((l) => l.trim()), hit = last.map((l) => WAVE_LINE_RE.exec(l)).find(Boolean);
     if (!hit || paras.length < 2)
-        return { ok: false, why: "в последнем абзаце подписи нет строки «Wave: " + (normW(Array.isArray(wave) ? wave[0] : wave) || "WV-NNNN") + "» — без неё диспетчерская не найдёт границы волны (вагона)", wave: "" };
+        return {
+            ok: false,
+            why:
+                "в последнем абзаце подписи нет строки «Wave: " +
+                (normW(Array.isArray(wave) ? wave[0] : wave) || "WV-NNNN") +
+                "» — без неё диспетчерская не найдёт границы волны (вагона)",
+            wave: "",
+        };
     const got = normW(hit[1]), wants = (Array.isArray(wave) ? wave : [wave]).map(normW).filter(Boolean);
     if (wants.length && !wants.includes(got))
         return { ok: false, why: "строка «Wave: " + got + "», а " + (wants.length > 1 ? "вагоны этого поезда — " + wants.join(", ") : "волна этого слота — " + wants[0]), wave: got };

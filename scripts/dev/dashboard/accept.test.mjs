@@ -11,7 +11,13 @@ import path from "node:path";
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dk-accept-"));
 process.env.DASH_DATA = path.join(TMP, "data");
 fs.mkdirSync(process.env.DASH_DATA, { recursive: true });
-after(async () => { const st = await import("./store.mjs"); await st.settled(); st.flushSync(); await st.settled(); fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => {
+    const st = await import("./store.mjs");
+    await st.settled();
+    st.flushSync();
+    await st.settled();
+    fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
 const A = await import("./accept.mjs");
 const { S } = await import("./state.mjs");
 const { settled } = await import("./store.mjs");
@@ -47,7 +53,14 @@ process.exit(1);
     assert.match(log, /stand=https:\/\/stand\.example\.com waves=WV-0001 WV-0002 items=-/);
     assert.deepEqual(r.results.map((x) => [x.wave, x.id, x.st]), [["WV-0001", "i1", "ok"], ["WV-0001", "i2", "bad"], ["WV-0002", "i1", "ok"]]);
 
-    S.acc["wv0001-a|s1"] = { key: "wv0001-a", merges: ["s1"], items: [{ id: "i1", where: "/", todo: "a", expect: "b", how: "auto", state: "todo", comment: "" }, { id: "i2", where: "/", todo: "c", expect: "d", how: "auto", state: "todo", comment: "" }] };
+    S.acc["wv0001-a|s1"] = {
+        key: "wv0001-a",
+        merges: ["s1"],
+        items: [
+            { id: "i1", where: "/", todo: "a", expect: "b", how: "auto", state: "todo", comment: "" },
+            { id: "i2", where: "/", todo: "c", expect: "d", how: "auto", state: "todo", comment: "" },
+        ],
+    };
     const sum = A.applyAcceptRun({ id: "j7" }, r.results, { "0001": "wv0001-a|s1", "0002": "wv0002-b|s2" });
     assert.deepEqual(sum, { ok: 2, bad: 1, skip: 0, stray: 1, lost: 0 }, "у второй волны чек-листа нет — итог «без пункта»");
     assert.equal(S.acc["wv0001-a|s1"].items[0].auto.st, "ok");
@@ -77,7 +90,13 @@ test("окружение команды: адрес стенда, волны, м
 
 test("спеки приёмки по шаблону: обход от неизменной части пути, служебные папки пропускаются", () => {
     const root = path.join(TMP, "repo");
-    for (const f of ["e2e/accept/wv-0001.accept.spec.ts", "e2e/accept/sub/wv-0002.accept.spec.ts", "e2e/accept/helpers.ts", "e2e/other/wv-0003.accept.spec.ts", "node_modules/e2e/accept/wv-0004.accept.spec.ts"]) {
+    for (const f of [
+        "e2e/accept/wv-0001.accept.spec.ts",
+        "e2e/accept/sub/wv-0002.accept.spec.ts",
+        "e2e/accept/helpers.ts",
+        "e2e/other/wv-0003.accept.spec.ts",
+        "node_modules/e2e/accept/wv-0004.accept.spec.ts",
+    ]) {
         fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
         fs.writeFileSync(path.join(root, f), "");
     }
@@ -87,8 +106,19 @@ test("спеки приёмки по шаблону: обход от неизм�
 
 test("ответ агента: чек-лист принят — пункты и ранние итоги на них; без блока — «не принят», пункты прежние", () => {
     S.acc["wv0005-c|s5"] = { key: "wv0005-c", autoStray: [{ st: "ok", title: "[i1] главная", job: "j1", at: 1 }] };
-    const a = { capture: { kind: "accept", tree: "wv0005-c", accKey: "wv0005-c|s5", startRev: 1, wave: "" },
-        items: [{ rev: 1, t: "user", text: "просьба" }, { rev: 2, t: "assistant", text: "сейчас посмотрю" }, { rev: 3, t: "tool" }, { rev: 4, t: "assistant", text: "```checklist\n- i1 | / | открыть | видна главная | авто\n- i2 | /x | нажать | ок | руками\n```" }] };
+    const a = {
+        capture: { kind: "accept", tree: "wv0005-c", accKey: "wv0005-c|s5", startRev: 1, wave: "" },
+        items: [
+            { rev: 1, t: "user", text: "просьба" },
+            { rev: 2, t: "assistant", text: "сейчас посмотрю" },
+            { rev: 3, t: "tool" },
+            {
+                rev: 4,
+                t: "assistant",
+                text: "```checklist\n- i1 | / | открыть | видна главная | авто\n- i2 | /x | нажать | ок | руками\n```",
+            },
+        ],
+    };
     A.captureReply(a);
     const e = S.acc["wv0005-c|s5"];
     assert.equal(a.capture, null);

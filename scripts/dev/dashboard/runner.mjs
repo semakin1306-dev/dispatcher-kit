@@ -8,12 +8,24 @@
 // Удалённые машины — модуль машин (shardApi()): когда он включён и в конфиге есть удалённые машины, задачи проекта
 // получают место через него (slot-places.mjs: сначала удалённые, эта машина — последней). Как запускать задачу на
 // удалённой машине, может сказать хук проекта remoteCmd (dispatcher.project.mjs) — его зовёт remoteCmdFor.
+//
+// Кто зовёт: autochain.mjs и http.mjs ставят прогоны (enqueue, enqueueChecked), boot.mjs при старте читает журнал
+// (loadRuns) и возвращает прерванные (requeueInterrupted), страница получает прогоны через publicJob и queueView.
+//
+// Состояние: записи прогонов — jobs.mjs (jobList); очереди дорожек (queues) и счётчики идущих (running) — здесь;
+// живые процессы шагов (procs: id прогона → процесс) — для отмены и снятия по времени. Файлы: журнал runs.jsonl
+// (дописывается только изменившимися записями, уплотняется при чтении) и лог прогона logs/jNNN.log.
+//
+// Жизнь прогона: queued → (место и проверки удержания) → running → ok | fail | cancelled | skipped | interrupted.
+// interrupted — прогон оборван не кодом (недоступна удалённая машина, перезапуск сервера): он возвращается в очередь сам.
+// Инварианты: защита от дублей на входе (liveTwin, enqInflight); прогон слота не стартует, пока его агент пишет ответ
+// (agentHold); тяжёлые служебные прогоны (поезд) идут по одному (conflicted); при подготовке к перезапуску (drainState)
+// новые прогоны не стартуют, кроме дорожек ops и commit.
 import { MAIN, PROJECT, fwd } from "../slots.mjs";
 import { canonInput, runGate } from "./loops.mjs";
 import { killTree as killTreeW, lowerPriority, spawn } from "./spawner.mjs";
 import fs from "node:fs";
 import { rewriteJsonl } from "./store.mjs";
-import os from "node:os";
 import path from "node:path";
 import { S } from "./state.mjs";
 import { shardApi } from "./shard.mjs";
@@ -30,18 +42,39 @@ import { TREES, epicOfKey, isOrch, treeByKey } from "./trees.mjs";
 import { DIST_TASKS, TASK_AREA, buildStampOf, codeFp, setBuildStamp } from "./fingerprint.mjs";
 import { exists, git, withGitPriority } from "./git.mjs";
 import { markTrain, saveTrain, trainFinished, trainNow } from "./pipeline.mjs";
-import { STAGING_BASELINE_RUNS, SUITE_FAM, autoRetry, failingSpecs, fileSnap, foreignRedBaseline, jobCovers, onlyStagingRed, realFail, recordSpecs, regexCovers, sbase, stagingRedCard, stagingRedClear } from "./regress.mjs";
+import {
+    STAGING_BASELINE_RUNS,
+    SUITE_FAM,
+    autoRetry,
+    failingSpecs,
+    fileSnap,
+    foreignRedBaseline,
+    jobCovers,
+    onlyStagingRed,
+    realFail,
+    recordSpecs,
+    regexCovers,
+    sbase,
+    stagingRedCard,
+    stagingRedClear,
+} from "./regress.mjs";
 import { afterBuild, queueResult } from "./relay.mjs";
 import { autoSendReview, parseReview, reviewToChat } from "./review.mjs";
 import { kick, markMergedNow, rebuildFresh, rebuildMerged, rebuildOne, snapNow } from "./snapshot.mjs";
 import { bumpVer } from "./events.mjs";
 import { PROJECT_HOOKS, TASKS, findBash as findBashW, launchOf, stepOfTask, timeLimitMin } from "./tasks.mjs";
 import { areaRefusal, prepCap } from "./slot-rules.mjs";
+import { availMem } from "./free-mem.mjs";
 import { hangDue, hangLogLines, hangSummary, hungSpecs } from "./hang-rules.mjs";
 import { lineVerdict, parseTaskLog, specAware, specInput } from "./parsers.mjs";
 
 const kickTrainLate = (key) => autoChain(key, "после влива в staging: следующий вагон").catch((e) => console.error("поезд после влива:", e.message));
 
+/**
+ * Прочитать журнал прогонов: последняя запись по id побеждает (журнал дописывается при каждом изменении прогона).
+ * Записей в файле больше чем вдвое против прогонов — переписать файл уплотнённым, чтобы он не рос без предела.
+ * Журнала ещё нет — прочитать прежние файлы runs-all.json и runs.json.
+ */
 export function loadRuns() {
     const byId = new Map(), take = (j) => {
         if (j && typeof j.id === "string")
@@ -82,6 +115,7 @@ export function loadRuns() {
     return all;
 }
 
+// id прогона → последняя записанная в журнал строка: в журнал уходят только изменившиеся записи.
 export const runsSeen = new Map();
 export const procs = new Map();
 
@@ -107,9 +141,13 @@ const laneQ = (lane) => {
 export const localServes = (lane) => !LOCAL.lanes || LOCAL.lanes.includes(lane);
 /** Занято воркеров этой машины задачами проекта. */
 const localBusy = () => Object.entries(running).filter(([l]) => isProjectLane(l)).reduce((n, [, v]) => n + v, 0);
-export const laneMax = (lane) => (lane === "prep" ? prepCap(os.freemem() / 2 ** 30) : LANE_MAX[lane] ?? LOCAL.workers);
+export const laneMax = (lane) => (lane === "prep" ? prepCap(availMem() / 2 ** 30) : LANE_MAX[lane] ?? LOCAL.workers);
 const laneFree = (lane) => (isProjectLane(lane) ? localServes(lane) && localBusy() < LOCAL.workers : running[lane] < laneMax(lane));
 
+/**
+ * Дописать в runs.jsonl изменившиеся прогоны и обрезать память до KEEP_JOBS последних. sync — при остановке сервера:
+ * асинхронная запись могла бы не успеть до выхода процесса.
+ */
 export function flushRuns(sync = false) {
     if (DRY)
         return;
@@ -143,6 +181,7 @@ export function flushRuns(sync = false) {
         });
 }
 
+// Отметить изменение прогонов: страница узнаёт сразу (версия «jobs»), запись в журнал — пачкой через 200 мс.
 export const save = () => {
     bumpVer("jobs");
     clearTimeout(S.saveTimer);
@@ -170,6 +209,7 @@ export function spawnStep(job, step, write) {
             resolve(127);
             return;
         }
+        // прогоны тестов и сборок не должны отнимать процессор у сервера и агентов
         lowerPriority(child);
         procs.set(job.id, child);
         child.stdout.on("data", (d) => write(String(d)));
@@ -180,6 +220,7 @@ export function spawnStep(job, step, write) {
         });
         child.on("close", (code) => {
             procs.delete(job.id);
+            // процесс снят сигналом (отмена, предел времени) — код 130, как у оболочки после Ctrl+C
             resolve(code === null ? 130 : code);
         });
     });
@@ -237,6 +278,7 @@ export function suiteTotal(job, p) {
     return files.filter((f) => re.test(f)).length || null;
 }
 
+/** Прогресс по мере вывода: незаконченная строка куска ждёт следующего куска в progBuf. */
 export function progFeed(job, chunk) {
     const lines = ((progBuf.get(job.id) || "") + chunk).split("\n");
     progBuf.set(job.id, lines.pop());
@@ -290,9 +332,11 @@ export function suiteFeed(job, chunk) {
         if (!v)
             continue;
         const b = sbase(v.spec);
+        // красный итог спеки не перекрывается зелёным повтором той же спеки внутри прогона
         if (!job.suiteDone[b] || job.suiteDone[b] === "ok")
             job.suiteDone[b] = v.ok ? "ok" : "fail";
     }
+    // хвост без перевода строки ограничен: вывод без переводов строк не раздует память
     suiteBuf.set(job.id, buf.slice(-4000));
 }
 
@@ -306,6 +350,7 @@ export function suiteExpected(job) {
 
 /** Предел времени, минуты: служебные задачи — свои; задачи проекта — timeoutMin из конфига. */
 export const TIME_LIMIT_MIN = { review: 25, train: 180, "slot-up": 40, merge: 10, "accept-run": 100 };
+// Переменная окружения DASH_LIMIT_<ЗАДАЧА> перекрывает предел (тестам нужны короткие пределы).
 const limitOf = (task) => Number(process.env["DASH_LIMIT_" + String(task).toUpperCase().replace(/-/g, "_")]) || TIME_LIMIT_MIN[task] || timeLimitMin(task) || 0;
 
 // ───────────────────────────── где идут проверки ─────────────────────────────
@@ -333,7 +378,9 @@ export const HEAVY = new Set(["train"]);
 const placedTrain = (j) => HEAVY.has(j.task) && PROJECT_LANES.includes(j.lane);
 /** Прогон берёт место через модуль машин: задача проекта или поезд в дорожке задач. */
 const takesPlace = (j) => !!REMOTE_TASKS[j.task] || placedTrain(j);
+/** Прогон берёт место через модуль машин: машины включены, задача проекта (или поезд в её дорожке), у слота есть папка. */
 export const remoteEligible = (j) => remoteOn() && takesPlace(j) && (j.tree === "orchestrator-staging" || !!(treeByKey(j.tree) || {}).path);
+// Требования к месту: сколько прогон ждёт (правило мест со временем пускает его на эту машину) и тяжёлый ли он.
 export const placeOpts = (j) => ({ ageMs: Date.now() - (j.queuedAt || Date.now()), heavy: HEAVY.has(j.task) || !!(REMOTE_TASKS[j.task] || {}).heavy, only: null, needs: [] });
 /** Прогон занял место удалённой машины (а не этой). */
 const onRemote = (job) => !!(job.runOn && job.runOn !== "local");
@@ -346,6 +393,7 @@ export const stepsFor = (job) => {
     return (job.steps || []).filter((s) => !s.on || s.on === where);
 };
 
+// Кавычки sh: удалённая машина — всегда POSIX-оболочка, даже если сервер на Windows.
 const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 /** Команда для оболочки удалённой машины: хук проекта remoteCmd, иначе та же команда задачи (ввод в кавычках sh). */
 export function remoteCmdFor(taskId, input) {
@@ -377,14 +425,19 @@ const fullRunNote = () => {
     }
 };
 
+/** Почему прогон ждёт места (строка для карточки); пусто — ждёт только свободного воркера. */
 export const serverWait = (j) => {
     if (remoteEligible(j))
-        return !shardApi().slotAnyOnline() ? (fullRunNote() || "удалённые машины не на связи: жду их; ") + "эта машина возьмёт проверку после ожидания, если на ней свободно" : "ждёт место: удалённые машины → эта (после ожидания и при свободной памяти)";
+        return !shardApi().slotAnyOnline()
+            ? (fullRunNote() || "удалённые машины не на связи: жду их; ") +
+                  "эта машина возьмёт проверку после ожидания, если на ней свободно"
+            : "ждёт место: удалённые машины → эта (после ожидания и при свободной памяти)";
     if (isProjectLane(j.lane) && !localServes(j.lane))
         return "дорожку «" + j.lane + "» эта машина не обслуживает (machines.local.lanes) — нужна удалённая машина";
     return "";
 };
 
+/** Тяжёлый служебный прогон ждёт, пока идёт другой такой же: два поезда сразу перегрузили бы машину. */
 export const conflicted = (j) => HEAVY.has(j.task) && jobList().some((x) => x !== j && x.picked && HEAVY.has(x.task) && !FINAL.includes(x.status));
 
 // Прогон слота не стартует, пока агент этого слота пишет ответ или ему в пути указание: иначе он идёт на коде, который
@@ -401,6 +454,10 @@ export function agentHold(j) {
     return "";
 }
 
+/**
+ * Прогон можно брать из очереди: проверка кнопки конвейера (gate pending) закончилась и агент слота не держит код.
+ * Заодно пишет причину ожидания в карточку.
+ */
 export const holdOk = (j) => {
     if (j.gate === "pending") {
         j.waitReason = "проверяю условия перед запуском…";
@@ -411,6 +468,7 @@ export const holdOk = (j) => {
     return !h;
 };
 
+/** Пересчитать причины ожидания всех очередей и запустить всё, что можно. */
 export const pumpAll = () => {
     for (const l of Object.keys(queues)) {
         for (const j of queues[l])
@@ -434,18 +492,31 @@ export function queueView() {
             catch {
                 mLabel = j.runOn;
             }
-        rows.push({ id: j.id, tag: t ? t.tag : j.tree === "orchestrator-staging" ? "staging" : String(j.tree).slice(0, 12), label: String(j.label || j.task).replace(/ · [^·]+$/, "").slice(0, 70), input: j.input ? String(j.input).slice(0, 50) : "",
-            status: run ? "running" : "queued", machine: run ? j.runOn || "local" : null, mLabel, at: run ? j.startedAt : j.queuedAt, wait: run ? "" : String(j.waitReason || "").slice(0, 140) });
+        rows.push({
+            id: j.id,
+            tag: t ? t.tag : j.tree === "orchestrator-staging" ? "staging" : String(j.tree).slice(0, 12),
+            label: String(j.label || j.task)
+                .replace(/ · [^·]+$/, "")
+                .slice(0, 70),
+            input: j.input ? String(j.input).slice(0, 50) : "",
+            status: run ? "running" : "queued",
+            machine: run ? j.runOn || "local" : null,
+            mLabel,
+            at: run ? j.startedAt : j.queuedAt,
+            wait: run ? "" : String(j.waitReason || "").slice(0, 140),
+        });
     }
     return rows.sort((a, b) => (a.status === b.status ? (a.at || 0) - (b.at || 0) : a.status === "running" ? -1 : 1)).slice(0, 60);
 }
 
+// Дорожки, которые идут и при подготовке к перезапуску: влив, выкат и коммит, начатые владельцем, не должны зависнуть.
 export const DRAIN_PASS = new Set(["ops", "commit"]);
 
 /** Места через модуль машин: короткие прогоны (меньше спек во вводе) — раньше; поезд — после всех. */
 export function pumpRemote() {
     if (DRY || drainState() || !remoteOn())
         return;
+    // Короткие прогоны раньше длинных: место освобождается быстрее, очередь у слотов движется.
     const cost = (j) => (j.task === "train" ? 5000 : 1000 + String(j.input || "").split(/[,|]/).length * 50);
     for (;;) {
         let pick = null;
@@ -456,8 +527,11 @@ export function pumpRemote() {
             });
         if (!pick)
             return;
+        // picked — прогон взят из очереди: более широкий новый прогон уже не снимет его как покрытого (enqueueRun)
         const next = queues[pick.lane].splice(pick.k, 1)[0];
         next.picked = true;
+        // Место было свободно при выборе, но бронь не удалась (его занял другой прогон между вызовами) — вернуть на то же место
+        // в очереди и ждать следующего освобождения.
         if (shardApi().slotReserve(next.id, pick.lane, placeOpts(next)) < 0) {
             queues[pick.lane].splice(pick.k, 0, next);
             next.picked = false;
@@ -490,6 +564,10 @@ function runPicked(job) {
     });
 }
 
+/**
+ * Запустить из очереди дорожки всё, что помещается в её предел. Задачи проекта сначала пробуют удалённые машины
+ * (pumpRemote), сюда — те, что идут на этой машине.
+ */
 export function pump(lane) {
     if (DRY || (drainState() && !DRAIN_PASS.has(lane)))
         return;
@@ -504,6 +582,7 @@ export function pump(lane) {
         running[lane]++;
         runPicked(next).finally(() => {
             running[lane]--;
+            // дорожки задач проекта делят воркеры этой машины: освободился воркер — шанс у всех дорожек
             if (isProjectLane(lane))
                 for (const l of PROJECT_LANES)
                     if (l !== lane)
@@ -515,6 +594,11 @@ export function pump(lane) {
 
 // ───────────────────────────── прогон ─────────────────────────────
 
+/**
+ * Выполнить прогон, взятый из очереди: службы → шаги (или одна команда на удалённой машине) → итог, сводка, журнал
+ * и последствия (снимок, автопоезд, ревью, поезд, сверка со staging). Отпечаток кода до и после — чтобы итог относился
+ * к определённому коду: страница и автопоезд отличают «зелёный на нынешнем коде» от «зелёный на прежнем».
+ */
 export async function runJob(job) {
     if (job.cancelled) {
         job.status = "cancelled";
@@ -554,7 +638,15 @@ export async function runJob(job) {
         }
         catch { }
         const su = pk === "slotup", mk = pk === "marks";
-        job.prog = { kind: pk, done: 0, total: su ? SLOT_STAGES.length : mk ? 5 : total, approx: !mk && !su, unit: su ? "этап" : mk ? "шаг" : "сьютов", phase: su ? SLOT_STAGES[0][1] : "", stages: su ? {} : undefined };
+        job.prog = {
+            kind: pk,
+            done: 0,
+            total: su ? SLOT_STAGES.length : mk ? 5 : total,
+            approx: !mk && !su,
+            unit: su ? "этап" : mk ? "шаг" : "сьютов",
+            phase: su ? SLOT_STAGES[0][1] : "",
+            stages: su ? {} : undefined,
+        };
     }
     const out = fs.createWriteStream(logPath(job.id), { flags: "a" });
     let tail = "";
@@ -577,6 +669,8 @@ export async function runJob(job) {
         if (job.suiteExp.length)
             job.hangList = job.suiteExp;
     }
+    // Висящие спеки: прогон знает список спек, часть из них без итога, а вывод давно молчит — снять и назвать эти спеки
+    // (иначе прогон простоял бы до общего предела времени, и причина была бы не видна).
     const markHung = (quietMin) => {
         if (job.hung || !job.hangList)
             return false;
@@ -632,7 +726,19 @@ export async function runJob(job) {
         job.step = 1;
         job.stepsTotal = 1;
         try {
-            code = await shardApi().slotRun({ jobId: job.id, key: job.tree, cwd: trPath, cmd: remoteCmdFor(job.task, job.input), lane: job.lane, heavy: !!REMOTE_TASKS[job.task].heavy }, write, (c) => procs.set(job.id, c), job.runOn);
+            code = await shardApi().slotRun(
+                {
+                    jobId: job.id,
+                    key: job.tree,
+                    cwd: trPath,
+                    cmd: remoteCmdFor(job.task, job.input),
+                    lane: job.lane,
+                    heavy: !!REMOTE_TASKS[job.task].heavy,
+                },
+                write,
+                (c) => procs.set(job.id, c),
+                job.runOn,
+            );
         }
         catch (e) {
             write(`\n✗ ${e.message}\n`);
@@ -667,6 +773,7 @@ export async function runJob(job) {
             code = 0;
             continue;
         }
+        // мягкий шаг: красный не останавливает прогон, чтобы в одном логе были все падения (итог прогона — красный)
         if (code !== 0 && step.soft && !job.cancelled) {
             write(`\n✗ шаг красный (код ${code}), идём дальше: нужны все падения\n`);
             softFail = code;
@@ -709,9 +816,10 @@ export async function runJob(job) {
             logEvent("job.infra", { id: job.id, tree: job.tree, task: job.task, kind: f.kind, line: f.line, try: job.infraTry || 0 });
         }
     }
-    // фильтр не совпал ни с одной спекой: тестов по волне ещё нет — не поломка кода
+    // фильтр не совпал ни с одной спекой: тестов по волне ещё нет — не поломка кода (skipped не просит починки)
     if (job.status === "fail" && /0 matches|No tests found|No test files found|no tests ran|не совпал[аои]?\s+ни с одним/i.test(tail))
         job.status = "skipped";
+    // отметка сборки — только если код за время сборки не менялся: иначе собран не тот код, что сейчас в папке
     if (trPath && job.task === "build" && job.status === "ok" && job.fpStart && job.fpStart === job.fpEnd)
         setBuildStamp(job.tree, { fp: job.fpEnd, at: Date.now(), job: job.id });
     setTimeout(() => withGitPriority(() => rebuildOne(job.tree)).catch(() => { }), 50);
@@ -726,7 +834,12 @@ export async function runJob(job) {
     if (job.hung)
         job.summary = hangSummary(job.hung.specs, job.hangList, job.hung.quietMin);
     if (job.baseline && job.status === "fail" && !failingSpecs(job.id).length) {
-        const msg = "Сверка со staging (" + job.id + ") не дошла до тестов: " + (job.summary || "см. лог") + ". Пока она не пройдёт, чужое красное в слотах не опознаётся как красное staging; повторы такого красного на том же коде диспетчерская сама не ставит.";
+        const msg =
+            "Сверка со staging (" +
+            job.id +
+            ") не дошла до тестов: " +
+            (job.summary || "см. лог") +
+            ". Пока она не пройдёт, чужое красное в слотах не опознаётся как красное staging; повторы такого красного на том же коде диспетчерская сама не ставит.";
         console.error("сверка со staging:", msg);
         for (const a of agents.values())
             if (isOrch(a.key) && !a.dead)
@@ -735,7 +848,19 @@ export async function runJob(job) {
     liveTail.delete(job.id);
     progBuf.delete(job.id);
     suiteBuf.delete(job.id);
-    logEvent("job.end", { id: job.id, tree: job.tree, task: job.task, input: job.input || "", status: job.status, code, sec: Math.round((job.endedAt - job.startedAt) / 1000), runOn: job.runOn || "local", fpStart: job.fpStart || null, fpEnd: job.fpEnd || null, summary: (job.summary || "").slice(0, 160) });
+    logEvent("job.end", {
+        id: job.id,
+        tree: job.tree,
+        task: job.task,
+        input: job.input || "",
+        status: job.status,
+        code,
+        sec: Math.round((job.endedAt - job.startedAt) / 1000),
+        runOn: job.runOn || "local",
+        fpStart: job.fpStart || null,
+        fpEnd: job.fpEnd || null,
+        summary: (job.summary || "").slice(0, 160),
+    });
     if (job.task === "review" && job.status === "ok" && settings.autoTrain)
         setTimeout(() => autoChain(job.tree, "ревью «ЗА»").catch((e) => console.error("автопоезд после ревью:", e.message)), 3000);
     if (job.task === "merge" && job.status === "ok") {
@@ -874,6 +999,10 @@ function trainScopeOf(key) {
     }
 }
 
+/**
+ * Поставить прогон в очередь → запись прогона (новую или уже живую такую же). Одновременные вызовы с тем же
+ * слотом, задачей и вводом получают один и тот же прогон: проверка дублей асинхронная (git), иначе прошли бы оба.
+ */
 export function enqueue(args) {
     const { treeKey, taskId, input, extra = {} } = args;
     if (extra.pipeline || taskId === "commit")
@@ -923,6 +1052,7 @@ async function enqueueRun({ treeKey, cwd, label, taskId, input, steps, lane, pro
         if (no)
             throw new Error(no);
     }
+    // Дерево кода и чистота папки при постановке: по ним видно, на каком коде прогон ставили и были ли незакоммиченные правки.
     const [tree, st] = await Promise.all([git(cwd, ["rev-parse", "HEAD^{tree}"]), git(cwd, ["status", "--porcelain"])]);
     const job = {
         id: `j${nextSeq()}`, epic: epicOfKey(treeKey), tree: treeKey, task: taskId, label, input: input || "", lane, status: "queued", queuedAt: Date.now(),
@@ -996,6 +1126,11 @@ export async function enqueueChecked(args, check) {
 // машиной, ставятся в очередь заново (один раз). Выкат, влив и коммит заново сами не запускаются.
 export const isBaselineJob = (j) => !!(j && (j.baseline || (j.tree === "orchestrator-staging" && j.by === "сверка со staging")));
 
+/**
+ * Вернуть в очередь прогоны, оборванные перезапуском сервера или недоступностью удалённой машины (когда она снова на связи).
+ * Не возвращаются: конвейер (влив, выкат), прогоны старше 6 ч, слоты без папки и прогоны, которые на нынешнем коде уже
+ * не нужны (ворота runGate: зелёный или дважды красный на этом коде).
+ */
 export async function requeueInterrupted() {
     const hostBack = () => {
         try {
@@ -1014,7 +1149,18 @@ export async function requeueInterrupted() {
             const cwd = isStg ? MAIN : tree.path;
             // тот же прогон за время ожидания мог пройти — тогда возвращать нечего
             if (!isStg) {
-                const inp = task.input ? (j.input || "") : "", g = runGate({ jobs: jobList().filter((x) => x !== j), tree: j.tree, task: j.task, input: inp, fp: await codeFp(cwd, true), dist: DIST_TASKS.has(j.task), covers: (k) => jobCovers(k, { task: j.task, input: inp }), realFail, inherited: (k) => onlyStagingRed(k.id) });
+                const inp = task.input ? j.input || "" : "",
+                    g = runGate({
+                        jobs: jobList().filter((x) => x !== j),
+                        tree: j.tree,
+                        task: j.task,
+                        input: inp,
+                        fp: await codeFp(cwd, true),
+                        dist: DIST_TASKS.has(j.task),
+                        covers: (k) => jobCovers(k, { task: j.task, input: inp }),
+                        realFail,
+                        inherited: (k) => onlyStagingRed(k.id),
+                    });
                 if (!g.run) {
                     console.log("после перезапуска не возвращаю", j.id, j.task, j.tree, "—", g.why);
                     continue;
@@ -1023,7 +1169,21 @@ export async function requeueInterrupted() {
             const steps = task.dynamic ? await task.dynamic(cwd) : [stepOfTask(task, cwd, j.input || "")];
             if (!steps)
                 continue;
-            await enqueue({ treeKey: j.tree, cwd, label: task.label, taskId: j.task, input: task.input ? (j.input || "") : "", lane: task.lane, steps, extra: { requeuedFrom: j.id, by: j.by || "", ...(j.baseline ? { baseline: true, auto: true } : {}), ...(j.infra ? { infraTry: (j.infraTry || 0) + 1 } : {}) } });
+            await enqueue({
+                treeKey: j.tree,
+                cwd,
+                label: task.label,
+                taskId: j.task,
+                input: task.input ? j.input || "" : "",
+                lane: task.lane,
+                steps,
+                extra: {
+                    requeuedFrom: j.id,
+                    by: j.by || "",
+                    ...(j.baseline ? { baseline: true, auto: true } : {}),
+                    ...(j.infra ? { infraTry: (j.infraTry || 0) + 1 } : {}),
+                },
+            });
             console.log("снова в очереди после перезапуска:", j.id, j.task, j.tree);
         }
         catch (e) {

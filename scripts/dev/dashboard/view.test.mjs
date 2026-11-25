@@ -23,8 +23,35 @@ after(async () => {
 const FP = "08f5cdfc403bd6da", KEY = "wv0000-sample";
 const CHECK_AUTO = { build: "сборка не нужна", guards: "гарды зелёные", tests: "зелёные на текущем коде", review: "независимый ревьюер «ЗА»", regress: "тронутые пути не задевают соседей" };
 
-const tree = (o = {}) => ({ key: KEY, kind: "slot", tag: "П0", branch: "dev/wv-0000-sample", exists: true, readOnly: false, ahead: 1, behind: 0, dirtyTracked: 0, dirtyUntracked: 0, hasCode: true, fp: FP, deps: [], conflict: [], regress: [],
-    verdict: { tests: "green", build: "notneeded", note: "", bnote: "", guards: "green", gnote: "", regress: "notneeded", rnote: "" }, review: { verdict: "ЗА", fresh: true, jobId: "j1766", reported: true }, ...o });
+const tree = (o = {}) => ({
+    key: KEY,
+    kind: "slot",
+    tag: "П0",
+    branch: "dev/wv-0000-sample",
+    exists: true,
+    readOnly: false,
+    ahead: 1,
+    behind: 0,
+    dirtyTracked: 0,
+    dirtyUntracked: 0,
+    hasCode: true,
+    fp: FP,
+    deps: [],
+    conflict: [],
+    regress: [],
+    verdict: {
+        tests: "green",
+        build: "notneeded",
+        note: "",
+        bnote: "",
+        guards: "green",
+        gnote: "",
+        regress: "notneeded",
+        rnote: "",
+    },
+    review: { verdict: "ЗА", fresh: true, jobId: "j1766", reported: true },
+    ...o,
+});
 
 const AUTO = { committed: { plan: "найден файл плана волны", impl: "коммитов впереди staging: 1", ...CHECK_AUTO, commit: "коммитов впереди staging: 1, дерево чистое" } };
 AUTO.merged = { ...AUTO.committed, impl: "код влит в staging", commit: "влито в staging", staging: "влито: 46e748eac8" };
@@ -97,7 +124,24 @@ describe("закоммичена, проверки зелёные, не влит
 });
 
 describe("влита в staging (П5) и на стенде (П10)", () => {
-    const merged = (o = {}) => tree({ ahead: 0, hasCode: false, conflict: undefined, verdict: { tests: "green", build: "notneeded", guards: "green", regress: "notneeded", note: "", bnote: "", gnote: "", rnote: "", merged: true }, ...o });
+    const merged = (o = {}) =>
+        tree({
+            ahead: 0,
+            hasCode: false,
+            conflict: undefined,
+            verdict: {
+                tests: "green",
+                build: "notneeded",
+                guards: "green",
+                regress: "notneeded",
+                note: "",
+                bnote: "",
+                gnote: "",
+                rnote: "",
+                merged: true,
+            },
+            ...o,
+        });
     test("влита: «Выкатить staging на стенд», группа «влито», к staging не готова", () => {
         const t = merged(), v = view(t, AUTO.merged);
         assert.equal(v.cur, "stand");
@@ -121,7 +165,24 @@ describe("влита в staging (П5) и на стенде (П10)", () => {
     });
     test("влита, но после влива доделка (П2: впереди 2 коммита, тесты на другом коде) — «Прогнать тесты» с пояснением", () => {
         const note = "зелёные тесты шли на другом коде: файлы менялись после прогона. Прогоните заново.";
-        const t = tree({ ahead: 2, verdict: { tests: "stale", build: "ok", note, bnote: "", guards: "green", gnote: "", regress: "green", rnote: "" } }), a = { ...AUTO.merged, impl: "коммитов впереди staging: 2", commit: "коммитов впереди staging: 2, дерево чистое" };
+        const t = tree({
+                ahead: 2,
+                verdict: {
+                    tests: "stale",
+                    build: "ok",
+                    note,
+                    bnote: "",
+                    guards: "green",
+                    gnote: "",
+                    regress: "green",
+                    rnote: "",
+                },
+            }),
+            a = {
+                ...AUTO.merged,
+                impl: "коммитов впереди staging: 2",
+                commit: "коммитов впереди staging: 2, дерево чистое",
+            };
         delete a.tests;
         const v = view(t, a);
         assert.equal(v.cur, "tests");
@@ -303,7 +364,16 @@ describe("зелёный влив — карточка «влита» сразу
         const t = ready(), other = { ...ready(), key: "wv0001-x", branch: "dev/wv-0001-x" };
         S.snap = { trees: [t, other], orderHints: [] };
         const v0 = stateVerNow();
-        const keys = markMergedNow({ task: "merge", status: "ok", endedAt: Date.now(), steps: [{ cmd: "git", args: ["merge", "--no-ff", t.branch, "-m", "merge: " + t.branch] }, { show: "merge-коммит", js: () => { } }], mergeSha: { [t.branch]: SHA } });
+        const keys = markMergedNow({
+            task: "merge",
+            status: "ok",
+            endedAt: Date.now(),
+            steps: [
+                { cmd: "git", args: ["merge", "--no-ff", t.branch, "-m", "merge: " + t.branch] },
+                { show: "merge-коммит", js: () => {} },
+            ],
+            mergeSha: { [t.branch]: SHA },
+        });
         assert.deepEqual(keys, [KEY]);
         assert.ok(stateVerNow() > v0, "версия состояния поднята");
         const [a, b] = snapNow().trees;

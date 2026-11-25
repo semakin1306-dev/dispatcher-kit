@@ -8,15 +8,29 @@ import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { installSlotHooks, writeSlotWave, slotWave, gitDirOf } from "./commit-msg.mjs"
 import { commitMessageCheck, fixWaveMessage } from "../dashboard/commit-rules.mjs"
+import { samePath } from "../paths.mjs"
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dk-hook-"))
 after(() => fs.rmSync(TMP, { recursive: true, force: true }))
-const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(TMP, "gitconfig") }
+const env = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.com",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.com",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: path.join(TMP, "gitconfig"),
+}
 for (const k of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete env[k]
 fs.writeFileSync(env.GIT_CONFIG_GLOBAL, "")
 const g = (dir, ...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8", env }).trim()
 const MAIN = path.join(TMP, "main"), SLOT = path.join(TMP, "wv0042-slot"), TRAIN = path.join(TMP, "tr-api")
-const commit = (dir, file, ...msg) => { fs.writeFileSync(path.join(dir, file), file); g(dir, "add", file); g(dir, "commit", "-q", ...msg.flatMap((m) => ["-m", m])); return g(dir, "log", "-1", "--format=%B") }
+const commit = (dir, file, ...msg) => {
+  fs.writeFileSync(path.join(dir, file), file)
+  g(dir, "add", file)
+  g(dir, "commit", "-q", ...msg.flatMap((m) => ["-m", m]))
+  return g(dir, "log", "-1", "--format=%B")
+}
 
 fs.mkdirSync(MAIN)
 g(MAIN, "init", "-q", "-b", "staging"); commit(MAIN, "base", "base")
@@ -29,11 +43,12 @@ g(MAIN, "worktree", "add", "-q", "-b", "dev/tr-api-demo", TRAIN, "staging")
 test("установка: своя папка хуков только у этой копии, хуки проекта запоминаются", () => {
   const r = installSlotHooks(SLOT)
   assert.match(r.hooks, /dispatcher-hooks$/)
-  assert.equal(path.resolve(r.orig), path.resolve(projHooks))
-  assert.equal(path.resolve(SLOT, g(SLOT, "rev-parse", "--git-path", "hooks")), path.resolve(r.hooks))
-  assert.equal(path.resolve(MAIN, g(MAIN, "rev-parse", "--git-path", "hooks")), path.resolve(projHooks), "основная папка — со своими хуками")
+  // TMP записан как его дала ОС (короткие имена Windows, /var на macOS), git отдаёт пути раскрытыми: сравнение — по файловой системе
+  assert.ok(samePath(r.orig, projHooks), r.orig + " ≠ " + projHooks)
+  assert.ok(samePath(path.resolve(SLOT, g(SLOT, "rev-parse", "--git-path", "hooks")), r.hooks))
+  assert.ok(samePath(path.resolve(MAIN, g(MAIN, "rev-parse", "--git-path", "hooks")), projHooks), "основная папка — со своими хуками")
   const again = installSlotHooks(SLOT)
-  assert.equal(path.resolve(again.orig), path.resolve(projHooks), "повторная установка не принимает свою папку за папку проекта")
+  assert.ok(samePath(again.orig, projHooks), "повторная установка не принимает свою папку за папку проекта: " + again.orig)
 })
 
 test("подпись без строки — хук ставит номер по ветке слота; хук проекта отработал", () => {

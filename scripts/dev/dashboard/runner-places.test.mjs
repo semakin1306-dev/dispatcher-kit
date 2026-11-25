@@ -89,7 +89,19 @@ test("перегрузка машины — своп и средняя нагр�
     assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 3.25, cores, loadAvg: [45] }), "hard", "своп 81 %, нагрузка 45 на 12 ядер");
     assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 2.6, cores, loadAvg: [4], swapIOps: 300 }), "soft", "идёт обмен");
     assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 2.6, cores, loadAvg: [4], swapIOps: 1500 }), "hard", "сильный обмен");
-    assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 3.1, cores, loadAvg: [0.4], memTotalGB: 15.5, memUsedGB: 3.5, swapIOps: 0 }), "", "своп занят старыми страницами, памяти много, обмена нет — не перегрузка");
+    assert.equal(
+        strain({
+            swapTotalGB: 4,
+            swapUsedGB: 3.1,
+            cores,
+            loadAvg: [0.4],
+            memTotalGB: 15.5,
+            memUsedGB: 3.5,
+            swapIOps: 0,
+        }),
+        "",
+        "своп занят старыми страницами, памяти много, обмена нет — не перегрузка",
+    );
     assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 3.1, cores, loadAvg: [2], memTotalGB: 15.5, memUsedGB: 13 }), "soft", "своп занят и свободно 2,5 ГБ");
     assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 3.1, cores, loadAvg: [2], memTotalGB: 15.5, memUsedGB: 14.5 }), "hard", "своп занят и свободно 1 ГБ");
     assert.equal(strain({ swapTotalGB: 4, swapUsedGB: 0.2, cores, loadAvg: [20] }), "soft");

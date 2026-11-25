@@ -20,7 +20,15 @@ export const turnAct = (text) => ACT_RES.some((re) => re.test(String(text || "")
 
 const isOrchKey = (k) => typeof k === "string" && k.startsWith("orchestrator@");
 const tagRe = (tag) => new RegExp("^" + String(tag).replace(/[^\wА-Яа-яЁё]/g, "") + "$", "i");
-export const normReason = (s) => String(s || "").replace(/\s*\([^)]*\)/g, "").replace(/\bj\d+\b/g, "j").replace(/\b[0-9a-f]{7,40}\b/g, "#").replace(/\d+/g, "N").replace(/\s+/g, " ").trim().slice(0, 160);
+export const normReason = (s) =>
+    String(s || "")
+        .replace(/\s*\([^)]*\)/g, "")
+        .replace(/\bj\d+\b/g, "j")
+        .replace(/\b[0-9a-f]{7,40}\b/g, "#")
+        .replace(/\d+/g, "N")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 160);
 
 const mergedBranches = (r) => {
     const out = new Set(Object.keys(r.mergeSha || {}));
@@ -267,7 +275,12 @@ export function sameCodeRepeats(runs) {
 
 export function epicCounters({ epic, events, runs, from, to }) {
     const slotKeys = epicTreeKeys(epic), pk = wavePresetKeys(epic);
-    const mine = runs.filter((r) => (slotKeys.has(r.tree) || (r.epic === epic.id && !STAND_TREE.test(r.tree || ""))) && (r.queuedAt || r.startedAt || 0) >= from && (r.queuedAt || r.startedAt || 0) <= to);
+    const mine = runs.filter(
+        (r) =>
+            (slotKeys.has(r.tree) || (r.epic === epic.id && !STAND_TREE.test(r.tree || ""))) &&
+            (r.queuedAt || r.startedAt || 0) >= from &&
+            (r.queuedAt || r.startedAt || 0) <= to,
+    );
     const fin = mine.filter((r) => ["ok", "fail", "skipped", "interrupted", "cancelled"].includes(r.status));
     const sum = (rs) => Math.round(rs.reduce((s, r) => s + runMin(r), 0));
     const reg = fin.filter((r) => isRegressRun(r, pk)), regDone = reg.filter((r) => !LOST.has(r.status)), regLost = reg.filter((r) => LOST.has(r.status));
@@ -283,16 +296,59 @@ export function epicCounters({ epic, events, runs, from, to }) {
     const qKeys = new Set([...slotKeys, "orchestrator@" + epic.id]), waits = questionWaits(qKeys, events, to);
     const qIn = waits.filter((w) => w.from <= to && (w.to === null || w.to >= from));
     return {
-        runs: fin.length, runMin: sum(fin),
-        repeats: { runs: repRuns.length, min: sum(repRuns), top: rep.sort((a, b) => b.n - a.n).slice(0, 5).map((g) => ({ tree: g.tree, task: g.task, input: g.input.slice(0, 80), n: g.n, ids: g.extra.map((r) => r.id) })) },
+        runs: fin.length,
+        runMin: sum(fin),
+        repeats: {
+            runs: repRuns.length,
+            min: sum(repRuns),
+            top: rep
+                .sort((a, b) => b.n - a.n)
+                .slice(0, 5)
+                .map((g) => ({
+                    tree: g.tree,
+                    task: g.task,
+                    input: g.input.slice(0, 80),
+                    n: g.n,
+                    ids: g.extra.map((r) => r.id),
+                })),
+        },
         lost: { runs: lost.length, min: sum(lost) },
-        questions: { n: events.filter((e) => e.type === "owner.question" && qKeys.has(e.tree) && e.at >= from && e.at <= to).length, waits: waits.filter((w) => w.from >= from && w.from <= to).length, waitMin: Math.round(qIn.reduce((s, w) => s + clip(w.from, w.to === null ? to : w.to, from, to), 0) / 60000), open: qIn.filter((w) => w.to === null).length,
-            longest: qIn.map((w) => ({ key: w.key, from: w.from, min: Math.round(((w.to === null ? to : w.to) - w.from) / 60000) })).sort((a, b) => b.min - a.min).slice(0, 5) },
-        regress: { runs: reg.length, min: sum(reg), done: regDone.length, doneMin: sum(regDone), lost: regLost.length, lostMin: sum(regLost) },
-        review: { runs: rev.length, questions: rev.filter((r) => r.status === "fail" || (r.review && r.review.verdict && r.review.verdict !== "ЗА")).length },
+        questions: {
+            n: events.filter((e) => e.type === "owner.question" && qKeys.has(e.tree) && e.at >= from && e.at <= to)
+                .length,
+            waits: waits.filter((w) => w.from >= from && w.from <= to).length,
+            waitMin: Math.round(qIn.reduce((s, w) => s + clip(w.from, w.to === null ? to : w.to, from, to), 0) / 60000),
+            open: qIn.filter((w) => w.to === null).length,
+            longest: qIn
+                .map((w) => ({
+                    key: w.key,
+                    from: w.from,
+                    min: Math.round(((w.to === null ? to : w.to) - w.from) / 60000),
+                }))
+                .sort((a, b) => b.min - a.min)
+                .slice(0, 5),
+        },
+        regress: {
+            runs: reg.length,
+            min: sum(reg),
+            done: regDone.length,
+            doneMin: sum(regDone),
+            lost: regLost.length,
+            lostMin: sum(regLost),
+        },
+        review: {
+            runs: rev.length,
+            questions: rev.filter(
+                (r) => r.status === "fail" || (r.review && r.review.verdict && r.review.verdict !== "ЗА"),
+            ).length,
+        },
         // прогоны гардов (задачи станции «Гарды» конфига); имя поля прежнее — его читают страница и ретро
         security: { runs: sec.length, min: sum(sec) },
-        agents: { peak: per.length ? per[per.length - 1] : 0, p50: per.length ? per[Math.floor((per.length - 1) / 2)] : 0, hours: per.length },
+        agents: {
+            peak: per.length ? per[per.length - 1] : 0,
+            p50: per.length ? per[Math.floor((per.length - 1) / 2)] : 0,
+            hours: per.length,
+        },
     };
 }
 
@@ -349,12 +405,34 @@ export function epicProgress({ epic, events, runs, now = Date.now(), windowMs = 
         const word = [...evs].reverse().find((e) => e.at <= a && a - e.at <= 6 * 3600e3 && isCmdFail(e) && reasonKind(e.detail) === "слово владельца");
         if (word)
             parts.push("ждём слова владельца: " + word.cmd + " " + (word.target || ""));
-        const before = [...evs].reverse().find((e) => e.at <= a && a - e.at <= FRESH_CAUSE_MS && ((isCmdFail(e) && reasonKind(e.detail) !== "слово владельца") || (e.type === "gate.blocked" && slotKeys.has(e.tree) && !GATE_NOT_BLOCK.test(e.why || "")) || (e.type === "deadlock" && (e.orch === orch || slotKeys.has(e.tree)))));
+        const before = [...evs]
+            .reverse()
+            .find(
+                (e) =>
+                    e.at <= a &&
+                    a - e.at <= FRESH_CAUSE_MS &&
+                    ((isCmdFail(e) && reasonKind(e.detail) !== "слово владельца") ||
+                        (e.type === "gate.blocked" && slotKeys.has(e.tree) && !GATE_NOT_BLOCK.test(e.why || "")) ||
+                        (e.type === "deadlock" && (e.orch === orch || slotKeys.has(e.tree)))),
+            );
         if (before)
-            parts.push(before.type === "orch.command" ? "отказ " + before.cmd + " " + (before.target || "") + ": " + reasonKind(before.detail) : before.type === "gate.blocked" ? "ворота: " + (before.task || "") : "тупик");
+            parts.push(
+                before.type === "orch.command"
+                    ? "отказ " + before.cmd + " " + (before.target || "") + ": " + reasonKind(before.detail)
+                    : before.type === "gate.blocked"
+                      ? "ворота: " + (before.task || "")
+                      : "тупик",
+            );
         const starts = evs.filter((e) => e.type === "server.start" && e.at >= a && e.at <= b), down = starts.find((e) => e.prev && e.prev.silentS >= 120);
         if (down)
-            parts.push("диспетчерская стояла " + Math.round(down.prev.silentS / 60) + " мин" + (down.stop && /^pc-/.test(down.stop.kind || "") ? " (" + (down.stop.kind === "pc-off" ? "ПК выключен" : "сбой ПК") + ")" : ""));
+            parts.push(
+                "диспетчерская стояла " +
+                    Math.round(down.prev.silentS / 60) +
+                    " мин" +
+                    (down.stop && /^pc-/.test(down.stop.kind || "")
+                        ? " (" + (down.stop.kind === "pc-off" ? "ПК выключен" : "сбой ПК") + ")"
+                        : ""),
+            );
         else if (starts.length)
             parts.push("перезапуск диспетчерской");
         return parts.join(" · ") || "нет хода";
@@ -380,7 +458,14 @@ export function epicProgress({ epic, events, runs, now = Date.now(), windowMs = 
         deadlocks: evs.filter((e) => e.type === "deadlock" && inWin(e.at) && (e.orch === orch || slotKeys.has(e.tree))).length,
         gateBlocked: evs.filter((e) => e.type === "gate.blocked" && inWin(e.at) && slotKeys.has(e.tree) && !GATE_NOT_BLOCK.test(e.why || "")).length,
         gateSaved: evs.filter((e) => e.type === "gate.blocked" && inWin(e.at) && slotKeys.has(e.tree) && GATE_NOT_BLOCK.test(e.why || "")).length };
-    const starts = evs.filter((e) => e.type === "server.start" && inWin(e.at) && !e.dry).map((e) => ({ at: e.at, sha: e.sha || "", reason: e.reason || "", silentS: (e.prev && e.prev.silentS) || null }));
+    const starts = evs
+        .filter((e) => e.type === "server.start" && inWin(e.at) && !e.dry)
+        .map((e) => ({
+            at: e.at,
+            sha: e.sha || "",
+            reason: e.reason || "",
+            silentS: (e.prev && e.prev.silentS) || null,
+        }));
     const restarts = { starts, interrupted: myRuns.filter((r) => r.bootInterrupted && inWin(r.endedAt || r.queuedAt || 0)).length,
         cutCommands: cmds.filter((c) => /прервано перезапуском/i.test(c.detail || "")).length };
     const turns = evs.filter((e) => e.type === "agent.turn" && inWin(e.at) && keys.has(e.key));

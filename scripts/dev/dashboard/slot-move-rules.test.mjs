@@ -13,17 +13,80 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dash-slotmove-"));
 const regFixture = () => ({
     active: "a",
     epics: [
-        { id: "a", title: "А", status: "open", orch: { path: path.join(TMP, "orch-a"), branch: "dev/epic-a" }, slots: [
-                { tag: "П3", slot: "wv0948-docs", branch: "dev/wv-0948-docs", title: "WV-0948 портал", color: "#9333ea", emoji: "🟪" },
-                { tag: "П26", slot: "wv0986-lead", branch: "dev/wv-0986-lead", title: "WV-0986 расчёт", color: "#16a34a", emoji: "🟩" },
-                { tag: "П27", slot: "wv0985-commission", branch: "dev/wv-0985-commission", title: "WV-0985 комиссия", color: "#9333ea", emoji: "🟪", after: ["wv0986-lead"], presets: [{ task: "web-test", input: "wv-0985" }] },
-                { tag: "П28", slot: "wv0990-next", branch: "dev/wv-0990-next", title: "WV-0990 следом", color: "#2563eb", emoji: "🟦", after: ["wv0985-commission", "wv0986-lead"] },
-            ] },
-        { id: "b", title: "Б", status: "open", orch: { path: path.join(TMP, "orch-b"), branch: "dev/epic-b" }, slots: [
-                { tag: "П1", slot: "wv1009-events", branch: "dev/wv-1009-events", title: "WV-1009 события", color: "#16a34a", emoji: "🟩" },
-                { tag: "П3", slot: "wv1011-ui", branch: "dev/wv-1011-ui", title: "WV-1011 интерфейс", color: "#2563eb", emoji: "🟦" },
-            ] },
-        { id: "z", title: "закрытый", status: "closed", orch: { path: path.join(TMP, "orch-z"), branch: "dev/epic-z" }, slots: [] },
+        {
+            id: "a",
+            title: "А",
+            status: "open",
+            orch: { path: path.join(TMP, "orch-a"), branch: "dev/epic-a" },
+            slots: [
+                {
+                    tag: "П3",
+                    slot: "wv0948-docs",
+                    branch: "dev/wv-0948-docs",
+                    title: "WV-0948 портал",
+                    color: "#9333ea",
+                    emoji: "🟪",
+                },
+                {
+                    tag: "П26",
+                    slot: "wv0986-lead",
+                    branch: "dev/wv-0986-lead",
+                    title: "WV-0986 расчёт",
+                    color: "#16a34a",
+                    emoji: "🟩",
+                },
+                {
+                    tag: "П27",
+                    slot: "wv0985-commission",
+                    branch: "dev/wv-0985-commission",
+                    title: "WV-0985 комиссия",
+                    color: "#9333ea",
+                    emoji: "🟪",
+                    after: ["wv0986-lead"],
+                    presets: [{ task: "web-test", input: "wv-0985" }],
+                },
+                {
+                    tag: "П28",
+                    slot: "wv0990-next",
+                    branch: "dev/wv-0990-next",
+                    title: "WV-0990 следом",
+                    color: "#2563eb",
+                    emoji: "🟦",
+                    after: ["wv0985-commission", "wv0986-lead"],
+                },
+            ],
+        },
+        {
+            id: "b",
+            title: "Б",
+            status: "open",
+            orch: { path: path.join(TMP, "orch-b"), branch: "dev/epic-b" },
+            slots: [
+                {
+                    tag: "П1",
+                    slot: "wv1009-events",
+                    branch: "dev/wv-1009-events",
+                    title: "WV-1009 события",
+                    color: "#16a34a",
+                    emoji: "🟩",
+                },
+                {
+                    tag: "П3",
+                    slot: "wv1011-ui",
+                    branch: "dev/wv-1011-ui",
+                    title: "WV-1011 интерфейс",
+                    color: "#2563eb",
+                    emoji: "🟦",
+                },
+            ],
+        },
+        {
+            id: "z",
+            title: "закрытый",
+            status: "closed",
+            orch: { path: path.join(TMP, "orch-z"), branch: "dev/epic-z" },
+            slots: [],
+        },
     ],
 });
 
@@ -76,7 +139,11 @@ test("метка и цвет: П(max+1) и первый свободный цв�
     assert.equal(waveOf({ title: "x" }), "");
 });
 
-const cli = (reg, ...args) => spawnSync(process.execPath, [path.join(HERE, "..", "epic.mjs"), ...args], { encoding: "utf8", env: { ...process.env, DASH_EPIC_FILE: reg, DISPATCHER_WT: path.join(TMP, "wt") } });
+const cli = (reg, ...args) =>
+    spawnSync(process.execPath, [path.join(HERE, "..", "epic.mjs"), ...args], {
+        encoding: "utf8",
+        env: { ...process.env, DASH_EPIC_FILE: reg, DISPATCHER_WT: path.join(TMP, "wt") },
+    });
 
 test("CLI move-slot: сухой прогон не пишет; без него — реестр переписан, план волны скопирован в папку оркестратора нового эпика", () => {
     const reg = path.join(TMP, "epics-move.json");

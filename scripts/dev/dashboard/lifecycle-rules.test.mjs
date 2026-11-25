@@ -40,7 +40,16 @@ test("лаг цикла событий ≥ 45 с — событие pc.gap (со
     assert.match(g.hint, /120 с/);
 });
 
-const ev = (id, iso, p1 = "") => "<Event xmlns='x'><System><EventID" + (id === 1074 ? " Qualifiers='32768'" : "") + ">" + id + "</EventID><TimeCreated SystemTime='" + iso + "'/></System><EventData><Data Name='param1'>" + p1 + "</Data></EventData></Event>";
+const ev = (id, iso, p1 = "") =>
+    "<Event xmlns='x'><System><EventID" +
+    (id === 1074 ? " Qualifiers='32768'" : "") +
+    ">" +
+    id +
+    "</EventID><TimeCreated SystemTime='" +
+    iso +
+    "'/></System><EventData><Data Name='param1'>" +
+    p1 +
+    "</Data></EventData></Event>";
 
 test("winStopEvents: id, время и кто выключил — без зависимости от языка Windows", () => {
     const e = winStopEvents(ev(41, "2026-11-12T11:13:08.3Z") + "\n" + ev(1074, "2026-11-13T21:32:58.3Z", "C:\\Windows\\System32\\RuntimeBroker.exe (DESKTOP-X)"));

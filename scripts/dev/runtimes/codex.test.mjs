@@ -66,7 +66,13 @@ const resetCalls = () => { try { fs.rmSync(LOG) } catch { /* нет */ } }
 function waitFor(events, pred, ms = 15000) {
   return new Promise((resolve, reject) => {
     const t0 = Date.now()
-    const tick = () => { const e = events.find(pred); if (e) return resolve(e); if (Date.now() - t0 > ms) return reject(new Error("не дождался события; есть: " + events.map((x) => x.type).join(","))); setTimeout(tick, 20) }
+    const tick = () => {
+        const e = events.find(pred)
+        if (e) return resolve(e)
+        if (Date.now() - t0 > ms)
+            return reject(new Error("не дождался события; есть: " + events.map((x) => x.type).join(",")))
+        setTimeout(tick, 20)
+    }
     tick()
   })
 }

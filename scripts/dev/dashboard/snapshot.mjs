@@ -113,8 +113,17 @@ function reusable(t, prev) {
         return false;
     }
     const a = agentsMap.get ? agentsMap.get(t.key) : null;
-    return Date.now() - prev.snapAt < snapMaxAge({ kind: t.kind, epic: t.epic, viewEpic: (viewEpic() || {}).id, merged: !!(prev.verdict && prev.verdict.merged) && !(prev.ahead > 0) && !prev.dirtyTracked,
-        agentBusy: !!(a && !a.dead && (a.busy || a.pending.size)), jobLive: jobList().some((j) => j.tree === t.key && ["queued", "waiting", "running"].includes(j.status)) });
+    return (
+        Date.now() - prev.snapAt <
+        snapMaxAge({
+            kind: t.kind,
+            epic: t.epic,
+            viewEpic: (viewEpic() || {}).id,
+            merged: !!(prev.verdict && prev.verdict.merged) && !(prev.ahead > 0) && !prev.dirtyTracked,
+            agentBusy: !!(a && !a.dead && (a.busy || a.pending.size)),
+            jobLive: jobList().some((j) => j.tree === t.key && ["queued", "waiting", "running"].includes(j.status)),
+        })
+    );
 }
 
 function stageErr(t, e) {

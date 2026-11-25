@@ -82,28 +82,111 @@ const inbox = (() => {
 })();
 
 const keys = new Set(trees.map((t) => t.key));
-const report = { at: new Date().toISOString(), epic: EPIC || null, night: (settings.autoOwnerUntil || 0) > Date.now() ? hm(settings.autoOwnerUntil) : null, trains: [], slots: [], live: [], deploys: [], accept: [], ownerq: [], errors: [] };
+const report = {
+    at: new Date().toISOString(),
+    epic: EPIC || null,
+    night: (settings.autoOwnerUntil || 0) > Date.now() ? hm(settings.autoOwnerUntil) : null,
+    trains: [],
+    slots: [],
+    live: [],
+    deploys: [],
+    accept: [],
+    ownerq: [],
+    errors: [],
+};
 
 for (const t of trees) {
-    const jl = (k) => live.filter((j) => j.tree === k).map((j) => j.id + " " + j.task + (j.input ? " " + cut(j.input, 40) : "") + " · " + j.status + (j.waitReason ? " (" + cut(j.waitReason, 60) + ")" : ""));
-    const base = { key: t.key, tag: t.tag, group: t.group, next: t.next ? cut((t.next.kind ? t.next.kind + ": " : "") + t.next.text, 220) : "", running: jl(t.key), ahead: t.ahead, behind: t.behind, dirty: (t.dirtyTracked || 0) + (t.dirtyUntracked || 0) };
+    const jl = (k) =>
+        live
+            .filter((j) => j.tree === k)
+            .map(
+                (j) =>
+                    j.id +
+                    " " +
+                    j.task +
+                    (j.input ? " " + cut(j.input, 40) : "") +
+                    " · " +
+                    j.status +
+                    (j.waitReason ? " (" + cut(j.waitReason, 60) + ")" : ""),
+            );
+    const base = {
+        key: t.key,
+        tag: t.tag,
+        group: t.group,
+        next: t.next ? cut((t.next.kind ? t.next.kind + ": " : "") + t.next.text, 220) : "",
+        running: jl(t.key),
+        ahead: t.ahead,
+        behind: t.behind,
+        dirty: (t.dirtyTracked || 0) + (t.dirtyUntracked || 0),
+    };
     if (t.train)
-        report.trains.push({ ...base, wagon: t.wagon || "", head: t.head || "", issued: t.issued || "",
-            wagons: (t.wagonsView || []).map((w) => w.wave + " " + w.state + (w.label ? " «" + w.label + "»" : "") + (w.waitFor && w.waitFor.length ? " ждёт " + w.waitFor.join(",") : "") + (w.times && w.times.mergedAt ? " · влит " + hm(w.times.mergedAt) : "")) });
+        report.trains.push({
+            ...base,
+            wagon: t.wagon || "",
+            head: t.head || "",
+            issued: t.issued || "",
+            wagons: (t.wagonsView || []).map(
+                (w) =>
+                    w.wave +
+                    " " +
+                    w.state +
+                    (w.label ? " «" + w.label + "»" : "") +
+                    (w.waitFor && w.waitFor.length ? " ждёт " + w.waitFor.join(",") : "") +
+                    (w.times && w.times.mergedAt ? " · влит " + hm(w.times.mergedAt) : ""),
+            ),
+        });
     else
         report.slots.push({ ...base, branch: t.branch, verdict: t.verdict || {} });
 }
 
 report.live = live.filter((j) => !keys.has(j.tree)).map((j) => j.id + " " + j.tree + " " + j.task + " · " + j.status);
 
-report.deploys = recentEnd.filter((j) => ["deploy-staging", "merge", "release", "accept-run"].includes(j.task)).concat(live.filter((j) => ["deploy-staging", "merge", "release", "accept-run"].includes(j.task)))
-    .map((j) => hm(j.startedAt || j.queuedAt) + " " + j.id + " " + j.task + " · " + j.status + (j.summary ? " — " + cut(j.summary, 120) : ""));
+report.deploys = recentEnd
+    .filter((j) => ["deploy-staging", "merge", "release", "accept-run"].includes(j.task))
+    .concat(live.filter((j) => ["deploy-staging", "merge", "release", "accept-run"].includes(j.task)))
+    .map(
+        (j) =>
+            hm(j.startedAt || j.queuedAt) +
+            " " +
+            j.id +
+            " " +
+            j.task +
+            " · " +
+            j.status +
+            (j.summary ? " — " + cut(j.summary, 120) : ""),
+    );
 
 if (acc && acc.waves)
-    report.accept = acc.waves.map((w) => w.key + ": " + (w.verdict || "без вердикта") + " · пунктов " + ((w.items || []).length) + " · авто ✓" + (w.items || []).filter((i) => i.auto && i.auto.st === "ok").length + " ✗" + (w.items || []).filter((i) => i.auto && i.auto.st === "fail").length + (w.specs && w.specs.length ? "" : " · спеки нет"));
+    report.accept = acc.waves.map(
+        (w) =>
+            w.key +
+            ": " +
+            (w.verdict || "без вердикта") +
+            " · пунктов " +
+            (w.items || []).length +
+            " · авто ✓" +
+            (w.items || []).filter((i) => i.auto && i.auto.st === "ok").length +
+            " ✗" +
+            (w.items || []).filter((i) => i.auto && i.auto.st === "fail").length +
+            (w.specs && w.specs.length ? "" : " · спеки нет"),
+    );
 
-report.ownerq = inbox.filter((c) => c.kind === "ownerq" && (!EPIC || String(c.tree || "").includes(EPIC) || keys.has(c.tree))).map((c) => c.tree + ": " + cut(c.text || c.q, 200))
-    .concat(events.filter((e) => e.type === "owner.question" && (!EPIC || e.epic === EPIC) && !events.some((a) => /^owner\.(answer|message)$/.test(a.type) && a.at > e.at && (a.key || a.tree) === e.tree)).slice(-5).map((e) => hm(e.at) + " " + (e.tree || "") + ": " + cut(e.brief, 160)));
+report.ownerq = inbox
+    .filter((c) => c.kind === "ownerq" && (!EPIC || String(c.tree || "").includes(EPIC) || keys.has(c.tree)))
+    .map((c) => c.tree + ": " + cut(c.text || c.q, 200))
+    .concat(
+        events
+            .filter(
+                (e) =>
+                    e.type === "owner.question" &&
+                    (!EPIC || e.epic === EPIC) &&
+                    !events.some(
+                        (a) => /^owner\.(answer|message)$/.test(a.type) && a.at > e.at && (a.key || a.tree) === e.tree,
+                    ),
+            )
+            .slice(-5)
+            .map((e) => hm(e.at) + " " + (e.tree || "") + ": " + cut(e.brief, 160)),
+    );
 
 report.errors = events.filter((e) => /turn\.after\.error|train\.issue\.held|perm\.deny|merge\.auto\.refused|slot\.sync\.auto/.test(e.type) && (!EPIC || !e.epic || e.epic === EPIC)).slice(-12)
     .map((e) => hm(e.at) + " " + e.type + " " + (e.tree || e.key || e.to || "") + " " + cut(e.why || e.error || e.wave || "", 120));

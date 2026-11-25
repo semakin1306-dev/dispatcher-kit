@@ -132,17 +132,48 @@ test("сквозной прогон: настройка → сервер → э�
   const PORT = await freePort(), B = "http://127.0.0.1:" + PORT
   let token = ""
   const get = async (p) => { const r = await fetch(B + p, { signal: AbortSignal.timeout(20000) }); return { code: r.status, body: await r.json().catch(() => null) } }
-  const post = async (p, body) => { const r = await fetch(B + p, { method: "POST", headers: { "content-type": "application/json", "x-dash-token": token }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) }); return { code: r.status, body: await r.json().catch(() => null) } }
+  const post = async (p, body) => {
+      const r = await fetch(B + p, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-dash-token": token },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(60000),
+      })
+      return { code: r.status, body: await r.json().catch(() => null) }
+  }
   const state = async () => { for (let i = 0; i < 60; i++) { const s = (await get("/api/state")).body; if (s && !s.booting) return s; await sleep(500) } throw new Error("сервер не собрал снимок") }
-  const until = async (what, fn, ms = 90000) => { const t0 = Date.now(); let last; while (Date.now() - t0 < ms) { last = await fn(); if (last) return last; await sleep(700) } throw new Error("не дождался: " + what) }
-  const jobDone = (id) => until("прогон " + id, async () => { const j = (await get("/api/job/" + id)).body; return j && ["ok", "fail", "cancelled", "skipped", "interrupted"].includes(j.status) ? j : null })
+  const until = async (what, fn, ms = 90000) => {
+      const t0 = Date.now()
+      let last
+      while (Date.now() - t0 < ms) {
+          last = await fn()
+          if (last) return last
+          await sleep(700)
+      }
+      throw new Error("не дождался: " + what)
+  }
+  const jobDone = (id) =>
+      until("прогон " + id, async () => {
+          const j = (await get("/api/job/" + id)).body
+          return j && ["ok", "fail", "cancelled", "skipped", "interrupted"].includes(j.status) ? j : null
+      })
 
   await t.test("сервер поднимается и отдаёт страницу и состояние с полями конструктора", async () => {
     let log = ""
     server = spawn(process.execPath, ["scripts/dev/dashboard/server.mjs"], { cwd: HOME, env: { ...ENV, DASH_PORT: String(PORT) }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
     const logFile = path.join(TMP, "server.log")
     server.stdout.on("data", (d) => { log += d; fs.appendFileSync(logFile, d) }); server.stderr.on("data", (d) => { log += d; fs.appendFileSync(logFile, d) })
-    await until("порт сервера", async () => (await fetch(B + "/", { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false)), 30000).catch((e) => { throw new Error(e.message + "\n" + log) })
+    await until(
+        "порт сервера",
+        async () =>
+            await fetch(B + "/", { signal: AbortSignal.timeout(2000) }).then(
+                (r) => r.ok,
+                () => false,
+            ),
+        30000,
+    ).catch((e) => {
+        throw new Error(e.message + "\n" + log)
+    })
     const html = await (await fetch(B + "/")).text()
     token = /name="dash-token" content="([0-9a-f]+)"/.exec(html)?.[1] || ""
     assert.ok(token, "токен страницы")
@@ -199,7 +230,10 @@ test("сквозной прогон: настройка → сервер → э�
     const g = await post("/api/run", { tree: slot, task: "lint", force: true })
     if (g.body && g.body.id) await jobDone(g.body.id)
     const branch = git(path.join(TMP, "toy-wt", slot), "rev-parse", "--abbrev-ref", "HEAD")
-    const pre = await until("проверки влива", async () => { const p = (await post("/api/preflight", { action: "merge", slot })).body; return p && p.checks.find((c) => c.id === "ahead" && c.ok) ? p : null })
+    const pre = await until("проверки влива", async () => {
+        const p = (await post("/api/preflight", { action: "merge", slot })).body
+        return p && p.checks.find((c) => c.id === "ahead" && c.ok) ? p : null
+    })
     const hard = pre.checks.filter((c) => c.ok === false && !["regress", "review", "sec", "done"].includes(c.id))
     assert.deepEqual(hard, [], "жёстких отказов нет: " + JSON.stringify(pre.checks))
     t.diagnostic("проверки влива: " + pre.checks.map((c) => (c.ok === false ? "✗ " : c.ok ? "✓ " : "· ") + c.id).join(", "))
@@ -211,13 +245,78 @@ test("сквозной прогон: настройка → сервер → э�
     assert.match(git(REPO, "log", "-1", "--format=%s", "staging"), /^merge: /)
   })
   await t.test("пути /api, которые зовёт страница, отвечают; пути выключенных модулей — 404 с именем модуля", async () => {
-    const GET = ["/api/state", "/api/monitor", "/api/epic-progress?epic=toy-e1", "/api/changes?tree=" + slot, "/api/filediff?tree=" + slot + "&path=apps/api/sub.mjs", "/api/station?tree=" + slot + "&id=tests", "/api/graph", "/api/annot?tree=" + slot, "/api/log/j1?from=0"]
-    for (const p of GET) { const r = await get(p); assert.ok(r.code < 500 && !(r.body && /^нет такого адреса$/.test(r.body.error || "")), p + " → " + r.code + " " + JSON.stringify(r.body).slice(0, 200)) }
-    const POST = ["/api/agent/prompt", "/api/agent-report", "/api/autochain", "/api/cancel", "/api/epic", "/api/fetch", "/api/force", "/api/hygiene", "/api/inbox", "/api/kill", "/api/merge-wait", "/api/order", "/api/order-wagons", "/api/ownerq-answer", "/api/pipeline", "/api/preflight", "/api/provision", "/api/rebuild", "/api/relay", "/api/run", "/api/run-staging", "/api/run-staging-guards", "/api/slot-archive", "/api/slot-reset", "/api/slot-start", "/api/slot-stop", "/api/slot-sync", "/api/stage", "/api/sync-staging", "/api/train", "/api/train-wagon", "/api/drain"]
-    for (const p of POST) { const r = await post(p, p === "/api/slot-reset" ? { tree: slot, dry: true } : {}); assert.ok(r.code < 500 && !(r.body && /^нет такого адреса$/.test(r.body.error || "")), p + " → " + r.code + " " + JSON.stringify(r.body).slice(0, 200)) }
-    for (const [p, mod] of [["/api/accept", "accept"], ["/api/accept-state", "accept"], ["/api/reminders", "accept"], ["/api/stand-checklist", "accept"], ["/api/retro", "retro"], ["/api/backlog", "backlog"], ["/api/shard", "machines"], ["/api/ssh-unlock", "win-desktop"]]) {
-      const r = await post(p, {})
-      assert.equal(r.code, 404, p); assert.equal(r.body.module, mod, p)
+    const GET = [
+        "/api/state",
+        "/api/monitor",
+        "/api/epic-progress?epic=toy-e1",
+        "/api/changes?tree=" + slot,
+        "/api/filediff?tree=" + slot + "&path=apps/api/sub.mjs",
+        "/api/station?tree=" + slot + "&id=tests",
+        "/api/graph",
+        "/api/annot?tree=" + slot,
+        "/api/log/j1?from=0",
+    ]
+    for (const p of GET) {
+        const r = await get(p)
+        assert.ok(
+            r.code < 500 && !(r.body && /^нет такого адреса$/.test(r.body.error || "")),
+            p + " → " + r.code + " " + JSON.stringify(r.body).slice(0, 200),
+        )
+    }
+    const POST = [
+        "/api/agent/prompt",
+        "/api/agent-report",
+        "/api/autochain",
+        "/api/cancel",
+        "/api/epic",
+        "/api/fetch",
+        "/api/force",
+        "/api/hygiene",
+        "/api/inbox",
+        "/api/kill",
+        "/api/merge-wait",
+        "/api/order",
+        "/api/order-wagons",
+        "/api/ownerq-answer",
+        "/api/pipeline",
+        "/api/preflight",
+        "/api/provision",
+        "/api/rebuild",
+        "/api/relay",
+        "/api/run",
+        "/api/run-staging",
+        "/api/run-staging-guards",
+        "/api/slot-archive",
+        "/api/slot-reset",
+        "/api/slot-start",
+        "/api/slot-stop",
+        "/api/slot-sync",
+        "/api/stage",
+        "/api/sync-staging",
+        "/api/train",
+        "/api/train-wagon",
+        "/api/drain",
+    ]
+    for (const p of POST) {
+        const r = await post(p, p === "/api/slot-reset" ? { tree: slot, dry: true } : {})
+        assert.ok(
+            r.code < 500 && !(r.body && /^нет такого адреса$/.test(r.body.error || "")),
+            p + " → " + r.code + " " + JSON.stringify(r.body).slice(0, 200),
+        )
+    }
+    for (const [p, mod] of [
+        ["/api/accept", "accept"],
+        ["/api/accept-state", "accept"],
+        ["/api/reminders", "accept"],
+        ["/api/stand-checklist", "accept"],
+        ["/api/retro", "retro"],
+        ["/api/backlog", "backlog"],
+        ["/api/shard", "machines"],
+        ["/api/ssh-unlock", "win-desktop"],
+    ]) {
+        const r = await post(p, {})
+        assert.equal(r.code, 404, p)
+        assert.equal(r.body.module, mod, p)
     }
     const rv = await post("/api/run", { tree: slot, task: "review" })
     assert.equal(rv.code, 404, "ревью при выключенном модуле — 404")

@@ -16,13 +16,26 @@ const CONFIG_URL = pathToFileURL(fileURLToPath(new URL("./dashboard/config.mjs",
 function probe(env, expr) {
   const clean = { ...process.env }
   for (const k of ["NODE_TEST_CONTEXT", "DISPATCHER_PROJECT", "DISPATCHER_MAIN", "DISPATCHER_WT", "DASH_DATA", "DASH_EPIC_FILE"]) delete clean[k]
-  return spawnSync(process.execPath, ["--input-type=module", "-e", `const s = await import(${JSON.stringify(SLOTS_URL)}); const c = await import(${JSON.stringify(CONFIG_URL)}); console.log(JSON.stringify(${expr}))`], { encoding: "utf8", env: { ...clean, ...env } })
+  return spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const s = await import(${JSON.stringify(SLOTS_URL)}); const c = await import(${JSON.stringify(CONFIG_URL)}); console.log(JSON.stringify(${expr}))`,
+    ],
+    { encoding: "utf8", env: { ...clean, ...env } },
+  )
 }
 
 test("под тестами — демо-проект, а пути в песочнице временной папки", () => {
   assert.equal(path.resolve(PROJECT.file), path.resolve(DEMO_PROJECT))
   const tmp = fs.realpathSync(os.tmpdir())
-  for (const p of [MAIN, WT, DATA, EPIC_FILE, SETTINGS_FILE]) assert.ok(path.resolve(p).toLowerCase().startsWith(path.resolve(os.tmpdir()).toLowerCase()) || path.resolve(p).toLowerCase().startsWith(tmp.toLowerCase()), p)
+  for (const p of [MAIN, WT, DATA, EPIC_FILE, SETTINGS_FILE])
+    assert.ok(
+      path.resolve(p).toLowerCase().startsWith(path.resolve(os.tmpdir()).toLowerCase()) ||
+        path.resolve(p).toLowerCase().startsWith(tmp.toLowerCase()),
+      p,
+    )
   assert.ok(WT_OVERRIDDEN)
   assert.equal(DATA, path.join(WT, "_dashboard"))
 })
@@ -31,7 +44,10 @@ test("запреты слота: команда-начало, команда ц�
   for (const r of ["Bash(git push:*)", "Bash(git add .)", "Bash(ssh:*)", "Bash(npx jest:*)", "Edit(/package.json)", "Edit(/.github/**)", "Read(**/.env)"]) assert.ok(COMMON_DENY.includes(r), r)
   assert.ok(!COMMON_DENY.includes("Bash(git add .:*)"), "«git add .» закрыт целиком, а не началом: `git add .gitignore` остаётся")
   assert.deepEqual(COMMON_ASK, ["Bash(git commit:*)"])
-  assert.deepEqual(toClaudeRules({ commands: ["a b", "=c d"], edit: ["/x/**"], read: ["**/.env"], ask: ["git commit"] }), { deny: ["Bash(a b:*)", "Bash(c d)", "Edit(/x/**)", "Read(**/.env)"], ask: ["Bash(git commit:*)"] })
+  assert.deepEqual(
+    toClaudeRules({ commands: ["a b", "=c d"], edit: ["/x/**"], read: ["**/.env"], ask: ["git commit"] }),
+    { deny: ["Bash(a b:*)", "Bash(c d)", "Edit(/x/**)", "Read(**/.env)"], ask: ["Bash(git commit:*)"] },
+  )
 })
 
 test("реестр эпиков: пустой без файла и чтение ничего не пишет; запись хранит прежнюю версию", () => {

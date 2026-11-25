@@ -73,7 +73,26 @@ const accEntryOf = accEntryOfTree;
 
 export function checklistText(t, e) {
     const st = { ok: "✓ работает", bad: "✗ не работает", todo: "не отмечен" };
-    return ["# Чек-лист приёмки " + (t.tag || t.key) + " · " + waveOf(t), "", ...(e.items || []).map((x) => "- **" + x.id + "** · где: `" + (x.where || "—") + "` · сделать: " + (x.todo || "—") + " · ожидается: " + (x.expect || "—") + " · проверка: " + (x.how || "—") + " · " + (st[x.state] || x.state) + (x.comment ? " · комментарий: " + x.comment : ""))].join("\n");
+    return [
+        "# Чек-лист приёмки " + (t.tag || t.key) + " · " + waveOf(t),
+        "",
+        ...(e.items || []).map(
+            (x) =>
+                "- **" +
+                x.id +
+                "** · где: `" +
+                (x.where || "—") +
+                "` · сделать: " +
+                (x.todo || "—") +
+                " · ожидается: " +
+                (x.expect || "—") +
+                " · проверка: " +
+                (x.how || "—") +
+                " · " +
+                (st[x.state] || x.state) +
+                (x.comment ? " · комментарий: " + x.comment : ""),
+        ),
+    ].join("\n");
 }
 
 export function docOf(key, doc) {
@@ -111,7 +130,23 @@ export async function annotGet(key, doc) {
     const d = docOf(key, doc);
     if (!d)
         return { code: 404, body: { error: doc === "checklist" ? "у волны нет чек-листа приёмки" : "документа нет (плана волны не нашла)" } };
-    const notes = A.notes[d.key] || [], out = { key: d.key, kind: d.kind, tree: d.tree, tag: d.tag, title: d.title, wave: d.wave, epic: d.epic, file: d.file || null, to: d.to, orch: d.orch, agent: d.agent || null, notes, sink: SINK, approved: A.approved[d.key] || null };
+    const notes = A.notes[d.key] || [],
+        out = {
+            key: d.key,
+            kind: d.kind,
+            tree: d.tree,
+            tag: d.tag,
+            title: d.title,
+            wave: d.wave,
+            epic: d.epic,
+            file: d.file || null,
+            to: d.to,
+            orch: d.orch,
+            agent: d.agent || null,
+            notes,
+            sink: SINK,
+            approved: A.approved[d.key] || null,
+        };
     if (d.kind === "diff") {
         const t = treeOf(key);
         out.branch = d.branch;
@@ -296,5 +331,18 @@ export async function ownerAnswer(tree, answer, id, { via = "" } = {}) {
             console.error("подписчик ответа владельца:", e.message);
         }
     }
-    return { code: 200, body: { ok: true, route, logged: SINK === "log", message: (SINK === "log" ? "Ответ собран (отладка: в журнал, агенту не ушёл)" : route === "same" ? "Ответ отправлен в ту же сессию" : "Сессия сменилась — ответ ушёл с цитатой вопроса") } };
+    return {
+        code: 200,
+        body: {
+            ok: true,
+            route,
+            logged: SINK === "log",
+            message:
+                SINK === "log"
+                    ? "Ответ собран (отладка: в журнал, агенту не ушёл)"
+                    : route === "same"
+                      ? "Ответ отправлен в ту же сессию"
+                      : "Сессия сменилась — ответ ушёл с цитатой вопроса",
+        },
+    };
 }

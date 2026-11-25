@@ -26,7 +26,10 @@ const RED = [
     "Tests: 4 failed, 9 passed, 13 total",
 ].join("\n");
 
-const GUARD_RED = "[guard:imports] РАСХОЖДЕНИЙ: 3\n  • И1: импорт через границу модуля — src/a.ts :: '../b/internal'\n  • И1: импорт через границу модуля — src/a.ts :: '../b/internal'\n  • И5: мёртвое исключение — src/c.ts\nCommand failed with exit code 1.";
+const GUARD_RED =
+    "[guard:imports] РАСХОЖДЕНИЙ: 3\n  • И1: импорт через границу модуля — src/a.ts :: '../b/internal'\n " +
+    " • И1: импорт через границу модуля — src/a.ts :: '../b/internal'\n  • И5: мёртвое исключение — " +
+    "src/c.ts\nCommand failed with exit code 1.";
 
 describe("carryRedSpecs — узкий перепрогон несёт всю красную группу", () => {
     const si = P.specInput("api-test");

@@ -28,11 +28,30 @@ export function hangDue({ listed, done, lastOutAt, now = Date.now(), quietMs = H
 }
 
 export function hangLogLines(missing, quietMin) {
-    return missing.map((p) => " FAIL  " + p + " > спека висит: нет итога " + quietMin + " мин\nError: спека висит — нет итога " + quietMin + " мин (незакрытый промис, таймер или цикл в спеке или компоненте)\n").join("");
+    return missing
+        .map(
+            (p) =>
+                " FAIL  " +
+                p +
+                " > спека висит: нет итога " +
+                quietMin +
+                " мин\nError: спека висит — нет итога " +
+                quietMin +
+                " мин (незакрытый промис, таймер или цикл в спеке или компоненте)\n",
+        )
+        .join("");
 }
 
 export function hangSummary(missing, listed, quietMin) {
     const n = (listed || []).length, okN = n - missing.length;
-    return "⏱ ВИСИТ " + (missing.length > 1 ? "СПЕК " + missing.length + ": " : "СПЕКА: ") + missing.map(base).join(", ") + " — нет итога " + quietMin + " мин" + (okN > 0 ? ", остальные " + okN + " из " + n + " отчитались" : "") +
-        ". Прогон снят. Это код спеки или компонента (незакрытый промис, таймер, цикл), не окружение";
+    return (
+        "⏱ ВИСИТ " +
+        (missing.length > 1 ? "СПЕК " + missing.length + ": " : "СПЕКА: ") +
+        missing.map(base).join(", ") +
+        " — нет итога " +
+        quietMin +
+        " мин" +
+        (okN > 0 ? ", остальные " + okN + " из " + n + " отчитались" : "") +
+        ". Прогон снят. Это код спеки или компонента (незакрытый промис, таймер, цикл), не окружение"
+    );
 }

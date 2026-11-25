@@ -10,7 +10,17 @@ const fwd = (p) => String(p).replace(/\\/g, "/")
 const readText = (file) => { try { return fs.readFileSync(file, "utf8") } catch { return null } }
 const readJson = (file) => { try { return JSON.parse(readText(file).replace(/^\uFEFF/, "")) } catch { return null } }
 const exists = (...parts) => fs.existsSync(path.join(...parts))
-const listDirs = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules").map((e) => e.name).sort() } catch { return [] } }
+const listDirs = (dir) => {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules")
+      .map((e) => e.name)
+      .sort()
+  } catch {
+    return []
+  }
+}
 
 /** id из имени папки: строчная латиница, цифры, дефис; с буквы. */
 export function toId(name) {
@@ -107,7 +117,15 @@ export function stackFacts(repo) {
   const workspaces = workspaceDirs(repo, pkg).map((dir) => {
     const p = readJson(path.join(repo, dir, "package.json")) || {}
     const deps = depsOf(p)
-    return { dir, name: p.name || dir, scripts: Object.keys(p.scripts || {}), jest: "jest" in deps, vitest: "vitest" in deps, playwright: "@playwright/test" in deps || "playwright" in deps, cypress: "cypress" in deps }
+    return {
+      dir,
+      name: p.name || dir,
+      scripts: Object.keys(p.scripts || {}),
+      jest: "jest" in deps,
+      vitest: "vitest" in deps,
+      playwright: "@playwright/test" in deps || "playwright" in deps,
+      cypress: "cypress" in deps,
+    }
   })
   // Go-модули вне корня: сервисы в монорепо
   const goDirs = []
@@ -197,7 +215,17 @@ export const runtimeFacts = (env = process.env) => ({ claude: whichBin("claude",
 /** Все факты разом. */
 export function detectFacts(repo, { env = process.env } = {}) {
   const abs = path.resolve(repo)
-  return { repo: fwd(abs), exists: fs.existsSync(abs), git: gitFacts(abs), stack: stackFacts(abs), ci: ciFacts(abs), services: servicesFacts(abs), deploy: deployFacts(abs), machine: machineFacts(), runtimes: runtimeFacts(env) }
+  return {
+    repo: fwd(abs),
+    exists: fs.existsSync(abs),
+    git: gitFacts(abs),
+    stack: stackFacts(abs),
+    ci: ciFacts(abs),
+    services: servicesFacts(abs),
+    deploy: deployFacts(abs),
+    machine: machineFacts(),
+    runtimes: runtimeFacts(env),
+  }
 }
 
 // ───────────────────────────── предложения ответов ─────────────────────────────
@@ -205,7 +233,14 @@ export function detectFacts(repo, { env = process.env } = {}) {
 const INTEGRATION_NAMES = ["staging", "develop", "dev", "development", "integration", "next"]
 const PROD_NAMES = ["main", "master", "production", "prod", "release", "trunk"]
 
-const runScript = (pm, script) => pm === "npm" ? (script === "test" ? "npm test" : "npm run " + script) : pm === "bun" ? "bun run " + script : pm + " " + (["test", "start"].includes(script) || pm === "yarn" ? script : "run " + script)
+const runScript = (pm, script) =>
+  pm === "npm"
+    ? script === "test"
+      ? "npm test"
+      : "npm run " + script
+    : pm === "bun"
+      ? "bun run " + script
+      : pm + " " + (["test", "start"].includes(script) || pm === "yarn" ? script : "run " + script)
 const INSTALL = { pnpm: "pnpm install --frozen-lockfile --prefer-offline", npm: "npm ci --prefer-offline", yarn: "yarn install --immutable", bun: "bun install --frozen-lockfile" }
 const firstScript = (scripts, names) => names.find((n) => scripts.includes(n)) || ""
 
@@ -340,8 +375,17 @@ export function suggestAnswers(facts, prev = {}) {
   a["deny.edit"] = low(suggestDenyEdit(facts), "манифесты, lock-файл, CI и выкат")
   a["deny.commands"] = low(suggestDenyCommands(stack, tasks), "запуск тестов и dev-серверов — дело диспетчерской")
 
-  a["ci.kind"] = ci.kinds.length === 1 ? high(ci.kinds[0], "найдено: " + ci.files.join(", ")) : ci.kinds.length > 1 ? low(ci.kinds[0], "найдено несколько: " + ci.kinds.join(", ")) : low("none", "файлов CI в репозитории нет")
-  if (ci.kinds.length) a["ci.runners"] = low(ci.selfHosted && ci.cloud ? "mixed" : ci.selfHosted ? "self-hosted" : "cloud", ci.selfHosted ? "в CI есть метки своих раннеров" : "меток своих раннеров не видно")
+  a["ci.kind"] =
+    ci.kinds.length === 1
+      ? high(ci.kinds[0], "найдено: " + ci.files.join(", "))
+      : ci.kinds.length > 1
+        ? low(ci.kinds[0], "найдено несколько: " + ci.kinds.join(", "))
+        : low("none", "файлов CI в репозитории нет")
+  if (ci.kinds.length)
+    a["ci.runners"] = low(
+      ci.selfHosted && ci.cloud ? "mixed" : ci.selfHosted ? "self-hosted" : "cloud",
+      ci.selfHosted ? "в CI есть метки своих раннеров" : "меток своих раннеров не видно",
+    )
 
   a["machines.localWorkers"] = high(Math.min(8, Math.max(1, Math.floor(machine.cpus / 2))), `ядер ${machine.cpus}`)
   a["limits.slots"] = high(Math.min(6, Math.max(1, Math.floor(machine.totalGB / 8))), `памяти ${machine.totalGB} ГБ, по 8 ГБ на слот`)
@@ -350,7 +394,14 @@ export function suggestAnswers(facts, prev = {}) {
 
   a["stand.run"] = low("", "стенд по репозиторию не определить")
   a["stand.url"] = low("", "")
-  a["accept.run"] = low(stack.playwright ? "npx playwright test" : stack.cypress ? "npx cypress run" : "", stack.playwright ? "в зависимостях есть Playwright" : stack.cypress ? "в зависимостях есть Cypress" : "e2e-инструмента в зависимостях нет")
+  a["accept.run"] = low(
+    stack.playwright ? "npx playwright test" : stack.cypress ? "npx cypress run" : "",
+    stack.playwright
+      ? "в зависимостях есть Playwright"
+      : stack.cypress
+        ? "в зависимостях есть Cypress"
+        : "e2e-инструмента в зависимостях нет",
+  )
   a["prod.run"] = low("", facts.deploy.scripts.length ? "в корне есть " + facts.deploy.scripts.join(", ") : "")
   a["prod.verify"] = low("", "")
 

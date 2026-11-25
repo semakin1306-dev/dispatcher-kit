@@ -21,6 +21,7 @@ import { late, lateObject } from "./late.mjs";
 import { orchKey, viewEpic } from "./trees.mjs";
 import { TASKS, matchAny, stepOfTask } from "./tasks.mjs";
 import { parseTaskLog, specAware, specInput } from "./parsers.mjs";
+import { prompt } from "../prompts.mjs";
 
 const { runTask } = late("autochain.mjs", ["runTask"]);
 const { enqueue } = late("runner.mjs", ["enqueue"]);
@@ -62,7 +63,28 @@ export async function touchedFiles(dir) {
 // Без графа импортов конкретного раннера: спека задета, если её саму правили или в её тексте упомянуто имя тронутого
 // файла (без расширения). Слишком общие имена (index, utils…) и имена, которые встречаются в десятках спек, не берутся.
 
-export const GENERIC_KEYS = new Set(["route", "index", "types", "type", "utils", "util", "helpers", "constants", "middlewares", "service", "models", "model", "config", "schema", "main", "init", "__init__", "mod", "lib", "app"]);
+export const GENERIC_KEYS = new Set([
+    "route",
+    "index",
+    "types",
+    "type",
+    "utils",
+    "util",
+    "helpers",
+    "constants",
+    "middlewares",
+    "service",
+    "models",
+    "model",
+    "config",
+    "schema",
+    "main",
+    "init",
+    "__init__",
+    "mod",
+    "lib",
+    "app",
+]);
 export const specTextCache = new Map();
 const SPEC_SKIP = new Set(["node_modules", "dist", ".git", ".nuxt", ".output", ".next", "build", "coverage", "playwright-report", "test-results", ".turbo", "__pycache__", ".venv", "venv"]);
 
@@ -168,7 +190,13 @@ export function regressPlan(files, dir) {
         const rel = relatedSpecs(dir, area, hit);
         if (!rel.specs.length)
             continue;
-        const why = "спеки области «" + area.title + "», где упомянуты тронутые файлы или которые правились — всего " + rel.specs.length + (rel.keys.length ? "; ключи: " + rel.keys.join(", ") : "") + (rel.dropped.length ? "; слишком общие, не взяты: " + rel.dropped.join(", ") : "");
+        const why =
+            "спеки области «" +
+            area.title +
+            "», где упомянуты тронутые файлы или которые правились — всего " +
+            rel.specs.length +
+            (rel.keys.length ? "; ключи: " + rel.keys.join(", ") : "") +
+            (rel.dropped.length ? "; слишком общие, не взяты: " + rel.dropped.join(", ") : "");
         if (rel.specs.length > REGRESS_WIDE)
             continue;
         const names = [...new Set(rel.specs.map(sbase))].sort(), n = Math.ceil(names.length / REGRESS_CHUNK), size = Math.ceil(names.length / n);
@@ -214,7 +242,20 @@ export function passingCached(id) {
 export const baseAsked = new Set();
 /** git без хуков и побочных настроек — для служебных операций диспетчерской в рабочих копиях. */
 export const SAFE_HOOKS = path.join(DATA, "empty-hooks");
-export const SAFE_GIT = ["-c", "core.hooksPath=" + SAFE_HOOKS.replace(/\\/g, "/"), "-c", "rerere.enabled=false", "-c", "gc.auto=0", "-c", "commit.gpgsign=false", "-c", "rebase.updateRefs=false", "-c", "core.quotePath=false"];
+export const SAFE_GIT = [
+    "-c",
+    "core.hooksPath=" + SAFE_HOOKS.replace(/\\/g, "/"),
+    "-c",
+    "rerere.enabled=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "rebase.updateRefs=false",
+    "-c",
+    "core.quotePath=false",
+];
 
 /** Имена спек на верхушке staging по задачам: { tree, <задача>: Set(имя файла) }. */
 export async function stagingSpecSets() {
@@ -249,11 +290,28 @@ export function stagingBase(it0, mine = [], stg = null) {
     if (SUITE_FAM[it0.task] && mine.length && stg && stg[it0.task]) {
         const names = [...new Set(mine.map(sbase))], have = names.filter((n) => stg[it0.task].has(n));
         if (!have.length)
-            return { status: "ok", virtual: true, why: "упавших спек на staging нет — они новые в ветке (" + names.slice(0, 4).join(", ") + (names.length > 4 ? " …" : "") + "): красное принесла ветка" };
+            return {
+                status: "ok",
+                virtual: true,
+                why:
+                    "упавших спек на staging нет — они новые в ветке (" +
+                    names.slice(0, 4).join(", ") +
+                    (names.length > 4 ? " …" : "") +
+                    "): красное принесла ветка",
+            };
         if (si)
             it = { task: it0.task, input: si.make(have.sort()) };
     }
-    const b = [...jobList()].reverse().find((k) => k.tree === "orchestrator-staging" && jobCovers(k, it) && k.treeSha === stagingTreeSha() && ["ok", "fail", "running", "queued", "waiting"].includes(k.status) && !(k.status === "fail" && !failingSpecs(k.id).length));
+    const b = [...jobList()]
+        .reverse()
+        .find(
+            (k) =>
+                k.tree === "orchestrator-staging" &&
+                jobCovers(k, it) &&
+                k.treeSha === stagingTreeSha() &&
+                ["ok", "fail", "running", "queued", "waiting"].includes(k.status) &&
+                !(k.status === "fail" && !failingSpecs(k.id).length),
+        );
     if (b || !stagingTreeSha())
         return b || null;
     if (!STAGING_BASELINE_RUNS)
@@ -329,7 +387,8 @@ export function foreignRedBaseline(job) {
 }
 
 /** Красное от окружения, а не от кода: обрыв связи, снятие по времени, отказ запуска. */
-export const ENV_FAIL_RE = /Connection timed out|снимок не отправился|УПЁРЛОСЬ В ПОТОЛОК|СНЯТ ПО ВРЕМЕНИ|spawn UNKNOWN|ECONNRESET|banner exchange|kex_exchange_identification|Timeout, server [\w.:-]+ not responding|Read from remote host [\w.:-]+: Connection reset by peer|client_loop: send disconnect: Connection reset/i;
+export const ENV_FAIL_RE =
+    /Connection timed out|снимок не отправился|УПЁРЛОСЬ В ПОТОЛОК|СНЯТ ПО ВРЕМЕНИ|spawn UNKNOWN|ECONNRESET|banner exchange|kex_exchange_identification|Timeout, server [\w.:-]+ not responding|Read from remote host [\w.:-]+: Connection reset by peer|client_loop: send disconnect: Connection reset/i;
 
 export function realFail(j) {
     if (ENV_FAIL_RE.test(j.summary || ""))
@@ -417,12 +476,35 @@ export function autoRetry(job) {
     const mine0 = failingSpecs(job.id).filter((f) => !inheritedRed(job, f));
     if (!mine0.length || mine0.length > 8)
         return;
-    const day = Date.now() - 24 * 3600e3, retriedToday = (f) => jobList().filter((k) => k.tree === job.tree && k.retryOf && (k.queuedAt || 0) > day && String(k.input || "").replace(/\\/g, "").includes(sbase(f).replace(/\.[^.]+$/, ""))).length;
-    const mine = retrySpecs({ failing: mine0, touched: Object.keys(job.snap || {}), history: S.specHist, code: job.tree + ":" + (job.fpEnd || job.treeSha || ""), jobId: job.id }).filter((f) => retriedToday(f) < 2);
+    const day = Date.now() - 24 * 3600e3,
+        retriedToday = (f) =>
+            jobList().filter(
+                (k) =>
+                    k.tree === job.tree &&
+                    k.retryOf &&
+                    (k.queuedAt || 0) > day &&
+                    String(k.input || "")
+                        .replace(/\\/g, "")
+                        .includes(sbase(f).replace(/\.[^.]+$/, "")),
+            ).length;
+    const mine = retrySpecs({
+        failing: mine0,
+        touched: Object.keys(job.snap || {}),
+        history: S.specHist,
+        code: job.tree + ":" + (job.fpEnd || job.treeSha || ""),
+        jobId: job.id,
+    }).filter((f) => retriedToday(f) < 2);
     if (!mine.length) {
         const a = agents.get(job.tree);
         if (a)
-            push(a, { id: "nrt-" + a.rev, t: "status", text: "Автоповтор не ставлю: упали свои спеки волны или спеки, уже падавшие на этом же коде (" + mine0.map(sbase).join(", ") + ") — повтор дал бы то же." });
+            push(a, {
+                id: "nrt-" + a.rev,
+                t: "status",
+                text:
+                    "Автоповтор не ставлю: упали свои спеки волны или спеки, уже падавшие на этом же коде (" +
+                    mine0.map(sbase).join(", ") +
+                    ") — повтор дал бы то же.",
+            });
         return;
     }
     runTask(job.tree, job.task, si.make(mine), "автоповтор упавших спек", { retryOf: job.id }).catch((e) => console.error("автоповтор:", e.message));
@@ -588,19 +670,27 @@ export function stagingRedCard(job) {
     for (const f of fresh)
         S.stgRed[f] = { at: Date.now(), jobId: job.id };
     saveJson(STG_RED_FILE, S.stgRed, 1);
-    addCard({ id: ibId(), kind: "stgred", epic: null, tree: "orchestrator-staging", to: viewEpic() ? orchKey(viewEpic().id) : "orchestrator", toTag: "ОРК", specs: fresh, task: job.task, input: job.input || "", jobId: job.id, at: Date.now() });
+    addCard({
+        id: ibId(),
+        kind: "stgred",
+        epic: null,
+        tree: "orchestrator-staging",
+        to: viewEpic() ? orchKey(viewEpic().id) : "orchestrator",
+        toTag: "ОРК",
+        specs: fresh,
+        task: job.task,
+        input: job.input || "",
+        jobId: job.id,
+        at: Date.now(),
+    });
     saveInbox();
 }
 
 export function stgRedText(it) {
-    return ["Диспетчерская: на САМОМ staging красное вне волн эпика. Нашла его сверка регресса (прогон " + it.jobId + ": " + ((TASKS[it.task] || {}).label || it.task) + (it.input ? " " + it.input : "") + "), лог " + String(logPath(it.jobId)).replace(/\\/g, "/") + ".",
-        "Упавшие спеки:", ...it.specs.map((f) => "- " + f),
-        "Слотам это не вменяется (их станция «Регресс» считает его унаследованным), но staging должен быть зелёным. Владелец нажатием этой кнопки поручает тебе:",
-        "1. Разобрать по логу и коду причину каждого падения: сломан код или устарел тест; чья волна это внесла (git log по файлам).",
-        "2. Завести волну-фикс навыком /new-slot (ветка от staging; папку и подготовку диспетчерская поднимет сама). Одна волна на одну причину; несвязанные падения — разными волнами.",
-        "3. Записать план волны WV-NNNN в папке эпика: «Источник» — эта карточка; «Красный тест» — уже упавшая спека (новый писать не нужно); «Манифест слота» — только файлы, нужные для починки; «Не делаем» — всё прочее.",
-        "4. Когда слот поднят и план лежит, диспетчерская сама предложит владельцу кнопку «Запустить слот». Коммит и влив в staging — как обычно, по слову владельца.",
-        "Ответь владельцу коротко: что за причины, какие волны заводишь."].join("\n");
+    const label = ((TASKS[it.task] || {}).label || it.task) + (it.input ? " " + it.input : "");
+    const head = "Диспетчерская: на САМОМ staging красное вне волн эпика. Нашла его сверка регресса (прогон " + it.jobId + ": " + label +
+        "), лог " + String(logPath(it.jobId)).replace(/\\/g, "/") + ".";
+    return [head, "Упавшие спеки:", ...it.specs.map((f) => "- " + f), prompt("staging-red-task")].join("\n");
 }
 
 /** Все спеки прошли после момента `at` на этом коде слота. */

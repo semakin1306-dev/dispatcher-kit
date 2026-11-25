@@ -6,6 +6,17 @@
 //
 // Ssh — только алиасы из ~/.ssh/config, без паролей (BatchMode), с таймаутом подключения; одновременные подключения
 // ограничивают ворота ssh (spawner.mjs: сам ssh; git push — явно через те же ворота).
+//
+// Кто зовёт: initMachines() включает модуль и ставит реализацию в shardApi() (shard.mjs); дальше очередь прогонов
+// (runner.mjs) спрашивает места (slotFree/slotReserve), запускает задачу (slotRun), отменяет (slotCancel) и освобождает
+// место (slotRelease). Состояние — только в памяти: брони мест (res: jobId → машина, дорожка, номер места, слот),
+// последняя нагрузка машин (ld) и счётчик здоровья (host-health.mjs). Файлов данных модуль не ведёт.
+//
+// Инварианты:
+// - удалённая машина даёт места, только если она «на связи» по счётчику здоровья И её нагрузка свежая (FRESH_MS):
+//   по устаревшей нагрузке нельзя решить, хватит ли памяти на ещё один прогон;
+// - код машины видит только по sha: рабочая папка слота, его ветка и индекс не меняются;
+// - папка прогона своя у каждого слота и места (<repo>-wt/<слот>-p<место>), два прогона в одну папку не попадают.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,6 +25,7 @@ import { PROJECT } from "../slots.mjs";
 import { logEvent } from "./config.mjs";
 import { setDigestDirs } from "./digest.mjs";
 import { createHostTracker } from "./host-health.mjs";
+import { availMem } from "./free-mem.mjs";
 import { noMachinesApi, setShardApi } from "./shard.mjs";
 import { FAIL_FN, downLines, runProcess, shq, upLines } from "./services.mjs";
 import { FRESH_MS, pickPlace, profilesOf } from "./slot-places.mjs";
@@ -35,11 +47,17 @@ export const rdir = (d) => {
 };
 /** Ssh-хост — только алиас (или user@алиас): ничего, что ssh примет за ключ. */
 export const SSH_HOST_RE = /^[A-Za-z0-9_][A-Za-z0-9._@-]*$/;
+/**
+ * Флаги ssh: без вопросов (BatchMode — пароль или новый ключ хоста не повесят прогон), с таймаутом подключения и
+ * проверкой живости соединения (долгий прогон без вывода не обрывается, мёртвое соединение замечается).
+ */
 export function sshOpts(connectTimeoutS = 10) {
     return ["-o", "BatchMode=yes", "-o", "ConnectTimeout=" + connectTimeoutS, "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 }
 export const runDirOf = (key, idx) => safeId(key) + "-p" + idx;
+// Служебная ссылка доставки: push идёт в refs/dispatcher/…, а не в ветку — ветки репозитория машины не трогаются.
 export const runRefOf = (key, idx) => "refs/dispatcher/" + runDirOf(key, idx);
+// Номер группы процессов прогона на машине — по нему отмена снимает прогон (killScript).
 export const pidFileOf = (project, jobId) => "/tmp/dispatcher-" + safeId(project) + "-" + safeId(jobId) + ".pid";
 
 /** Репозиторий машины: создать при первом прогоне, вернуть общую папку git (куда пушить) и корень. */
@@ -57,13 +75,20 @@ const runDirLines = (m, key, idx) => [`mkdir -p ${rdir(m.dir)}`, `R=$(cd ${rdir(
  * `bash -ec`: её код не теряется, а провал подготовки или службы останавливает прогон с понятной строкой.
  */
 export function runBody({ m, mk, sha, key, idx, jobId, cmd, serviceTries = 15 }) {
-    const L = ["set -e", ...runDirLines(m, key, idx), 'mkdir -p "$R-wt"',
-        `if [ -e "$D/.git" ]; then git -C "$D" checkout -q --detach -f ${sha}; git -C "$D" clean -fdq; else rm -rf "$D"; git -C "$R" worktree prune; git -C "$R" worktree add -q --detach "$D" ${sha}; fi`,
+    const L = [
+        "set -e",
+        ...runDirLines(m, key, idx),
+        'mkdir -p "$R-wt"',
+        // Папка прогона переиспользуется (зависимости и сборка остаются между прогонами): checkout -f и clean убирают
+        // следы прошлого прогона; нет папки — новый worktree. Служебная ссылка после этого не нужна: коммит держит HEAD папки.
+        `if [ -e "$D/.git" ]; then git -C "$D" checkout -q --detach -f ${sha}; git -C "$D" clean -fdq; else ` +
+            `rm -rf "$D"; git -C "$R" worktree prune; git -C "$R" worktree add -q --detach "$D" ${sha}; fi`,
         `git -C "$R" update-ref -d ${runRefOf(key, idx)} 2>/dev/null || true`,
         'cd "$D"',
         `export DISPATCHER_MACHINE=${shq(mk)} DISPATCHER_PLACE=${Number(idx) || 0} DISPATCHER_SLOT=${shq(key)} DISPATCHER_JOB=${shq(jobId)} FORCE_COLOR=0`,
         FAIL_FN,
-        `echo ${shq("папка прогона на " + String(sha).slice(0, 10))}`];
+        `echo ${shq("папка прогона на " + String(sha).slice(0, 10))}`,
+    ];
     if ((m.prepare || []).length) {
         L.push('echo "== подготовка"');
         for (const c of m.prepare)
@@ -101,10 +126,21 @@ export function killScript(pidFile) {
 /** Уборка папок прогонов слотов, которых больше нет (папки ещё живых слотов не трогаются). */
 export function pruneScript(m, liveKeys) {
     const live = " " + [...new Set(liveKeys.map(safeId))].join(" ") + " ";
-    return ["set -e", `mkdir -p ${rdir(m.dir)}`, `R=$(cd ${rdir(m.dir)} && pwd)`, 'W="$R-wt"', '[ -d "$W" ] || { echo "PRUNED 0"; exit 0; }',
-        `live=${shq(live)}`, "n=0",
-        'for d in "$W"/*; do [ -d "$d" ] || continue; b=$(basename "$d"); k=${b%-p*}; case "$live" in *" $k "*) continue;; esac; git -C "$R" worktree remove --force "$d" 2>/dev/null || rm -rf "$d"; n=$((n+1)); done',
-        'git -C "$R" worktree prune', 'echo "PRUNED $n"', ""].join("\n");
+    return [
+        "set -e",
+        `mkdir -p ${rdir(m.dir)}`,
+        `R=$(cd ${rdir(m.dir)} && pwd)`,
+        'W="$R-wt"',
+        '[ -d "$W" ] || { echo "PRUNED 0"; exit 0; }',
+        `live=${shq(live)}`,
+        "n=0",
+        'for d in "$W"/*; do [ -d "$d" ] || continue; b=$(basename "$d"); k=${b%-p*}; case "$live" in *" $k ' +
+            '"*) continue;; esac; git -C "$R" worktree remove --force "$d" 2>/dev/null || rm -rf "$d"; ' +
+            "n=$((n+1)); done",
+        'git -C "$R" worktree prune',
+        'echo "PRUNED $n"',
+        "",
+    ].join("\n");
 }
 
 /** Проба здоровья: память, подкачка, нагрузка, ядра и два замера /proc/stat через секунду (загрузка ЦП). */
@@ -113,6 +149,7 @@ export const PROBE_SH = ["grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):'
     "echo CPU $(head -1 /proc/stat 2>/dev/null)", "sleep 1", "echo CPU $(head -1 /proc/stat 2>/dev/null)", "true", ""].join("\n");
 
 /** Вывод пробы → нагрузка машины в форме slot-places.mjs; нет памяти в выводе — null (машина места не даёт). */
+// Простой ЦП — поля idle и iowait строки cpu из /proc/stat; доступная память — MemAvailable (ядра без неё — MemTotal).
 export function parseProbe(text, at = Date.now()) {
     const kb = {}, cpu = [];
     let load = null, cores = 0;
@@ -139,7 +176,8 @@ export function parseProbe(text, at = Date.now()) {
         swapTotalGB: (kb.SwapTotal || 0) / GB, swapUsedGB: ((kb.SwapTotal || 0) - (kb.SwapFree || 0)) / GB, loadAvg: load };
 }
 
-/** Нагрузка этой машины: ЦП — по разности os.cpus() (не чаще раза в секунду), память — из os. */
+/** Нагрузка этой машины: ЦП — по разности os.cpus() (не чаще раза в секунду), память — доступная по free-mem.mjs. */
+// Окно замера ЦП — не меньше секунды: на коротком отрезке разность счётчиков os.cpus() — шум.
 export function makeLocalLoad(now = Date.now) {
     let prev = null, prevAt = 0, cpu = 0;
     return () => {
@@ -156,7 +194,7 @@ export function makeLocalLoad(now = Date.now) {
             prevAt = t;
         }
         const tot = os.totalmem() / 2 ** 30;
-        return { at: t, cpu, cores: cs.map(() => cpu), memTotalGB: tot, memUsedGB: tot - os.freemem() / 2 ** 30, loadAvg: process.platform === "win32" ? null : os.loadavg() };
+        return { at: t, cpu, cores: cs.map(() => cpu), memTotalGB: tot, memUsedGB: tot - availMem(t) / 2 ** 30, loadAvg: process.platform === "win32" ? null : os.loadavg() };
     };
 }
 
@@ -178,6 +216,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
     const { tiers, profiles } = profilesOf(Object.fromEntries([...ids, "local"].map((id) => [id, machines[id] || {}])));
     const tracker = createHostTracker({ emit: (type, d) => emit(type, d), now });
     const ld = {}, res = new Map(), probing = new Set(), digestDirs = new Set(), timers = [];
+    // git push ходит тем же ssh с теми же флагами, что и прогоны (в тестах — поддельный ssh из параметра ssh).
     const gitSshEnv = { GIT_SSH_VARIANT: "ssh", GIT_SSH_COMMAND: [ssh.file, ...(ssh.pre || [])].map((x) => shq(String(x).split("\\").join("/"))).join(" ") + " " + sshOpts(connectTimeoutS).join(" ") };
 
     /** Процесс → { code, out, err } — общий запуск ядра (services.mjs) с подменяемым spawn. */
@@ -195,9 +234,11 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
             });
         }, "git push");
     });
+    // В счётчик здоровья идёт только недоступность машины (код 255 у ssh): упавшая команда задачи — не сбой машины.
     const hostFail = (mk, r) => tracker.fail(mk, r.err || r.out || "код " + r.code);
     const online = (mk) => tracker.state(mk) === "online" && !!ld[mk] && !!ld[mk].at && now() - ld[mk].at <= FRESH_MS;
 
+    // Вход правила мест (slot-places.mjs): состояние машин, брони и требования задачи.
     function ctx(opts = {}) {
         const ms = {};
         for (const mk of tiers) {
@@ -215,7 +256,16 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
         if (ip.code)
             throw fail("git rev-parse", ip);
         const tmp = path.join(os.tmpdir(), "dk-snap-" + crypto.randomBytes(6).toString("hex"));
-        const env = { GIT_INDEX_FILE: tmp, GIT_OPTIONAL_LOCKS: "0", GIT_AUTHOR_NAME: "dispatcher", GIT_AUTHOR_EMAIL: "dispatcher@localhost", GIT_COMMITTER_NAME: "dispatcher", GIT_COMMITTER_EMAIL: "dispatcher@localhost" };
+        // Временный индекс — копия настоящего (с битами sparse-checkout), поэтому add -A не тащит файлы вне выборки слота.
+        // GIT_OPTIONAL_LOCKS=0: снимок не берёт блокировку индекса слота, пока агент в нём работает; автор — служебный.
+        const env = {
+            GIT_INDEX_FILE: tmp,
+            GIT_OPTIONAL_LOCKS: "0",
+            GIT_AUTHOR_NAME: "dispatcher",
+            GIT_AUTHOR_EMAIL: "dispatcher@localhost",
+            GIT_COMMITTER_NAME: "dispatcher",
+            GIT_COMMITTER_EMAIL: "dispatcher@localhost",
+        };
         try {
             try {
                 fs.copyFileSync(ip.out.trim(), tmp);
@@ -231,6 +281,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
             const [tree, head, headTree] = [await g(["write-tree"], env), await g(["rev-parse", "HEAD"]), await g(["rev-parse", "HEAD^{tree}"])];
             if (tree.code || head.code)
                 throw fail("write-tree", tree.code ? tree : head);
+            // Правок нет — доставляется сам HEAD, без лишнего коммита-снимка.
             if (tree.out.trim() === headTree.out.trim())
                 return { sha: head.out.trim(), dirty: false };
             const c = await g(["commit-tree", tree.out.trim(), "-p", head.out.trim(), "-m", "снимок рабочей папки слота для прогона на машине"], env);
@@ -246,6 +297,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
         }
     }
 
+    // Службы машины общие для её прогонов: останавливать их можно только после последнего прогона на этой машине.
     async function servicesDownIfLast(mk, jobId, key, idx, write) {
         const m = machines[mk], downs = (m.services || []).filter((s) => s.down);
         if (!downs.length || [...res].some(([id, x]) => id !== jobId && x.mk === mk))
@@ -280,11 +332,27 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
             digestDirs.add(top.trim() + "-wt/" + runDirOf(key, idx));
             setDigestDirs([...digestDirs]);
         }
-        const p = await gated(() => run("git", ["-C", cwd, "push", "--quiet", "--no-verify", m.ssh + ":" + common.trim(), "+" + snap.sha + ":" + runRefOf(key, idx)], { env: gitSshEnv, timeoutMs: 600000 }));
+        const p = await gated(() =>
+            run(
+                "git",
+                [
+                    "-C",
+                    cwd,
+                    "push",
+                    "--quiet",
+                    // хуки слота (commit-msg и др.) к доставке отношения не имеют
+                    "--no-verify",
+                    m.ssh + ":" + common.trim(),
+                    "+" + snap.sha + ":" + runRefOf(key, idx),
+                ],
+                { env: gitSshEnv, timeoutMs: 600000 },
+            ),
+        );
         if (p.code) {
             write("✗ код не доставлен на машину (git push, код " + p.code + "):\n" + tailOf(p.err || p.out) + "\n");
             return p.code;
         }
+        // Прогон — отдельной группой процессов на машине: обрыв ssh её не остановит, отмена снимает по номеру группы.
         const r = await sshRun(mk, groupWrap(runBody({ m, mk, sha: snap.sha, key, idx, jobId, cmd, serviceTries }), pidFileOf(project, jobId)), { onOut: write, onChild });
         if (r.code === 255)
             hostFail(mk, r);
@@ -292,6 +360,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
         return r.code;
     }
 
+    /** Отменить прогон на машине: снять его группу процессов. → true, если скрипт отработал. */
     async function slotCancel(jobId, mk) {
         if (!mk || mk === "local" || !machines[mk] || !machines[mk].ssh)
             return false;
@@ -299,6 +368,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
         return r.code === 0;
     }
 
+    /** Убрать папки прогонов ушедших слотов на машинах на связи; слоты с идущими прогонами считаются живыми. */
     async function slotPrune(liveKeys = []) {
         const out = {};
         for (const mk of ids) {
@@ -311,6 +381,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
         return out;
     }
 
+    // Проба здоровья. Одна за раз на машину: медленный ssh не копит очередь проб от таймера.
     async function probe(mk) {
         if (probing.has(mk))
             return;
@@ -323,6 +394,7 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
                 tracker.ok(mk);
             }
             else {
+                // нагрузка больше не свежая: машина не даёт мест, пока следующая проба не удастся
                 if (ld[mk])
                     ld[mk].at = 0;
                 tracker.fail(mk, r.code === 0 ? "проба не вернула память машины (нет /proc/meminfo)" : r.err || r.out || "код " + r.code);
@@ -351,24 +423,40 @@ export function createMachinesApi({ machines = PROJECT.machines, project = PROJE
         slotFree: (lane, opts) => !!pickPlace(lane, ctx(opts)),
         slotReserve(jobId, lane, opts) {
             const p = pickPlace(lane, ctx(opts));
-            if (!p)
-                return -1;
+            if (!p) return -1;
             res.set(jobId, { mk: p.mk, kind: lane, idx: p.idx, at: now(), key: "" });
             return p.idx;
         },
         slotMachineOf: (jobId) => (res.get(jobId) || {}).mk || null,
-        slotWhyOf: (jobId) => ((res.get(jobId) || {}).mk === "local" && ids.length ? "удалённые машины места не дали" : ""),
+        // Пояснение в карточке прогона: удалённые машины есть, а прогон ушёл на эту.
+        slotWhyOf: (jobId) =>
+            (res.get(jobId) || {}).mk === "local" && ids.length ? "удалённые машины места не дали" : "",
         slotRelease: (jobId) => {
             res.delete(jobId);
         },
         slotOnline: (mk) => (mk ? mk === "local" || online(mk) : ids.some(online)),
         slotAnyOnline: () => ids.some(online),
         machineLabel: label,
-        slotRun, slotCancel, slotPrune,
+        slotRun,
+        slotCancel,
+        slotPrune,
         hostHealth: () => tracker.snapshot(),
         load: () => Object.fromEntries([["local", localLoad()], ...ids.filter(online).map((mk) => [mk, ld[mk]])]),
-        pub: () => ({ on: true, why: "", run: null, machines: tiers.map((mk) => ({ id: mk, label: label(mk), online: mk === "local" || online(mk), workers: profiles[mk].places.length, lanes: profiles[mk].lanes,
-                reserved: [...res.values()].filter((x) => x.mk === mk).length, ld: mk === "local" ? localLoad() : ld[mk] || null, health: mk === "local" ? null : tracker.snapshot()[mk] || null })) }),
+        pub: () => ({
+            on: true,
+            why: "",
+            run: null,
+            machines: tiers.map((mk) => ({
+                id: mk,
+                label: label(mk),
+                online: mk === "local" || online(mk),
+                workers: profiles[mk].places.length,
+                lanes: profiles[mk].lanes,
+                reserved: [...res.values()].filter((x) => x.mk === mk).length,
+                ld: mk === "local" ? localLoad() : ld[mk] || null,
+                health: mk === "local" ? null : tracker.snapshot()[mk] || null,
+            })),
+        }),
         start: async () => ({ ok: false, error: NO_FULL_RUN }),
         cancel: async () => ({ ok: false, error: NO_FULL_RUN }),
         clean: async () => ({ ok: false, error: NO_FULL_RUN }),

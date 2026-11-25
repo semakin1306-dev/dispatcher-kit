@@ -14,7 +14,19 @@ export function classifyPrevStop({ prev, prevExit, bootAt, envReason = "" }) {
         if (prevExit.error)
             return { kind: "crash", why: "прошлый процесс упал: " + prevExit.error.slice(0, 200) + (prevExit.origin ? " (" + prevExit.origin + ")" : "") };
         if (prevExit.signal)
-            return { kind: "signal", why: "прошлый процесс получил " + prevExit.signal + (/SIGBREAK|SIGHUP/.test(prevExit.signal) ? " — закрыто окно консоли или выход из сеанса Windows" : prevExit.signal === "SIGTERM" ? " — его остановили снаружи" : prevExit.signal === "SIGINT" ? " — Ctrl+C" : "") };
+            return {
+                kind: "signal",
+                why:
+                    "прошлый процесс получил " +
+                    prevExit.signal +
+                    (/SIGBREAK|SIGHUP/.test(prevExit.signal)
+                        ? " — закрыто окно консоли или выход из сеанса Windows"
+                        : prevExit.signal === "SIGTERM"
+                          ? " — его остановили снаружи"
+                          : prevExit.signal === "SIGINT"
+                            ? " — Ctrl+C"
+                            : ""),
+            };
         if (envReason)
             return { kind: "restart-script", why: envReason };
         return { kind: "clean", why: "прошлый процесс вышел сам (код " + prevExit.code + ")" };
@@ -55,8 +67,27 @@ export function refineStop(stop, events, { prevAt, bootAt }) {
     const win = (events || []).filter((e) => e.at >= prevAt - 60e3 && e.at <= bootAt);
     const off = win.find((e) => e.id === 1074), crash = win.find((e) => e.id === 41 || e.id === 6008);
     if (off && (!crash || off.at <= crash.at))
-        return { kind: "pc-off", why: "ПК выключили или перезагрузили штатно в " + hhmm(off.at) + (off.proc ? " (" + off.proc + (off.proc === "RuntimeBroker.exe" ? " — меню «Пуск»" : "") + ")" : "") + ", слива перед этим не было; прежде: " + stop.why, winAt: off.at };
+        return {
+            kind: "pc-off",
+            why:
+                "ПК выключили или перезагрузили штатно в " +
+                hhmm(off.at) +
+                (off.proc ? " (" + off.proc + (off.proc === "RuntimeBroker.exe" ? " — меню «Пуск»" : "") + ")" : "") +
+                ", слива перед этим не было; прежде: " +
+                stop.why,
+            winAt: off.at,
+        };
     if (crash)
-        return { kind: "pc-crash", why: "ПК перезагрузился аварийно (Kernel-Power " + crash.id + " при загрузке в " + hhmm(crash.at) + "): зависание, сброс кнопкой или питание; журналы последних минут могли получить нули; прежде: " + stop.why, winAt: crash.at };
+        return {
+            kind: "pc-crash",
+            why:
+                "ПК перезагрузился аварийно (Kernel-Power " +
+                crash.id +
+                " при загрузке в " +
+                hhmm(crash.at) +
+                "): зависание, сброс кнопкой или питание; журналы последних минут могли получить нули; прежде: " +
+                stop.why,
+            winAt: crash.at,
+        };
     return stop;
 }

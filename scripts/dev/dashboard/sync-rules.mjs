@@ -14,12 +14,45 @@ const head = (files, n) => files.slice(0, n).join(", ") + (files.length > n ? " 
 export function conflictNext(t, now = Date.now()) {
     const c = t && t.conflict, ask = t && t.syncAsk && now - t.syncAsk.at < SYNC_ASK_TTL_MS ? t.syncAsk : null;
     if (ask && t.dirtyTracked && !(t.verdict && t.verdict.merged))
-        return { kind: "info", text: "Агент разбирает " + (ask.kind === "conflict" ? "конфликт со staging" : "правки, мешающие вливу staging") + " (отдан в " + hhmm(ask.at) + ": " + head(ask.files, 3) + ") — ждём его коммит слияния", act: "slotsync", conflict: ask.files, asked: true };
+        return {
+            kind: "info",
+            text:
+                "Агент разбирает " +
+                (ask.kind === "conflict" ? "конфликт со staging" : "правки, мешающие вливу staging") +
+                " (отдан в " +
+                hhmm(ask.at) +
+                ": " +
+                head(ask.files, 3) +
+                ") — ждём его коммит слияния",
+            act: "slotsync",
+            conflict: ask.files,
+            asked: true,
+        };
     if (ask && Array.isArray(c) && c.length && t.ahead && !t.dirtyTracked)
-        return { kind: "info", text: "Конфликт со staging отдан агенту в " + hhmm(ask.at) + " (" + head(c, 3) + ") — ждём его коммит слияния. Повторить — кнопкой", act: "slotsync", conflict: c, asked: true };
+        return {
+            kind: "info",
+            text:
+                "Конфликт со staging отдан агенту в " +
+                hhmm(ask.at) +
+                " (" +
+                head(c, 3) +
+                ") — ждём его коммит слияния. Повторить — кнопкой",
+            act: "slotsync",
+            conflict: c,
+            asked: true,
+        };
     if (!Array.isArray(c) || !c.length || !t.ahead || t.dirtyTracked || (t.verdict && t.verdict.merged))
         return null;
-    return { kind: "warn", text: "Конфликт со staging: " + c.slice(0, 6).join(", ") + (c.length > 6 ? " и ещё " + (c.length - 6) : "") + " — подтянуть staging (slot-sync), разрешить в слоте, потом вливать", act: "slotsync", conflict: c };
+    return {
+        kind: "warn",
+        text:
+            "Конфликт со staging: " +
+            c.slice(0, 6).join(", ") +
+            (c.length > 6 ? " и ещё " + (c.length - 6) : "") +
+            " — подтянуть staging (slot-sync), разрешить в слоте, потом вливать",
+        act: "slotsync",
+        conflict: c,
+    };
 }
 
 /**
@@ -62,14 +95,33 @@ export const SYNC_ASK_MARK = "кнопкой «Подтянуть staging»";
 
 /** Письмо агенту: staging не вливается, пока в слоте лежат незакоммиченные правки тех же файлов. */
 export function syncDirtyText(branch, files) {
-    return "staging ушёл вперёд, и влить его в твою ветку" + (branch ? " (" + branch + ")" : "") + " git отказался: в слоте незакоммиченные правки в файлах, которые правит и staging:\n" + files.slice(0, 20).map((f) => "- " + f).join("\n") +
-        "\nВлив не начат, ничего не потеряно. Закоммить свои правки, затем влей staging сам (git merge staging), конфликты разреши по смыслу обеих сторон, прогоны назови владельцу. Разрешение на этот влив дал владелец " + SYNC_ASK_MARK + ".";
+    return (
+        "staging ушёл вперёд, и влить его в твою ветку" +
+        (branch ? " (" + branch + ")" : "") +
+        " git отказался: в слоте незакоммиченные правки в файлах, которые правит и staging:\n" +
+        files
+            .slice(0, 20)
+            .map((f) => "- " + f)
+            .join("\n") +
+        "\nВлив не начат, ничего не потеряно. Закоммить свои правки, затем влей staging сам (git merge " +
+        "staging), конфликты разреши по смыслу обеих сторон, прогоны назови владельцу. Разрешение на этот " +
+        "влив дал владелец " +
+        SYNC_ASK_MARK +
+        "."
+    );
 }
 
 /** Письмо агенту о конфликте при вливе staging в его ветку. */
 export function syncConflictText(branch, files) {
-    return "staging ушёл вперёд, и при вливе его в твою ветку" + (branch ? " (" + branch + ")" : "") + " конфликт в файлах:\n" + files.map((f) => "- " + f).join("\n") +
-        "\nВлив откатан, ветка как была. Влей staging сам (git merge staging), разреши конфликты по смыслу обеих сторон, прогоны назови владельцу. Разрешение на этот влив дал владелец " + SYNC_ASK_MARK + ".";
+    return (
+        "staging ушёл вперёд, и при вливе его в твою ветку" +
+        (branch ? " (" + branch + ")" : "") +
+        " конфликт в файлах:\n" +
+        files.map((f) => "- " + f).join("\n") +
+        "\nВлив откатан, ветка как была. Влей staging сам (git merge staging), разреши конфликты по смыслу обеих сторон, прогоны назови владельцу. Разрешение на этот влив дал владелец " +
+        SYNC_ASK_MARK +
+        "."
+    );
 }
 
 /** Ход агента — ответ на письмо о подтягивании staging (его последнее входящее — это письмо). */

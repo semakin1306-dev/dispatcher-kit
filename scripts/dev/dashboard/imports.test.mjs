@@ -115,7 +115,32 @@ if (process.argv.includes("--print")) {
 }
 
 // ── имена импортов есть в экспорте модуля ──
-const splitTop = (s) => { let depth = 0, cur = ""; const parts = []; let q = null; for (const ch of s) { if (q) { cur += ch; if (ch === q) q = null; continue } if (ch === '"' || ch === "'" || ch === "`") { q = ch; cur += ch; continue } if ("([{".includes(ch)) depth++; else if (")]}".includes(ch)) depth--; if (ch === "," && depth === 0) { parts.push(cur); cur = "" } else cur += ch } parts.push(cur); return parts };
+const splitTop = (s) => {
+    let depth = 0,
+        cur = "";
+    const parts = [];
+    let q = null;
+    for (const ch of s) {
+        if (q) {
+            cur += ch;
+            if (ch === q) q = null;
+            continue;
+        }
+        if (ch === '"' || ch === "'" || ch === "`") {
+            q = ch;
+            cur += ch;
+            continue;
+        }
+        if ("([{".includes(ch)) depth++;
+        else if (")]}".includes(ch)) depth--;
+        if (ch === "," && depth === 0) {
+            parts.push(cur);
+            cur = "";
+        } else cur += ch;
+    }
+    parts.push(cur);
+    return parts;
+};
 const expCache = new Map();
 /** Имена, которые модуль экспортирует (по тексту: export const/let/function/class, export { … }, export * from). */
 export function exportsOf(file) {
@@ -159,14 +184,25 @@ test("проверка имён ловит снятый экспорт и нес
 });
 
 // ── «Не входит»: этих модулей живой диспетчерской в конструкторе нет ни файлами, ни импортами ──
-export const NOT_INCLUDED = /^(warm[\w-]*|usage|token-report|graph-[\w-]+|recon|vault|landing-preview|tablet|remote|archive[\w-]*|prodship|prod-rules|service-deploy|stand-[\w-]+|viewer-rules|machine-relay[\w-]*|dpapi|screenshot|dash-shot|trace-calls|learn|learn-failures)$/;
+export const NOT_INCLUDED =
+    /^(warm[\w-]*|usage|token-report|graph-[\w-]+|recon|vault|landing-preview|tablet|remote|archive[\w-]*|prodship|prod-rules|service-deploy|stand-[\w-]+|viewer-rules|machine-relay[\w-]*|dpapi|screenshot|dash-shot|trace-calls|learn|learn-failures)$/;
 const moduleName = (spec) => spec.split("/").pop().replace(/\.(m?js|ps1)$/, "");
 /** Нарушения в тексте: импорт модуля из списка «Не входит». */
-export const notIncludedImports = (src) => [...src.matchAll(/(?:from\s*|import\s*\(\s*|^\s*import\s+)["']([^"']+)["']/gm)].map((m) => m[1]).filter((s) => s.startsWith(".") && NOT_INCLUDED.test(moduleName(s)));
+export const notIncludedImports = (src) =>
+    [...src.matchAll(/(?:from\s*|import\s*\(\s*|^\s*import\s+)["']([^"']+)["']/gm)]
+        .map((m) => m[1])
+        .filter((s) => s.startsWith(".") && NOT_INCLUDED.test(moduleName(s)));
 
 test("модулей из списка «Не входит» нет: ни файлов, ни импортов", () => {
     const files = [], bad = [];
-    const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { if (e.name === ".git" || e.name === "node_modules" || e.name === ".import") continue; const p = join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p) } };
+    const walk = (d) => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+            if (e.name === ".git" || e.name === "node_modules" || e.name === ".import") continue;
+            const p = join(d, e.name);
+            if (e.isDirectory()) walk(p);
+            else files.push(p);
+        }
+    };
     walk(ROOT);
     for (const f of files) {
         if (/\.(m?js|ps1)$/.test(f) && NOT_INCLUDED.test(moduleName(f.replace(/\.test\.mjs$/, ".mjs")))) bad.push(rel(f) + ": файл модуля, который не входит");
@@ -176,7 +212,12 @@ test("модулей из списка «Не входит» нет: ни фай
 });
 
 test("сторож «Не входит» ловит импорт вырезанного модуля", () => {
-    assert.deepEqual(notIncludedImports('import { warmTick } from "./warm.mjs"\nconst u = await import("./usage.mjs")\nimport "../dashboard/prodship.mjs"\nimport { x } from "./stand-accept.mjs"'), ["./warm.mjs", "./usage.mjs", "../dashboard/prodship.mjs", "./stand-accept.mjs"]);
+    assert.deepEqual(
+        notIncludedImports(
+            'import { warmTick } from "./warm.mjs"\nconst u = await import("./usage.mjs")\nimport "../dashboard/prodship.mjs"\nimport { x } from "./stand-accept.mjs"',
+        ),
+        ["./warm.mjs", "./usage.mjs", "../dashboard/prodship.mjs", "./stand-accept.mjs"],
+    );
     assert.deepEqual(notIncludedImports('import { git } from "./git.mjs"\nimport { stations } from "./stations.mjs"'), []);
 });
 

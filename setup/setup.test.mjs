@@ -12,8 +12,17 @@ import { runDoctor, formatDoctor, roleBranchState, ensureRoleBranches } from "./
 import { detect, apply, parseArgs } from "../setup.mjs"
 
 const tmp = (name = "dk-setup-") => fs.mkdtempSync(path.join(os.tmpdir(), name))
-const write = (root, rel, text) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof text === "string" ? text : JSON.stringify(text, null, 2)) }
-const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+const write = (root, rel, text) => {
+  const f = path.join(root, rel)
+  fs.mkdirSync(path.dirname(f), { recursive: true })
+  fs.writeFileSync(f, typeof text === "string" ? text : JSON.stringify(text, null, 2))
+}
+const git = (cwd, ...args) =>
+  execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", ...args],
+    { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim()
 
 /** Монорепо: два приложения и общий пакет, pnpm, CI с выкатом по пушу. */
 function monorepoFiles(root) {

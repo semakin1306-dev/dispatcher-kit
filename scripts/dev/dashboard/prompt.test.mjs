@@ -3,7 +3,22 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 import { EPIC_CLI, PROJECT } from "../slots.mjs"
-import { DECISION_HELP, FACTS_RULES_FULL, FACTS_RULES_SHORT, REPORT_RULES, RESULTS_MARK, REVIEW_RULES, TOOLS_EXTRA, commonPrefix, orchPrimer, reportMessage, resultsMessage, reviewPrompt, taskHint, toolsSection } from "./prompt.mjs"
+import {
+    DECISION_HELP,
+    FACTS_RULES_FULL,
+    FACTS_RULES_SHORT,
+    REPORT_RULES,
+    RESULTS_MARK,
+    REVIEW_RULES,
+    TOOLS_EXTRA,
+    commonPrefix,
+    orchPrimer,
+    reportMessage,
+    resultsMessage,
+    reviewPrompt,
+    taskHint,
+    toolsSection,
+} from "./prompt.mjs"
 
 describe("префикс не плавает", () => {
   test("итоги прогонов: два сбора при разных итогах — одно и то же начало до метки «ИТОГИ» включительно", () => {

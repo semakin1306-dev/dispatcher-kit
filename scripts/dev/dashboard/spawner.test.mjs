@@ -144,7 +144,11 @@ describe("spawn — поток вывода, stdin, kill", () => {
         assert.equal(n, 20 << 20);
     });
     test("pipe из одного двойника в другой (как git archive | tar)", async () => {
-        const a = spawn(NODE, ["-e", "process.stdout.write('z'.repeat(300000))"]), b = spawn(NODE, ["-e", "let n = 0; process.stdin.on('data', (d) => n += d.length).on('end', () => process.stdout.write(String(n)))"]);
+        const a = spawn(NODE, ["-e", "process.stdout.write('z'.repeat(300000))"]),
+            b = spawn(NODE, [
+                "-e",
+                "let n = 0; process.stdin.on('data', (d) => n += d.length).on('end', () => process.stdout.write(String(n)))",
+            ]);
         let out = "";
         b.stdout.on("data", (d) => (out += d));
         a.stdout.pipe(b.stdin);
@@ -162,7 +166,7 @@ describe("spawn — поток вывода, stdin, kill", () => {
         assert.deepEqual(rm, ro);
         assert.equal(m.killed, true);
     });
-    test("killTree снимает и внука (taskkill /T), даже вызванный до прихода pid", async () => {
+    test("killTree снимает и внука (taskkill /T на Windows, обход потомков на Linux и macOS), даже вызванный до прихода pid", async () => {
         const c = spawn(NODE, ["-e", `const k = require('child_process').spawn(process.execPath, ${JSON.stringify(LONG)}, { stdio: 'ignore' }); console.log(k.pid); setTimeout(() => {}, 60000)`]);
         let out = "";
         c.stdout.on("data", (d) => (out += d));
@@ -228,11 +232,22 @@ describe("воркер", () => {
         assert.equal(spawnStats.restarts, before + 1);
         const r = await ex(NODE, ["-e", "process.stdout.write('снова')"]);
         assert.equal(r.so, "снова");
-        cp.execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        // процесс упавшего воркера остался сиротой — снимаем сами
+        if (process.platform === "win32")
+            cp.execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        else
+            try {
+                process.kill(pid, "SIGKILL");
+            }
+            catch { }
     });
     test("процесс с ожидающим execFile не выходит раньше ответа; unref() не держит процесс", async () => {
         const url = pathToFileURL(path.join(HERE, "spawner.mjs")).href;
-        const src = `import { execFile, spawn } from ${JSON.stringify(url)}; const d = spawn(process.execPath, ${JSON.stringify(LONG)}, { detached: true, stdio: "ignore" }); d.unref(); d.on("spawn", () => console.log("pid " + d.pid)); execFile(process.execPath, ["-e", "setTimeout(() => process.stdout.write('ждал'), 300)"], (e, so) => console.log(so))`;
+        const src =
+            `import { execFile, spawn } from ${JSON.stringify(url)}; const d = ` +
+            `spawn(process.execPath, ${JSON.stringify(LONG)}, { detached: true, stdio: "ignore" }); d.unref(); ` +
+            `d.on("spawn", () => console.log("pid " + d.pid)); execFile(process.execPath, ["-e", "setTimeout(() ` +
+            `=> process.stdout.write('ждал'), 300)"], (e, so) => console.log(so))`;
         const env = { ...process.env };
         delete env.NODE_TEST_CONTEXT;
         const t0 = Date.now(), r = await ex(NODE, ["--input-type=module", "-e", src], { env }, cp.execFile), pid = Number((/pid (\d+)/.exec(r.so) || [])[1]);

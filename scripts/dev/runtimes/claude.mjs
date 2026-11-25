@@ -57,12 +57,23 @@ const rid = (p) => p + Date.now().toString(36) + (++seq)
 /** Строки протокола (то, что пишется в stdin процесса). */
 export const proto = {
   init: () => ({ type: "control_request", request_id: rid("init_"), request: { subtype: "initialize", hooks: null } }),
-  user: (text) => ({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, session_id: "" }),
+  user: (text) => ({
+    type: "user",
+    message: { role: "user", content: text },
+    parent_tool_use_id: null,
+    session_id: "",
+  }),
   interrupt: () => ({ type: "control_request", request_id: rid("i"), request: { subtype: "interrupt" } }),
   setModel: (model) => ({ type: "control_request", request_id: rid("m"), request: { subtype: "set_model", model } }),
   permission: (requestId, { allow, input, message = "" }, rawInput = {}) => ({
     type: "control_response",
-    response: { subtype: "success", request_id: requestId, response: allow ? { behavior: "allow", updatedInput: input || rawInput || {} } : { behavior: "deny", message: message || "Отклонено в диспетчерской" } },
+    response: {
+      subtype: "success",
+      request_id: requestId,
+      response: allow
+        ? { behavior: "allow", updatedInput: input || rawInput || {} }
+        : { behavior: "deny", message: message || "Отклонено в диспетчерской" },
+    },
   }),
 }
 
@@ -284,7 +295,13 @@ export function writeSlotPolicy(dir, { deny = PROJECT.deny, editDeny = [], allow
   if (fs.existsSync(file)) { try { cur = JSON.parse(fs.readFileSync(file, "utf8")) } catch { return null } }
   const rules = toClaudeRules(deny), allowed = new Set(allowEdit.map((p) => "Edit(" + fwd(p) + ")"))
   const perms = cur.permissions || {}
-  const denyList = [...new Set([...(perms.deny || []).filter((x) => !rules.ask.includes(x) && !allowed.has(x)), ...rules.deny.filter((x) => !allowed.has(x)), ...editDeny.map((p) => "Edit(" + fwd(p) + ")")])]
+  const denyList = [
+    ...new Set([
+      ...(perms.deny || []).filter((x) => !rules.ask.includes(x) && !allowed.has(x)),
+      ...rules.deny.filter((x) => !allowed.has(x)),
+      ...editDeny.map((p) => "Edit(" + fwd(p) + ")"),
+    ]),
+  ]
   const ask = [...new Set([...(perms.ask || []), ...rules.ask])]
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, JSON.stringify({ ...cur, permissions: { ...perms, deny: denyList, ask } }, null, 2) + "\n")

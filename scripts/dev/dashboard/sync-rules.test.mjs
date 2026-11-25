@@ -12,7 +12,13 @@ describe("conflictNext — «Дальше» у ветки, конфликтую�
         assert.match(n.text, /^Конфликт со staging: package\.json — подтянуть staging \(slot-sync\)/);
     });
     test("чисто, ещё считается, влито, незакоммичено, без коммитов — правила нет", () => {
-        for (const t of [{ ahead: 1, conflict: [] }, { ahead: 1, conflict: null }, { ahead: 1, conflict: ["a"], verdict: { merged: true } }, { ahead: 1, dirtyTracked: 2, conflict: ["a"] }, { ahead: 0, conflict: ["a"] }])
+        for (const t of [
+            { ahead: 1, conflict: [] },
+            { ahead: 1, conflict: null },
+            { ahead: 1, conflict: ["a"], verdict: { merged: true } },
+            { ahead: 1, dirtyTracked: 2, conflict: ["a"] },
+            { ahead: 0, conflict: ["a"] },
+        ])
             assert.equal(conflictNext(t), null, JSON.stringify(t));
     });
     test("много файлов — первые шесть и счёт остальных", () => {
@@ -47,7 +53,8 @@ describe("parseSync — ответ slot-sync", () => {
         assert.match(parseSync("").fail, /нет ответа/);
     });
     test("незакоммиченные правки — файлы из сообщения git столбиком и одной строкой", () => {
-        const col = "error: Your local changes to the following files would be overwritten by merge:\n\tdocs/a/one.md\n\tdocs/b/two.md\nPlease commit your changes or stash them before you merge.\nAborting";
+        const col =
+            "error: Your local changes to the following files would be overwritten by merge:\n\tdocs/a/one.md\n\tdocs/b/two.md\nPlease commit your changes or stash them before you merge.\nAborting";
         assert.deepEqual(dirtyBlockers(col), ["docs/a/one.md", "docs/b/two.md"]);
         assert.deepEqual(dirtyBlockers("error: Your local changes to the following files would be overwritten by merge: src/a.ts src/b.ts"), ["src/a.ts", "src/b.ts"]);
         assert.deepEqual(dirtyBlockers("Automatic merge failed"), []);

@@ -92,7 +92,12 @@ export function noteFetch(key, name, input) {
     const ids = fetchIds(name, input);
     if (!ids.length)
         return;
-    const i = input || {}, whole = (name === "Read" && !i.offset && !i.limit) || (name === "Bash" && /\b(cat|type)\s/.test(String(i.command || "")) && !/\|\s*(head|tail|grep|sed)/.test(String(i.command || "")));
+    const i = input || {},
+        whole =
+            (name === "Read" && !i.offset && !i.limit) ||
+            (name === "Bash" &&
+                /\b(cat|type)\s/.test(String(i.command || "")) &&
+                !/\|\s*(head|tail|grep|sed)/.test(String(i.command || "")));
     appendLedger({ type: "fetch", key, ids, tool: name, whole });
 }
 
@@ -160,11 +165,27 @@ export function summarize(rows, jobs = [], settings = {}) {
     const d = by.digest, rate = (x) => (x.fixed + x.notFixed ? Math.round((100 * x.fixed) / (x.fixed + x.notFixed)) : null);
     const conf = digestConf(settings);
     return {
-        conf, since: rows.length ? rows[0].at : null,
+        conf,
+        since: rows.length ? rows[0].at : null,
         groups: by,
-        saved: { chars: d.legacy - d.sent, tok: d.tokLegacy - d.tokSent, pct: d.legacy ? Math.round((100 * (d.legacy - d.sent)) / d.legacy) : 0, vsRawPct: d.raw ? Math.round((100 * (d.raw - d.sent)) / d.raw) : 0 },
-        fetch: { calls: fetches.length, whole: fetches.filter((f) => f.whole).length, digestedFetched: hit.size, digestedParts: sentIds.size, ratePct: sentIds.size ? Math.round((100 * hit.size) / sentIds.size) : 0 },
-        outcome: { digestFixedPct: rate(d), controlFixedPct: rate(by.control), note: "доля «следующий такой же прогон — зелёный» после красного в сообщении; сравнима, когда в контрольной группе наберётся хотя бы 20 исходов" },
+        saved: {
+            chars: d.legacy - d.sent,
+            tok: d.tokLegacy - d.tokSent,
+            pct: d.legacy ? Math.round((100 * (d.legacy - d.sent)) / d.legacy) : 0,
+            vsRawPct: d.raw ? Math.round((100 * (d.raw - d.sent)) / d.raw) : 0,
+        },
+        fetch: {
+            calls: fetches.length,
+            whole: fetches.filter((f) => f.whole).length,
+            digestedFetched: hit.size,
+            digestedParts: sentIds.size,
+            ratePct: sentIds.size ? Math.round((100 * hit.size) / sentIds.size) : 0,
+        },
+        outcome: {
+            digestFixedPct: rate(d),
+            controlFixedPct: rate(by.control),
+            note: "доля «следующий такой же прогон — зелёный» после красного в сообщении; сравнима, когда в контрольной группе наберётся хотя бы 20 исходов",
+        },
     };
 }
 
@@ -175,7 +196,15 @@ export function digestStats(settings = {}) {
 export function digestBrief(settings = {}) {
     if (briefCache.v && Date.now() - briefCache.at < 30000)
         return briefCache.v;
-    const s = digestStats(settings), v = { on: s.conf.on, holdout: s.conf.holdout, messages: s.groups.digest.messages + s.groups.control.messages, savedTok: s.saved.tok, savedPct: s.saved.pct, fetchRatePct: s.fetch.ratePct };
+    const s = digestStats(settings),
+        v = {
+            on: s.conf.on,
+            holdout: s.conf.holdout,
+            messages: s.groups.digest.messages + s.groups.control.messages,
+            savedTok: s.saved.tok,
+            savedPct: s.saved.pct,
+            fetchRatePct: s.fetch.ratePct,
+        };
     briefCache = { at: Date.now(), v };
     return v;
 }

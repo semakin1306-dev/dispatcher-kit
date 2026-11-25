@@ -12,7 +12,22 @@ const PLAN = ["---", "id: WV-0969", "title: MP подменные артикул
 describe("mdBlocks — блоки плана со строками файла", () => {
     const b = R.mdBlocks(PLAN);
     test("frontmatter, заголовки, абзац в две строки, пункт с продолжением, строки таблицы без разделителя, код, цитата", () => {
-        assert.deepEqual(b.map((x) => [x.kind, x.line, x.end]), [["fm", 1, 4], ["h", 6, 6], ["p", 8, 9], ["h", 11, 11], ["li", 13, 14], ["li", 15, 15], ["tr", 17, 17], ["tr", 19, 19], ["tr", 20, 20], ["code", 22, 24], ["quote", 25, 25]]);
+        assert.deepEqual(
+            b.map((x) => [x.kind, x.line, x.end]),
+            [
+                ["fm", 1, 4],
+                ["h", 6, 6],
+                ["p", 8, 9],
+                ["h", 11, 11],
+                ["li", 13, 14],
+                ["li", 15, 15],
+                ["tr", 17, 17],
+                ["tr", 19, 19],
+                ["tr", 20, 20],
+                ["code", 22, 24],
+                ["quote", 25, 25],
+            ],
+        );
         assert.equal(b[1].level, 1);
         assert.equal(b[6].head, true);
         assert.deepEqual(b[7].cells, ["Артикул MP", "1464609668", "`nmId` оригинала"]);
@@ -41,7 +56,14 @@ describe("замечания → одно сообщение агенту", () =
         assert.equal(R.normNote({ block: 99, kind: "note", text: "x" }, b), null);
     });
     test("docMessage: цитата строки, номер строки файла, вид, текст; по порядку строк; вопросы — отдельной просьбой", () => {
-        const ns = [R.normNote({ block: 5, kind: "replace", replace: "Период — в имени файла и в листе", text: "лист тоже" }, b), R.normNote({ block: 2, sel: "и шлёт её блогеру", kind: "question", text: "кто шлёт?" }, b), R.normNote({ block: 7, kind: "delete" }, b)];
+        const ns = [
+            R.normNote(
+                { block: 5, kind: "replace", replace: "Период — в имени файла и в листе", text: "лист тоже" },
+                b,
+            ),
+            R.normNote({ block: 2, sel: "и шлёт её блогеру", kind: "question", text: "кто шлёт?" }, b),
+            R.normNote({ block: 7, kind: "delete" }, b),
+        ];
         const m = R.docMessage({ kind: "plan", wave: "WV-0969", file: "/srv/wt/epic-demo/.claude/plans/waves/WV-0969-mp.md" }, ns);
         assert.match(m, /плану волны WV-0969 \(файл \/srv\/wt\/epic-demo/);
         assert.match(m, /3 шт\./);

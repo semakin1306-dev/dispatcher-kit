@@ -123,7 +123,13 @@ export function procRowsOf(rows, ctx0) {
     else if (job) {
       const kind = WORKER_RE.test(cmd) ? "worker" : MAIN_RE.test(cmd) ? "main" : RUNNER_RE.test(cmd) ? "runner" : "other"
       let wn = ""
-      if (kind === "worker") { const sib = rows.filter((x) => x.ParentProcessId === r.ParentProcessId && WORKER_RE.test(String(x.CommandLine || ""))).map((x) => x.ProcessId).sort((a, b) => a - b); wn = " №" + (sib.indexOf(r.ProcessId) + 1) + " из " + sib.length }
+      if (kind === "worker") {
+        const sib = rows
+          .filter((x) => x.ParentProcessId === r.ParentProcessId && WORKER_RE.test(String(x.CommandLine || "")))
+          .map((x) => x.ProcessId)
+          .sort((a, b) => a - b)
+        wn = " №" + (sib.indexOf(r.ProcessId) + 1) + " из " + sib.length
+      }
       role = kind === "worker" ? "воркер" + wn : kind === "main" ? "тесты · главный" : kind === "runner" ? "раннер" : "прогон"
       what = job.label || job.id
     } else if (agent) { role = "агент диспетчерской"; what = agent.label || agent.key }
@@ -169,7 +175,17 @@ export function slotUsageOf(rows, perf, wins0, ctx0) {
   for (const j of ctx.jobs) if (j.pid && j.slot) roots.set(j.pid, { slot: j.slot, kind: "job" })
   for (const a of ctx.agents) if (a.pid) roots.set(a.pid, { slot: a.key, kind: "agent" })
   const blank = (slot) => ({ slot, cpu: 0, mb: 0, n: 0, job: 0, agent: 0, other: 0, pids: [] })
-  const acc = new Map(), add = (slot, kind, r) => { const e = acc.get(slot) || blank(slot); const mb = mbOf(r); e.cpu += cpu.get(r.ProcessId) || 0; e.mb += mb; e.n++; e[kind] += mb; if (kind === "other") e.pids.push(r.ProcessId); acc.set(slot, e) }
+  const acc = new Map(),
+    add = (slot, kind, r) => {
+      const e = acc.get(slot) || blank(slot)
+      const mb = mbOf(r)
+      e.cpu += cpu.get(r.ProcessId) || 0
+      e.mb += mb
+      e.n++
+      e[kind] += mb
+      if (kind === "other") e.pids.push(r.ProcessId)
+      acc.set(slot, e)
+    }
   const vs = { mb: 0, cpu: 0, n: 0 }
   for (const r of rows) {
     if (r.ProcessId === ctx.selfPid) continue
@@ -189,8 +205,23 @@ export function slotUsageOf(rows, perf, wins0, ctx0) {
   const share = wins.length ? vs.mb / wins.length : 0, cshare = wins.length ? vs.cpu / wins.length : 0
   for (const w of wins) if (w.slot) { const e = acc.get(w.slot) || blank(w.slot); e.win = Math.round(share); e.winCpu = cshare; e.hwnd = w.hwnd; acc.set(w.slot, e) }
   return {
-    at: ctx.now, vscode: { mb: Math.round(vs.mb), cpu: r1(vs.cpu), windows: wins.length, perWindow: Math.round(share) }, windows: wins,
-    rows: [...acc.values()].map((e) => ({ ...ctx.tagOf(e.slot), key: e.slot, cpu: r1(e.cpu + (e.winCpu || 0)), mb: Math.round(e.mb + (e.win || 0)), job: Math.round(e.job), agent: Math.round(e.agent), other: Math.round(e.other), win: e.win || 0, hwnd: e.hwnd || null, pids: e.pids })).sort((a, b) => b.mb - a.mb),
+    at: ctx.now,
+    vscode: { mb: Math.round(vs.mb), cpu: r1(vs.cpu), windows: wins.length, perWindow: Math.round(share) },
+    windows: wins,
+    rows: [...acc.values()]
+      .map((e) => ({
+        ...ctx.tagOf(e.slot),
+        key: e.slot,
+        cpu: r1(e.cpu + (e.winCpu || 0)),
+        mb: Math.round(e.mb + (e.win || 0)),
+        job: Math.round(e.job),
+        agent: Math.round(e.agent),
+        other: Math.round(e.other),
+        win: e.win || 0,
+        hwnd: e.hwnd || null,
+        pids: e.pids,
+      }))
+      .sort((a, b) => b.mb - a.mb),
   }
 }
 

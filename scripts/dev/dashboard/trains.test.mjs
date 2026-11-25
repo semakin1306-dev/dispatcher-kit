@@ -17,7 +17,18 @@ settings.selfCommit = "station";
 const { TRAINS_FILE, applyTrain, issueWagon, loadTrains, markIssued, markLanded, nextWagonText, normTrainRec, trainOf } = await import("./trains.mjs");
 const { trainNext } = await import("./train-rules.mjs");
 const repo = path.join(dir, "repo");
-const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
+const g = (...a) =>
+    execFileSync("git", a, {
+        cwd: repo,
+        encoding: "utf8",
+        env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "t",
+            GIT_AUTHOR_EMAIL: "t@t",
+            GIT_COMMITTER_NAME: "t",
+            GIT_COMMITTER_EMAIL: "t@t",
+        },
+    }).trim();
 
 const commit = (file, msg) => {
     fs.writeFileSync(path.join(repo, file), msg + Math.random());
@@ -36,9 +47,29 @@ g("switch", "-q", "dev/tr-orgs-ep");
 g("merge", "-q", "--ff-only", "staging");
 commit("a.txt", "feat(a): WV-0902 — первый\n\nWave: WV-0902\nCo-Authored-By: x <x@x>");
 commit("a2.txt", "fix(a): WV-0902 — правка по ревью\n\nWave: WV-0902");
-const WAGONS = [{ wave: "WV-0901", title: "старый" }, { wave: "WV-0902", title: "первый", presets: [{ task: "api-test", input: "wv-0902" }] }, { wave: "WV-0903", title: "второй", after: ["WV-0902"] }, { wave: "WV-0904", title: "третий" }, { wave: "WV-0905", title: "ждёт", after: ["WV-0999@Т2"] }];
+const WAGONS = [
+    { wave: "WV-0901", title: "старый" },
+    { wave: "WV-0902", title: "первый", presets: [{ task: "api-test", input: "wv-0902" }] },
+    { wave: "WV-0903", title: "второй", after: ["WV-0902"] },
+    { wave: "WV-0904", title: "третий" },
+    { wave: "WV-0905", title: "ждёт", after: ["WV-0999@Т2"] },
+];
 const KEY = "tr-orgs-ep";
-const tree = (over = {}) => ({ key: KEY, tag: "Т1", train: true, exists: true, path: repo, wagons: WAGONS, ahead: Number(g("rev-list", "--count", "staging..HEAD")), behind: Number(g("rev-list", "--count", "HEAD..staging")), dirtyTracked: 0, dirtyUntracked: 0, fp: "f0", last: { sha: g("rev-parse", "HEAD"), ct: Date.now() }, ...over });
+const tree = (over = {}) => ({
+    key: KEY,
+    tag: "Т1",
+    train: true,
+    exists: true,
+    path: repo,
+    wagons: WAGONS,
+    ahead: Number(g("rev-list", "--count", "staging..HEAD")),
+    behind: Number(g("rev-list", "--count", "HEAD..staging")),
+    dirtyTracked: 0,
+    dirtyUntracked: 0,
+    fp: "f0",
+    last: { sha: g("rev-parse", "HEAD"), ct: Date.now() },
+    ...over,
+});
 
 test("очередь по git: влитый, голова с коммитами станций (правка — тот же вагон), за ней — очередь; голова с коммитами — «выдан» сама", async () => {
     loadTrains();
@@ -106,8 +137,20 @@ test("сообщение о следующем вагоне — в ту же с�
 });
 
 test("старые записи trains.json (составы, «держать», сессии вагонов, папки -c) читаются: при загрузке остаётся только «выдан» и отметки", () => {
-    const old = { issued: "WV-1043", issuedAt: 5, dispatched: true, n: 6, waves: ["WV-1042", "WV-1043"], sha: "a".repeat(40), log: [{ n: 6 }], sessions: { "WV-1043": "s" }, hold: ["WV-1044"], recalledAt: 1, arrivedAt: 2,
-        check: { key: "tr-x-c", path: "/tmp/wt/tr-x-c", branch: "dev/tr-x-c6", sha: "b".repeat(40), n: 6, picked: [] } };
+    const old = {
+        issued: "WV-1043",
+        issuedAt: 5,
+        dispatched: true,
+        n: 6,
+        waves: ["WV-1042", "WV-1043"],
+        sha: "a".repeat(40),
+        log: [{ n: 6 }],
+        sessions: { "WV-1043": "s" },
+        hold: ["WV-1044"],
+        recalledAt: 1,
+        arrivedAt: 2,
+        check: { key: "tr-x-c", path: "/tmp/wt/tr-x-c", branch: "dev/tr-x-c6", sha: "b".repeat(40), n: 6, picked: [] },
+    };
     assert.deepEqual(normTrainRec(old), { issued: "WV-1043", issuedAt: 5 });
     assert.deepEqual(normTrainRec({ dispatched: false, check: null }), {});
     assert.deepEqual(normTrainRec(null), {});

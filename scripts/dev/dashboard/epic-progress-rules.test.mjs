@@ -14,7 +14,18 @@ const EPIC = { id: "ep", slots: [
     ] };
 
 const commit = (id, slot, t) => ({ id, epic: "ep", tree: slot, task: "commit", status: "ok", queuedAt: t - M, startedAt: t - M, endedAt: t });
-const merge = (id, branch, t) => ({ id, epic: null, tree: "orchestrator-staging", task: "merge", status: "ok", label: "Влить " + branch + " в staging", queuedAt: t - M, startedAt: t - M, endedAt: t, mergeSha: { [branch]: "abc" } });
+const merge = (id, branch, t) => ({
+    id,
+    epic: null,
+    tree: "orchestrator-staging",
+    task: "merge",
+    status: "ok",
+    label: "Влить " + branch + " в staging",
+    queuedAt: t - M,
+    startedAt: t - M,
+    endedAt: t,
+    mergeSha: { [branch]: "abc" },
+});
 
 function night() {
     const runs = [
@@ -26,14 +37,53 @@ function night() {
         merge("j6", "dev/wv-1002-b", at(18, 45)),
     ];
     const events = [
-        { at: at(0), type: "slot.provision", key: "wv0998-a" }, { at: at(0, 5), type: "slot.provision", key: "wv1002-b" }, { at: at(0, 10), type: "slot.provision", key: "wv1003-c" },
-        { at: at(8, 49), type: "orch.command", tree: ORCH, cmd: "ВЛИТЬ", target: "П7", ok: false, detail: "не исполнено: в последнем сообщении владельца нет слова «влей»." },
+        { at: at(0), type: "slot.provision", key: "wv0998-a" },
+        { at: at(0, 5), type: "slot.provision", key: "wv1002-b" },
+        { at: at(0, 10), type: "slot.provision", key: "wv1003-c" },
+        {
+            at: at(8, 49),
+            type: "orch.command",
+            tree: ORCH,
+            cmd: "ВЛИТЬ",
+            target: "П7",
+            ok: false,
+            detail: "не исполнено: в последнем сообщении владельца нет слова «влей».",
+        },
         { at: at(8, 49), type: "agent.turn", key: ORCH, act: true, in: 10, cr: 100000, cw: 0, out: 500 },
-        ...[10, 11, 12, 14, 15, 16, 17].map((h) => [{ at: at(h, 28), type: "idle.nudge", key: ORCH }, { at: at(h, 29), type: "agent.turn", key: ORCH, act: false, in: 5, cr: 200000, cw: 1000, out: 300 }]).flat(),
-        { at: at(13, 33), type: "orch.command", tree: ORCH, cmd: "ВЛИТЬ", target: "П8", ok: true, detail: "вливаю dev/wv-1003-c в staging (j4)." },
+        ...[10, 11, 12, 14, 15, 16, 17]
+            .map((h) => [
+                { at: at(h, 28), type: "idle.nudge", key: ORCH },
+                { at: at(h, 29), type: "agent.turn", key: ORCH, act: false, in: 5, cr: 200000, cw: 1000, out: 300 },
+            ])
+            .flat(),
+        {
+            at: at(13, 33),
+            type: "orch.command",
+            tree: ORCH,
+            cmd: "ВЛИТЬ",
+            target: "П8",
+            ok: true,
+            detail: "вливаю dev/wv-1003-c в staging (j4).",
+        },
         { at: at(18, 38), type: "owner.message", key: ORCH, chars: 20 },
-        { at: at(18, 39), type: "orch.command", tree: ORCH, cmd: "ВЛИТЬ", target: "П3", ok: true, detail: "вливаю (j5)" },
-        { at: at(18, 40), type: "orch.command", tree: ORCH, cmd: "ВЛИТЬ", target: "П7", ok: true, detail: "вливаю (j6)" },
+        {
+            at: at(18, 39),
+            type: "orch.command",
+            tree: ORCH,
+            cmd: "ВЛИТЬ",
+            target: "П3",
+            ok: true,
+            detail: "вливаю (j5)",
+        },
+        {
+            at: at(18, 40),
+            type: "orch.command",
+            tree: ORCH,
+            cmd: "ВЛИТЬ",
+            target: "П7",
+            ok: true,
+            detail: "вливаю (j6)",
+        },
         { at: at(5), type: "agent.turn", key: "wv1003-c", in: 100, cr: 50000, cw: 2000, out: 4000, cost: 0.5 },
         { at: at(5, 50), type: "agent.turn", key: "wv1003-c", in: 100, cr: 60000, cw: 0, out: 1000, cost: 0.25 },
     ];
@@ -264,7 +314,14 @@ describe("простой эпика с поездами и стендом", () =
     const TE = { id: "ep", slots: [{ tag: "Т4", slot: "tr4", branch: "dev/tr4", wagons: [{ wave: "WV-1068" }] }] };
     const run = (id, tree, task, h0, h1, extra = {}) => ({ id, tree, task, status: "ok", input: "", queuedAt: at(h0), startedAt: at(h0), endedAt: at(h1), ...extra });
     const base = () => ({
-        runs: [run("c1", "tr4", "commit", 1, 1.05), run("m1", "orchestrator-staging", "merge", 2, 2.05, { label: "Влить dev/tr4-c3 в staging", mergeSha: { "dev/tr4-c3": "ab" } }), run("c2", "tr4", "commit", 3, 3.05)],
+        runs: [
+            run("c1", "tr4", "commit", 1, 1.05),
+            run("m1", "orchestrator-staging", "merge", 2, 2.05, {
+                label: "Влить dev/tr4-c3 в staging",
+                mergeSha: { "dev/tr4-c3": "ab" },
+            }),
+            run("c2", "tr4", "commit", 3, 3.05),
+        ],
         events: [{ at: at(0), type: "slot.provision", key: "tr4" }],
     });
     test("влив состава dev/<поезд>-cN — влив поезда; выкат и приёмка стенда после первого влива эпика — работа, а не простой", () => {
@@ -273,7 +330,11 @@ describe("простой эпика с поездами и стендом", () =
         assert.deepEqual(tl.merges, [at(2, 3)]);
         const idle0 = epicProgress({ epic: TE, events, runs, now: at(8), windowMs: 8 * H }).idle.spans.filter((s) => s.from >= at(3, 3));
         assert.ok(idle0.length && idle0[0].min > 200, "без стенда — простой после коммита");
-        const stand = [run("d", "orchestrator-staging", "deploy-staging", 3.1, 3.4), run("a", "orchestrator-staging", "accept-run", 3.4, 7.9), run("early", "orchestrator-staging", "accept-run", 0, 1.9)];
+        const stand = [
+            run("d", "orchestrator-staging", "deploy-staging", 3.1, 3.4),
+            run("a", "orchestrator-staging", "accept-run", 3.4, 7.9),
+            run("early", "orchestrator-staging", "accept-run", 0, 1.9),
+        ];
         const p = epicProgress({ epic: TE, events, runs: [...runs, ...stand], now: at(8), windowMs: 8 * H });
         assert.deepEqual(p.idle.spans.filter((s) => s.from >= at(3, 3)), [], "стенд работал за эпик");
         assert.ok(p.idle.spans.some((s) => s.from < at(1) && s.to <= at(1)), "приёмка до первого влива эпика — не его работа");

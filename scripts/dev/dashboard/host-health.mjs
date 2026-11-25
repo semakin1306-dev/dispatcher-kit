@@ -2,16 +2,42 @@
 // недоступность, ключ), отличие отказа инфраструктуры от красного кода и переходы «на связи ⇄ не на связи» с причиной.
 // Чистые правила.
 const PATTERNS = [
-    { kind: "throttle", infra: true, re: /(timed out|closed|reset)[^\n]{0,40}(during )?banner exchange|banner exchange|kex_exchange_identification|MaxStartups|Connection (?:reset|closed) by [\d.:a-f]+ port 22/i,
-        label: "sshd не принял подключение (ограничение MaxStartups или машина не успевает ответить)" },
-    { kind: "timeout", infra: true, re: /ssh: connect to host [^\n]*(?:timed out|Operation timed out)|Connection to [\d.:a-f]+ port 22 timed out|ConnectTimeout/i,
-        label: "машина не ответила на подключение (таймаут)" },
-    { kind: "dropped", infra: true, re: /Timeout, server [\w.:-]+ not responding|Read from remote host [\w.:-]+: Connection reset by peer|client_loop: send disconnect: Connection reset/i, label: "связь с машиной оборвалась посреди прогона (ssh не дождался ответа)" },
-    { kind: "refused", infra: true, re: /ssh: connect to host [^\n]*Connection refused/i, label: "ssh на машине не принимает подключения (отказ)" },
-    { kind: "unreachable", infra: true, re: /ssh: connect to host [^\n]*(?:No route to host|Network is unreachable)|ssh: Could not resolve hostname|Name or service not known/i,
-        label: "машина недоступна по сети" },
-    { kind: "auth", infra: false, re: /Permission denied \(publickey|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i,
-        label: "ssh отказал по ключу (это настройка, а не нагрузка)" },
+    {
+        kind: "throttle",
+        infra: true,
+        re: /(timed out|closed|reset)[^\n]{0,40}(during )?banner exchange|banner exchange|kex_exchange_identification|MaxStartups|Connection (?:reset|closed) by [\d.:a-f]+ port 22/i,
+        label: "sshd не принял подключение (ограничение MaxStartups или машина не успевает ответить)",
+    },
+    {
+        kind: "timeout",
+        infra: true,
+        re: /ssh: connect to host [^\n]*(?:timed out|Operation timed out)|Connection to [\d.:a-f]+ port 22 timed out|ConnectTimeout/i,
+        label: "машина не ответила на подключение (таймаут)",
+    },
+    {
+        kind: "dropped",
+        infra: true,
+        re: /Timeout, server [\w.:-]+ not responding|Read from remote host [\w.:-]+: Connection reset by peer|client_loop: send disconnect: Connection reset/i,
+        label: "связь с машиной оборвалась посреди прогона (ssh не дождался ответа)",
+    },
+    {
+        kind: "refused",
+        infra: true,
+        re: /ssh: connect to host [^\n]*Connection refused/i,
+        label: "ssh на машине не принимает подключения (отказ)",
+    },
+    {
+        kind: "unreachable",
+        infra: true,
+        re: /ssh: connect to host [^\n]*(?:No route to host|Network is unreachable)|ssh: Could not resolve hostname|Name or service not known/i,
+        label: "машина недоступна по сети",
+    },
+    {
+        kind: "auth",
+        infra: false,
+        re: /Permission denied \(publickey|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i,
+        label: "ssh отказал по ключу (это настройка, а не нагрузка)",
+    },
 ];
 
 export function classifySshFailure(text) {
@@ -52,7 +78,18 @@ export function createHostTracker({ emit = () => { }, now = Date.now, failsToOff
     };
     return {
         fail(host, text, ctx = {}) {
-            const x = st(host), t = now(), c = classifySshFailure(text) || { kind: "other", label: "поток оборван без признаков в выводе ssh", infra: true, line: String(text || "").trim().split(/\r?\n/).pop().slice(0, 200) };
+            const x = st(host),
+                t = now(),
+                c = classifySshFailure(text) || {
+                    kind: "other",
+                    label: "поток оборван без признаков в выводе ssh",
+                    infra: true,
+                    line: String(text || "")
+                        .trim()
+                        .split(/\r?\n/)
+                        .pop()
+                        .slice(0, 200),
+                };
             if (!x.fails)
                 x.firstFailAt = t;
             x.fails++;

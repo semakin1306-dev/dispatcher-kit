@@ -37,7 +37,17 @@ export function startLoopWatch({ tickMs = 100, log = logEvent } = {}) {
         }
         if (r.ev) {
             log("slow.loop", r.ev);
-            console.warn("[slow.loop] цикл событий стоял " + r.ev.ms + " мс" + (r.ev.suppressed ? " (до этого подавлено " + r.ev.suppressed + ", худшее " + r.ev.worstSuppressedMs + " мс)" : "") + (r.ev.last ? "; в окне: " + (r.ev.during || []).join(" → ") + " (последнее: " + r.ev.last + ")" : ""));
+            console.warn(
+                "[slow.loop] цикл событий стоял " +
+                    r.ev.ms +
+                    " мс" +
+                    (r.ev.suppressed
+                        ? " (до этого подавлено " + r.ev.suppressed + ", худшее " + r.ev.worstSuppressedMs + " мс)"
+                        : "") +
+                    (r.ev.last
+                        ? "; в окне: " + (r.ev.during || []).join(" → ") + " (последнее: " + r.ev.last + ")"
+                        : ""),
+            );
         }
     }, tickMs);
     t.unref();

@@ -27,7 +27,27 @@ import { late, lateObject } from "./late.mjs";
 import { isProduct } from "./fingerprint.mjs";
 import { TASKS, globRe, stepOfTask } from "./tasks.mjs";
 import { normWave, wavesOfMerge } from "./train-rules.mjs";
-import { AUTO_CLOSE_TEXT, STAND_ASK as STAND_ASK_TEXT, accAdvance, accAutoCloseDue, accBaseKey, accFresh, accRestray, acceptAskText, acceptSpecAskText, applyResults, checklistForWave, itemsGrep, parseAcceptOutput, parseChecklist, remCmdRe, reminderLines, specsForWave, summaryText, verdictText } from "./accept-rules.mjs";
+import {
+    AUTO_CLOSE_TEXT,
+    STAND_ASK as STAND_ASK_TEXT,
+    accAdvance,
+    accAutoCloseDue,
+    accBaseKey,
+    accFresh,
+    accRestray,
+    acceptAskText,
+    acceptSpecAskText,
+    applyResults,
+    checklistForWave,
+    itemsGrep,
+    parseAcceptOutput,
+    parseChecklist,
+    remCmdRe,
+    reminderLines,
+    specsForWave,
+    summaryText,
+    verdictText,
+} from "./accept-rules.mjs";
 
 // runner.mjs и agents.mjs сами зовут этот модуль — с ними поздняя привязка (late.mjs, wiring.mjs)
 const { enqueue, spawnStep } = late("runner.mjs", ["enqueue", "spawnStep"]);
@@ -139,14 +159,29 @@ function trainAccWaves(t) {
     const all = t.trainMerges || [];
     return (t.wagons || []).filter((w) => w.state === "staging").map((w) => {
         const own = all.filter((s) => (mergeWavesCache.get(s) || []).includes(w.wave)), shas = own.length ? own : all;
-        return { ...t, key: t.key + "#" + w.wave, wagonOf: t.key, train: false, wave: w.wave, tag: w.wave.replace(/^WV-/, ""), title: w.wave + (w.title ? " " + w.title : "") + " (" + t.tag + ")", branch: "train/" + w.wave.toLowerCase(), merge: { ...(t.merge || {}), sha: shas[0], all: shas } };
+        return {
+            ...t,
+            key: t.key + "#" + w.wave,
+            wagonOf: t.key,
+            train: false,
+            wave: w.wave,
+            tag: w.wave.replace(/^WV-/, ""),
+            title: w.wave + (w.title ? " " + w.title : "") + " (" + t.tag + ")",
+            branch: "train/" + w.wave.toLowerCase(),
+            merge: { ...(t.merge || {}), sha: shas[0], all: shas },
+        };
     });
 }
 
 /** Волны, которые ждут приёмки: в staging, но ещё не в прод-ветке. */
 export function accWaves() {
     const out = [];
-    for (const t of (snapNow() ? snapNow().trees : []).filter((x) => x.kind === "slot" && (x.train ? (x.trainMerges || []).length : x.merge) && !(x.stages || []).find((s) => s.id === "prod" && s.done)))
+    for (const t of (snapNow() ? snapNow().trees : []).filter(
+        (x) =>
+            x.kind === "slot" &&
+            (x.train ? (x.trainMerges || []).length : x.merge) &&
+            !(x.stages || []).find((s) => s.id === "prod" && s.done),
+    ))
         out.push(...(t.train ? trainAccWaves(t) : [t]));
     return out;
 }
@@ -266,30 +301,54 @@ export async function acceptAsk(keys) {
             continue;
         }
         const k = accKey(t), text = acceptAskText(t, { specs: specsOf(t), standUrl: STAND_URL, runnable: !!PROJECT.accept.run });
-        out.push(await enqueue({ treeKey: ak, cwd: t.path, label: "Чек-лист приёмки" + (t.wagonOf ? " " + t.wave : ""), taskId: "accept-ask", lane: "commit", profile: "eco", extra: { pipeline: true, accFor: t.key },
-            steps: [{ show: "чек-лист приёмки: спрашиваю агента " + t.tag, cwd: t.path, js: async (write) => {
-                        let a = agents.get(ak);
-                        if (!a || a.dead)
-                            a = await ensureAgent(ak);
-                        for (let i = 0; a.busy && i < 900; i++)
-                            await new Promise((r) => setTimeout(r, 2000));
-                        const e = S.acc[k] || (S.acc[k] = accFresh(t.key, mergeShas(t)));
-                        e.asking = true;
-                        saveAcc();
-                        const gotBefore = e.gotAt || 0;
-                        a.capture = { kind: "accept", tree: t.key, accKey: k, startRev: a.rev, wave: t.wagonOf ? t.wave : "" };
-                        deliver(a, text);
-                        await new Promise((r) => setTimeout(r, 3000));
-                        const t0 = Date.now();
-                        while (!a.dead && a.busy && Date.now() - t0 < 20 * 60000)
-                            await new Promise((r) => setTimeout(r, 2000));
-                        e.asking = false;
-                        saveAcc();
-                        const cur = S.acc[k] || {};
-                        if ((cur.gotAt || 0) === gotBefore)
-                            throw new Error(/^Ответ не принят/.test(cur.raw || "") ? String(cur.raw).split("\n")[0] : "новый чек-лист не пришёл — ответ агента в панели «Приёмка»");
-                        write("✓ пунктов в чек-листе: " + (cur.items || []).length + "\n");
-                    } }] }));
+        out.push(
+            await enqueue({
+                treeKey: ak,
+                cwd: t.path,
+                label: "Чек-лист приёмки" + (t.wagonOf ? " " + t.wave : ""),
+                taskId: "accept-ask",
+                lane: "commit",
+                profile: "eco",
+                extra: { pipeline: true, accFor: t.key },
+                steps: [
+                    {
+                        show: "чек-лист приёмки: спрашиваю агента " + t.tag,
+                        cwd: t.path,
+                        js: async (write) => {
+                            let a = agents.get(ak);
+                            if (!a || a.dead) a = await ensureAgent(ak);
+                            for (let i = 0; a.busy && i < 900; i++) await new Promise((r) => setTimeout(r, 2000));
+                            const e = S.acc[k] || (S.acc[k] = accFresh(t.key, mergeShas(t)));
+                            e.asking = true;
+                            saveAcc();
+                            const gotBefore = e.gotAt || 0;
+                            a.capture = {
+                                kind: "accept",
+                                tree: t.key,
+                                accKey: k,
+                                startRev: a.rev,
+                                wave: t.wagonOf ? t.wave : "",
+                            };
+                            deliver(a, text);
+                            await new Promise((r) => setTimeout(r, 3000));
+                            const t0 = Date.now();
+                            while (!a.dead && a.busy && Date.now() - t0 < 20 * 60000)
+                                await new Promise((r) => setTimeout(r, 2000));
+                            e.asking = false;
+                            saveAcc();
+                            const cur = S.acc[k] || {};
+                            if ((cur.gotAt || 0) === gotBefore)
+                                throw new Error(
+                                    /^Ответ не принят/.test(cur.raw || "")
+                                        ? String(cur.raw).split("\n")[0]
+                                        : "новый чек-лист не пришёл — ответ агента в панели «Приёмка»",
+                                );
+                            write("✓ пунктов в чек-листе: " + (cur.items || []).length + "\n");
+                        },
+                    },
+                ],
+            }),
+        );
     }
     return out;
 }
@@ -385,22 +444,65 @@ export async function acceptRunJob(keys, headed, item, only) {
     if (PROJECT.accept.specGlob)
         ws = ws.filter((t) => specsOf(t).length);
     if (!ws.length)
-        throw new Error(PROJECT.accept.specGlob ? (keys ? "у этой волны нет спеки приёмки (" + PROJECT.accept.specGlob + ")" : "спек приёмки нет ни у одной ждущей волны") : "волн, которые ждут приёмки, нет");
+        throw new Error(
+            PROJECT.accept.specGlob
+                ? keys
+                    ? "у этой волны нет спеки приёмки (" + PROJECT.accept.specGlob + ")"
+                    : "спек приёмки нет ни у одной ждущей волны"
+                : "волн, которые ждут приёмки, нет",
+        );
     const ids = item ? [item] : only ? Object.values(only).flat() : [];
     const env = acceptEnv(ws, { items: ids.length ? itemsGrep(ids) : "" });
     const accKeys = Object.fromEntries(ws.map((t) => [waveNum(t), accKey(t)]));
     for (const t of ws)
         accEnsure(t);
     saveAcc();
-    return enqueue({ treeKey: STAGING_TREE, cwd: MAIN, label: "Приёмка: " + ws.map((t) => t.tag).join(", ") + (item ? " · только " + item : "") + (only ? " · только красные пункты (" + ids.length + ")" : ""), taskId: "accept-run", lane: "ops", profile: "eco",
-        extra: { pipeline: true, accWaves: ws.map((t) => t.key), accKeys, ...(item ? { accItem: item } : {}), ...(only ? { accOnly: only } : {}) },
-        steps: [{ show: PROJECT.accept.run + (STAND_URL ? "  (стенд " + STAND_URL + ")" : ""), cwd: MAIN, js: async (write, job) => {
-                    const r = await runAcceptCommand({ env, waves: ws.map((t) => t.wave || t.branch || t.key), write, run: (step, w) => spawnStep(job, step, w) });
+    return enqueue({
+        treeKey: STAGING_TREE,
+        cwd: MAIN,
+        label:
+            "Приёмка: " +
+            ws.map((t) => t.tag).join(", ") +
+            (item ? " · только " + item : "") +
+            (only ? " · только красные пункты (" + ids.length + ")" : ""),
+        taskId: "accept-run",
+        lane: "ops",
+        profile: "eco",
+        extra: {
+            pipeline: true,
+            accWaves: ws.map((t) => t.key),
+            accKeys,
+            ...(item ? { accItem: item } : {}),
+            ...(only ? { accOnly: only } : {}),
+        },
+        steps: [
+            {
+                show: PROJECT.accept.run + (STAND_URL ? "  (стенд " + STAND_URL + ")" : ""),
+                cwd: MAIN,
+                js: async (write, job) => {
+                    const r = await runAcceptCommand({
+                        env,
+                        waves: ws.map((t) => t.wave || t.branch || t.key),
+                        write,
+                        run: (step, w) => spawnStep(job, step, w),
+                    });
                     const sum = applyAcceptRun(job, r.results, accKeys, only || null);
-                    write("\nпункты: ✓ " + sum.ok + " · ✗ " + sum.bad + " · пропущено " + sum.skip + (sum.stray ? " · без пункта в чек-листе " + sum.stray : "") + (sum.lost ? " · волна не определена " + sum.lost : "") + "\n");
-                    if (r.code !== 0)
-                        throw new Error("команда приёмки завершилась с кодом " + r.code);
-                } }] });
+                    write(
+                        "\nпункты: ✓ " +
+                            sum.ok +
+                            " · ✗ " +
+                            sum.bad +
+                            " · пропущено " +
+                            sum.skip +
+                            (sum.stray ? " · без пункта в чек-листе " + sum.stray : "") +
+                            (sum.lost ? " · волна не определена " + sum.lost : "") +
+                            "\n",
+                    );
+                    if (r.code !== 0) throw new Error("команда приёмки завершилась с кодом " + r.code);
+                },
+            },
+        ],
+    });
 }
 
 // ───────────────────────────── состояние для страницы ─────────────────────────────
@@ -416,7 +518,14 @@ export function acceptBrief() {
         return { key: t.key, tag: t.tag, epic: t.epic || null, verdict: e.verdict || null, itemsN: (e.items || []).length, autoClosed: !!e.autoClosed };
     });
     const run = lastRun();
-    return { brief: true, ...common(), waves: ws, waiting: ws.filter((w) => !w.verdict && w.itemsN).length, tiles: [], run: run && !FINAL.includes(run.status) ? { id: run.id, status: run.status, waves: run.accWaves || [] } : null };
+    return {
+        brief: true,
+        ...common(),
+        waves: ws,
+        waiting: ws.filter((w) => !w.verdict && w.itemsN).length,
+        tiles: [],
+        run: run && !FINAL.includes(run.status) ? { id: run.id, status: run.status, waves: run.accWaves || [] } : null,
+    };
 }
 
 /** Полная приёмка для панели «Приёмка». */
@@ -425,10 +534,35 @@ export function acceptPublic() {
     const dep = lastStand();
     const waves = accWaves().map((t) => {
         const e = S.acc[accKey(t)] || {};
-        return { key: t.key, epic: t.epic || null, epicTitle: (epicById(t.epic) || {}).title || "", tag: t.tag, title: t.title, emoji: t.emoji, color: t.color, branch: t.branch, mergeSha: String((t.merge || {}).sha || "").slice(0, 10),
-            onStand: !!(t.stages || []).find((s) => s.id === "stand" && s.done), archived: !t.exists, asking: !!e.asking || askLive(t), merges: mergeShas(t).length, reopened: e.reopened || null,
-            items: e.items || [], gotAt: e.gotAt || null, raw: e.items && e.items.length ? "" : String(e.raw || "").slice(0, 3000), verdict: e.verdict || null, comment: e.comment || "", sentAt: e.sentAt || null, sendNote: e.sendNote || "",
-            autoClosed: e.autoClosed || "", specs: specsOf(t).map((f) => f.split("/").pop()), specsLocal: false, specAskedAt: e.specAskedAt || null, autoRun: e.autoRun || null, autoStray: e.autoStray || [] };
+        return {
+            key: t.key,
+            epic: t.epic || null,
+            epicTitle: (epicById(t.epic) || {}).title || "",
+            tag: t.tag,
+            title: t.title,
+            emoji: t.emoji,
+            color: t.color,
+            branch: t.branch,
+            mergeSha: String((t.merge || {}).sha || "").slice(0, 10),
+            onStand: !!(t.stages || []).find((s) => s.id === "stand" && s.done),
+            archived: !t.exists,
+            asking: !!e.asking || askLive(t),
+            merges: mergeShas(t).length,
+            reopened: e.reopened || null,
+            items: e.items || [],
+            gotAt: e.gotAt || null,
+            raw: e.items && e.items.length ? "" : String(e.raw || "").slice(0, 3000),
+            verdict: e.verdict || null,
+            comment: e.comment || "",
+            sentAt: e.sentAt || null,
+            sendNote: e.sendNote || "",
+            autoClosed: e.autoClosed || "",
+            specs: specsOf(t).map((f) => f.split("/").pop()),
+            specsLocal: false,
+            specAskedAt: e.specAskedAt || null,
+            autoRun: e.autoRun || null,
+            autoStray: e.autoStray || [],
+        };
     });
     const run = lastRun();
     return { ...common(), waves, stand: dep ? { job: dep.id, at: dep.endedAt } : null, shard: null, tiles: [],
@@ -458,7 +592,15 @@ export function acceptSend() {
     const epOf = (t) => t.epic || epicOfKey(t.key);
     for (const ep of new Set([...done, ...back].map(epOf)))
         if (ep)
-            sendWhenFree(orchKey(ep), summaryText(done.filter((t) => epOf(t) === ep), back.filter((t) => epOf(t) === ep).map((t) => ({ tag: t.tag, comment: (S.acc[accKey(t)] || {}).comment || "" }))));
+            sendWhenFree(
+                orchKey(ep),
+                summaryText(
+                    done.filter((t) => epOf(t) === ep),
+                    back
+                        .filter((t) => epOf(t) === ep)
+                        .map((t) => ({ tag: t.tag, comment: (S.acc[accKey(t)] || {}).comment || "" })),
+                ),
+            );
     return { sent: done.length + back.length, accepted: done.length, rejected: back.length, skipped: skipped.length };
 }
 
@@ -474,14 +616,46 @@ export async function acceptOp(b) {
         return { code: 409, body: { error: ACC_SYNCING_TEXT + ": отметки — после сведения" } };
     if (op === "ask") {
         const js = await acceptAsk(keysOf());
-        return { code: 200, body: { ok: true, queued: js.length, message: js.length ? "Чек-листы спрошены у " + js.length + " агентов: задачи в очереди" : "Спрашивать некого: у всех волн чек-лист уже есть (повторно — по кнопке у волны)" } };
+        return {
+            code: 200,
+            body: {
+                ok: true,
+                queued: js.length,
+                message: js.length
+                    ? "Чек-листы спрошены у " + js.length + " агентов: задачи в очереди"
+                    : "Спрашивать некого: у всех волн чек-лист уже есть (повторно — по кнопке у волны)",
+            },
+        };
     }
     if (op === "send") {
         const r = acceptSend();
-        return { code: 200, body: { ok: true, ...r, message: r.sent ? "Итоги отправлены: принято " + r.accepted + ", на доделку " + r.rejected + (r.skipped ? ", в архиве (не отправлено) " + r.skipped : "") + "; оркестратору — сводка" : "Отправлять нечего: нет волн с вердиктом" } };
+        return {
+            code: 200,
+            body: {
+                ok: true,
+                ...r,
+                message: r.sent
+                    ? "Итоги отправлены: принято " +
+                      r.accepted +
+                      ", на доделку " +
+                      r.rejected +
+                      (r.skipped ? ", в архиве (не отправлено) " + r.skipped : "") +
+                      "; оркестратору — сводка"
+                    : "Отправлять нечего: нет волн с вердиктом",
+            },
+        };
     }
     if (op === "run") {
-        const only = b.onlyRed ? true : b.only && typeof b.only === "object" ? Object.fromEntries(Object.entries(b.only).filter(([k, v]) => /^\d{4}$/.test(k) && Array.isArray(v)).map(([k, v]) => [k, v.map(String).filter((x) => /^i\d{1,3}[a-z]?$/.test(x))]).filter(([, v]) => v.length)) : null;
+        const only = b.onlyRed
+            ? true
+            : b.only && typeof b.only === "object"
+              ? Object.fromEntries(
+                    Object.entries(b.only)
+                        .filter(([k, v]) => /^\d{4}$/.test(k) && Array.isArray(v))
+                        .map(([k, v]) => [k, v.map(String).filter((x) => /^i\d{1,3}[a-z]?$/.test(x))])
+                        .filter(([, v]) => v.length),
+                )
+              : null;
         try {
             const j = await acceptRunJob(keysOf(), false, b.item ? String(b.item) : null, only);
             return { code: 200, body: { ok: true, id: j.id, message: "Приёмка в очереди" } };
@@ -592,7 +766,16 @@ export async function remRun(r) {
     if (!r.cmd || !REM_CMD.test(r.cmd) || !TASKS[r.cmd])
         throw new Error("с кнопки запускается только задача проекта без ввода (id из tasks в dispatcher.project.json)");
     const step = { ...stepOfTask(TASKS[r.cmd], MAIN), env: { DISPATCHER_STAND_URL: STAND_URL } };
-    const job = await enqueue({ treeKey: STAGING_TREE, cwd: MAIN, label: "После выката: " + r.text.slice(0, 60), taskId: r.cmd, lane: "ops", profile: "eco", extra: { pipeline: true, reminder: r.id }, steps: [step] });
+    const job = await enqueue({
+        treeKey: STAGING_TREE,
+        cwd: MAIN,
+        label: "После выката: " + r.text.slice(0, 60),
+        taskId: r.cmd,
+        lane: "ops",
+        profile: "eco",
+        extra: { pipeline: true, reminder: r.id },
+        steps: [step],
+    });
     r.jobId = job.id;
     saveRem();
     return job;

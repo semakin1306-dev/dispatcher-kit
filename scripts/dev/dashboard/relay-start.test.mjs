@@ -12,7 +12,21 @@ process.env.DASH_EPIC_FILE = path.join(TMP, "epics.json");
 fs.mkdirSync(process.env.DASH_DATA, { recursive: true });
 fs.mkdirSync(path.join(TMP, "wt"), { recursive: true });
 fs.mkdirSync(path.join(TMP, "orch", ".git"), { recursive: true });
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "т", status: "open", orch: { path: path.join(TMP, "orch"), branch: "orch/e1" }, slots: [{ slot: "wv9014-start", tag: "П14", branch: "dev/wv-9014", title: "старт" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "т",
+                status: "open",
+                orch: { path: path.join(TMP, "orch"), branch: "orch/e1" },
+                slots: [{ slot: "wv9014-start", tag: "П14", branch: "dev/wv-9014", title: "старт" }],
+            },
+        ],
+    }),
+);
 await import("./wiring.mjs");
 const { applyEpics } = await import("./trees.mjs");
 const { inboxCards, loadInbox } = await import("./inbox.mjs");

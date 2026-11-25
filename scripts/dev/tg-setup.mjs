@@ -109,17 +109,47 @@ const main = async () => {
     if (found.chat.type !== "private")
         console.log("⚠ /start пришёл из группового чата «" + (found.chat.title || found.chat.id) + "»: бот будет принимать нажатия только от вас и только в этом чате.");
     await call("getUpdates", { offset, timeout: 0 }); // подтвердить прочитанное: диспетчерская не увидит этот /start заново
-    const meta = { chatId: found.chat.id, userId: found.from.id, user: found.from.username ? "@" + found.from.username : [found.from.first_name, found.from.last_name].filter(Boolean).join(" "), chatType: found.chat.type, at: new Date().toISOString() };
+    const meta = {
+        chatId: found.chat.id,
+        userId: found.from.id,
+        user: found.from.username
+            ? "@" + found.from.username
+            : [found.from.first_name, found.from.last_name].filter(Boolean).join(" "),
+        chatType: found.chat.type,
+        at: new Date().toISOString(),
+    };
     fs.mkdirSync(DATA, { recursive: true });
     const w = await setSecret(TG_SECRET, token, arg("--store", "") ? { store: arg("--store", "") } : {});
     writeAtomicSync(TG_META, JSON.stringify(meta, null, 1));
     await call("sendMessage", { chat_id: meta.chatId, text: "✅ Диспетчерская подключена. " + BOT_ABOUT });
-    console.log("Готово: chat_id " + meta.chatId + ", user id " + meta.userId + " (" + meta.user + "). Токен — " + (w.where === "dpapi" ? "в хранилище Windows (DPAPI)" : "в файле с правами владельца") + ": " + w.file + "; открытое — в " + TG_META + ".");
+    console.log(
+        "Готово: chat_id " +
+            meta.chatId +
+            ", user id " +
+            meta.userId +
+            " (" +
+            meta.user +
+            "). Токен — " +
+            (w.where === "dpapi" ? "в хранилище Windows (DPAPI)" : "в файле с правами владельца") +
+            ": " +
+            w.file +
+            "; открытое — в " +
+            TG_META +
+            ".",
+    );
     if (w.shadowedByEnv)
         console.log("⚠ Задана переменная " + envName(TG_SECRET) + ": диспетчерская возьмёт токен из неё, а не из записи.");
     console.log("Дальше: включите «Telegram» на странице (settings.tgBot); модуль `tg` должен быть включён в dispatcher.project.json.");
 };
 main().then(() => process.exit(0)).catch((e) => {
-    console.error("✗ " + redact(e.message, tok) + (e.tgCode === 409 ? " — getUpdates сейчас читает кто-то ещё (бот диспетчерской включён?): выключите «Telegram» на странице и повторите" : e.tgCode === 401 || e.tgCode === 404 ? " — токен не принят Telegram" : ""));
+    console.error(
+        "✗ " +
+            redact(e.message, tok) +
+            (e.tgCode === 409
+                ? " — getUpdates сейчас читает кто-то ещё (бот диспетчерской включён?): выключите «Telegram» на странице и повторите"
+                : e.tgCode === 401 || e.tgCode === 404
+                  ? " — токен не принят Telegram"
+                  : ""),
+    );
     process.exit(1);
 });

@@ -1,5 +1,19 @@
 // http.mjs — маршруты /api/*: состояние для страницы, прогоны, агенты, коммит, влив и выкат, карточки, настройки. В
 // начале — сторож модулей: маршрут выключенного модуля отвечает 404. Проверка Host и токена страницы на каждой мутации.
+//
+// Кто зовёт: boot.mjs поднимает HTTP-сервер (слушает только HOST = 127.0.0.1), проверяет Host (okHost) и передаёт сюда всё,
+// что начинается с /api/. Бот Телеграма и команды оркестратора идут в pipelineStart напрямую, минуя HTTP.
+//
+// Порядок внутри api() и почему он такой:
+//   1. routeGate — маршрут выключенного модуля отвечает 404 раньше всего остального;
+//   2. псевдоним «orchestrator» → ключ оркестратора эпика, который смотрит страница (заголовок x-dash-epic или ?epic=);
+//      в ответе ключ подменяется обратно, чтобы страница жила с одним именем при любом эпике;
+//   3. обработчики модулей (moduleHandler);
+//   4. GET — только чтение, без токена;
+//   5. всё остальное — только POST и только с токеном страницы (x-dash-token): чужая вкладка браузера, у которой нет
+//      токена из index.html, не может ничего изменить, даже если достучится до 127.0.0.1;
+//   6. сухой режим (DASH_DRY) пропускает лишь безвредные мутации из короткого списка.
+// Своих файлов данных модуль не ведёт: настройки пишет в SETTINGS_FILE, остальное — функциями модулей-владельцев.
 import { MAIN, PROJECT, REMOTE, UP_STAGING, WT, loadEpics, saveEpics } from "../slots.mjs";
 import { NO_GATE, runGate } from "./loops.mjs";
 import { execFile, spawn, sshGateStats } from "./spawner.mjs";
@@ -9,7 +23,30 @@ import path from "node:path";
 import { shardApi } from "./shard.mjs";
 import { jobList } from "./jobs.mjs";
 import { STAND_ASK, acceptBrief, acceptOp, acceptPublic, remindersOp, remindersPublic } from "./accept.mjs";
-import { DEFAULT_MODEL, PROMPTS_DIR, agentCwd, agentPublic, agentSession, agents, answerPermission, deliver, ensureAgent, epicOrderWagons, genSlotPrompt, interruptAgent, latestSession, push, readHistory, relays, sendUserText, sendWhenFree, setAgentModel, slotOf, startAgent, stopAgent } from "./agents.mjs";
+import {
+    DEFAULT_MODEL,
+    PROMPTS_DIR,
+    agentCwd,
+    agentPublic,
+    agentSession,
+    agents,
+    answerPermission,
+    deliver,
+    ensureAgent,
+    epicOrderWagons,
+    genSlotPrompt,
+    interruptAgent,
+    latestSession,
+    push,
+    readHistory,
+    relays,
+    sendUserText,
+    sendWhenFree,
+    setAgentModel,
+    slotOf,
+    startAgent,
+    stopAgent,
+} from "./agents.mjs";
 import { autoChain, autoRan, frozenAfterCommit, jobsForState, narrowBySuites } from "./autochain.mjs";
 import { issueWagon, markLanded } from "./trains.mjs";
 import { isTrain, normWave } from "./train-rules.mjs";
@@ -25,10 +62,40 @@ import { exists, git, pairs, pipelineState, treeState, withGitPriority } from ".
 import { releaseNotes } from "./release-notes.mjs";
 import { inboxCards, keepCards, saveInbox } from "./inbox.mjs";
 import { memState, procRows, sampleMachine, slotUsageState, stackState, sysState } from "./monitor.mjs";
-import { PIPELINE_ACTIONS, TRAIN_FILE, clearTrain, markTrain, mergeShaStep, preflight, recipe, releaseAction, saveTrain, setOrder, trainNow, trainPublic, trainStart, trainValid } from "./pipeline.mjs";
+import {
+    PIPELINE_ACTIONS,
+    TRAIN_FILE,
+    clearTrain,
+    markTrain,
+    mergeShaStep,
+    preflight,
+    recipe,
+    releaseAction,
+    saveTrain,
+    setOrder,
+    trainNow,
+    trainPublic,
+    trainStart,
+    trainValid,
+} from "./pipeline.mjs";
 import { flakyList, jobCovers, onlyStagingRed, realFail, stgRedMap, suiteRunArgs } from "./regress.mjs";
 import { ganttView, treeView } from "./view.mjs";
-import { FORCE_SOFT, agentCommit, buildReport, cancelMergeWait, doRelay, ownerStopsMergeWaits, drainQueued, failAdvice, inboxPublic, inboxSend, relaySentList, sendBatch, slotFacts, testReqsPublic } from "./relay.mjs";
+import {
+    FORCE_SOFT,
+    agentCommit,
+    buildReport,
+    cancelMergeWait,
+    doRelay,
+    ownerStopsMergeWaits,
+    drainQueued,
+    failAdvice,
+    inboxPublic,
+    inboxSend,
+    relaySentList,
+    sendBatch,
+    slotFacts,
+    testReqsPublic,
+} from "./relay.mjs";
 import { recentNotes, startReview } from "./review.mjs";
 import { annotGet, annotPost, ownerAnswer } from "./annot.mjs";
 import { backlogHttp, retroTriageBrief } from "./backlog.mjs";
@@ -49,12 +116,18 @@ import { pipelineAction, wordGrants } from "./owner-word.mjs";
 import { caps } from "../runtimes/index.mjs";
 import { enabled, moduleHandler, moduleOfPath, modulesPublic, routeGate } from "./modules.mjs";
 import { closeWindow } from "./monitor-win.mjs";
+import { killPosixTree } from "./proc-tree.mjs";
 
+/** Ответ: строка — как есть, иначе JSON. no-store — страница опрашивает состояние, кеш браузера показал бы старое. */
 export const send = (res, code, body, type = "application/json; charset=utf-8") => {
     res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
     res.end(typeof body === "string" ? body : JSON.stringify(body));
 };
 
+/**
+ * Тело POST как JSON. Больше 20 000 знаков — соединение рвётся: страница столько не шлёт, а память сервера не должна
+ * зависеть от чужого запроса. Неразборчивое тело — пустой объект: обработчик сам ответит «неверные параметры».
+ */
 export const readBody = (req) => new Promise((r) => {
     req.setEncoding("utf8");
     let b = "";
@@ -73,6 +146,10 @@ export const readBody = (req) => new Promise((r) => {
     });
 });
 
+/**
+ * Host — только 127.0.0.1 или localhost с нашим портом. Защита от подмены DNS: страница чужого сайта, чьё имя
+ * разрешается в 127.0.0.1, пришлёт свой Host, и сервер её не обслужит.
+ */
 export const okHost = (req) => [`127.0.0.1:${PORT}`, `localhost:${PORT}`].includes(req.headers.host || "");
 
 /** Кто нажал: метка в журнале событий. Страница — одна; бот и команды ставят свою. */
@@ -87,16 +164,41 @@ export function projectPublic() {
     };
 }
 /** Задачи проекта для страницы: подпись, группа, ввод, разбор вывода, гейт. */
-export const tasksPublic = () => Object.fromEntries(Object.entries(TASKS).map(([k, v]) => [k, { label: v.label, group: v.group, input: v.input ? { label: v.input.label, placeholder: v.input.ph || v.input.placeholder || "" } : null, parser: typeof v.parser === "string" ? v.parser : v.parser ? "custom" : "exit-code", gate: !!v.gate }]));
+export const tasksPublic = () =>
+    Object.fromEntries(
+        Object.entries(TASKS).map(([k, v]) => [
+            k,
+            {
+                label: v.label,
+                group: v.group,
+                input: v.input ? { label: v.input.label, placeholder: v.input.ph || v.input.placeholder || "" } : null,
+                parser: typeof v.parser === "string" ? v.parser : v.parser ? "custom" : "exit-code",
+                gate: !!v.gate,
+            },
+        ]),
+    );
 
+/** Эпик, который смотрит страница: ?epic= или заголовок x-dash-epic; неизвестный — эпик по умолчанию (или null). */
 export function viewOf(req, url) {
     const v = url.searchParams.get("epic") || req.headers["x-dash-epic"] || "";
     return epicById(v) ? v : viewEpic() ? viewEpic().id : null;
 }
 
+/** Поля запроса, где страница пишет «orchestrator» вместо ключа оркестратора своего эпика. */
 export const ORCH_ALIAS_FIELDS = ["tree", "key", "to", "from", "slot"];
+
+// Версия файлов страницы (uiVer) — наибольшее время изменения; страница сравнивает её со своей и перезагружается.
+// Слежение за папками сбрасывает кеш сразу (с задержкой 300 мс: редактор пишет файл в несколько приёмов), а 5-секундный
+// кеш — страховка там, где fs.watch не работает.
 let uiVerCache = { at: 0, v: 0 }, uiWatch = null;
-const uiFiles = () => [...fs.readdirSync(HERE).filter((f) => /\.(html|js|css)$/.test(f)), ...fs.readdirSync(path.join(HERE, "ui")).filter((f) => /\.(html|js|css)$/.test(f)).map((f) => "ui/" + f), ...Object.values(UI_SHARED).map((f) => path.relative(HERE, f))];
+const uiFiles = () => [
+    ...fs.readdirSync(HERE).filter((f) => /\.(html|js|css)$/.test(f)),
+    ...fs
+        .readdirSync(path.join(HERE, "ui"))
+        .filter((f) => /\.(html|js|css)$/.test(f))
+        .map((f) => "ui/" + f),
+    ...Object.values(UI_SHARED).map((f) => path.relative(HERE, f)),
+];
 
 function uiWatchStart() {
     if (uiWatch)
@@ -141,6 +243,7 @@ function uiVer() {
     return uiVerCache.v;
 }
 
+/** Обработчик /api/*: порядок проверок — в шапке модуля. Host уже проверен в boot.mjs. */
 export async function api(req, res, url) {
     {
         const g = routeGate(url.pathname);
@@ -153,6 +256,7 @@ export async function api(req, res, url) {
         for (const f of ORCH_ALIAS_FIELDS)
             if (url.searchParams.get(f) === "orchestrator")
                 url.searchParams.set(f, VK);
+        // Обратная подмена в ответе — только для строки в кавычках: ключ как часть другого значения не трогается.
         const q = '"' + VK + '"', end = res.end.bind(res);
         res.end = (chunk, ...rest) => end(typeof chunk === "string" && chunk.includes(q) ? chunk.split(q).join('"orchestrator"') : chunk, ...rest);
     }
@@ -161,6 +265,7 @@ export async function api(req, res, url) {
         if (h && (await h(req, res, url, { send, readBody, token: TOKEN, view: VIEW })))
             return;
     }
+    // ───────────────────────────── чтение (GET, без токена) ─────────────────────────────
     if (req.method === "GET" && url.pathname === "/api/slot-facts") {
         const k = url.searchParams.get("tree") || "";
         if (!treeByKey(k))
@@ -177,10 +282,12 @@ export async function api(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/events")
         return sseOpen(req, res, VK);
     if (req.method === "GET" && url.pathname === "/api/state") {
+        // Снимка ещё нет (первые секунды после запуска): сборку запускаем, но не ждём — страница покажет «запуск».
         if (!snapNow()) {
             rebuild();
             return send(res, 200, { booting: true, now: Date.now() });
         }
+        // Версия состояния не изменилась — короткий ответ: страница опрашивает часто, полное состояние тяжёлое.
         if (url.searchParams.get("ver") && Number(url.searchParams.get("ver")) === (stateVerNow() || 0))
             return send(res, 200, { unchanged: true, ver: stateVerNow() || 0, now: Date.now() });
         const { pl } = snapNow(), mine = (t) => !t.epic || t.epic === VIEW, trees = snapNow().trees.filter(mine);
@@ -189,14 +296,27 @@ export async function api(req, res, url) {
         const views = trees.map((t) => ({ ...t, ...treeView(t, ctx), running: running.has(t.key), presets: PRESETS[t.key] || [], defaultWave: t.wave }));
         return send(res, 200, {
             ...projectPublic(),
-            now: Date.now(), hygiene: { ...hygieneNow }, ver: stateVerNow() || 0, snapAgeSec: Math.round((Date.now() - snapNow().at) / 1000), uiVer: uiVer(), shard: enabled("machines") ? shardApi().summary() : null, relays: relays.slice(-8), relaySent: relaySentList().slice(-200),
-            agents: Object.fromEntries(TREES.filter((t) => mine(t) && exists(t.path)).map((t) => [t.key, agentPublic(t.key)])), serverOnline: shardApi().slotOnline(), trees: views, gantt: ganttView(views, VIEW, ctx),
-            pipeline: { ...pl, pushDeploys: !!PROJECT.release.prod.pushDeploys }, jobs: jobsNow.map((j) => {
+            now: Date.now(),
+            hygiene: { ...hygieneNow },
+            ver: stateVerNow() || 0,
+            snapAgeSec: Math.round((Date.now() - snapNow().at) / 1000),
+            uiVer: uiVer(),
+            shard: enabled("machines") ? shardApi().summary() : null,
+            relays: relays.slice(-8),
+            relaySent: relaySentList().slice(-200),
+            agents: Object.fromEntries(
+                TREES.filter((t) => mine(t) && exists(t.path)).map((t) => [t.key, agentPublic(t.key)]),
+            ),
+            serverOnline: shardApi().slotOnline(),
+            trees: views,
+            gantt: ganttView(views, VIEW, ctx),
+            pipeline: { ...pl, pushDeploys: !!PROJECT.release.prod.pushDeploys },
+            jobs: jobsNow.map((j) => {
                 const p = publicJob(j);
+                // у законченных прогонов служебные поля странице не нужны — ответ /api/state меньше
                 if (FINAL.includes(j.status)) {
                     delete p.cmd;
-                    if (j.task !== "deploy-staging")
-                        delete p.prog;
+                    if (j.task !== "deploy-staging") delete p.prog;
                     delete p.treeSha;
                     delete p.cleanAtStart;
                     delete p.waitReason;
@@ -205,13 +325,41 @@ export async function api(req, res, url) {
                 if (j.status === "fail") {
                     try {
                         p.advice = failAdvice(j);
-                    }
-                    catch { }
+                    } catch {}
                 }
                 return p;
-            }), settings, drain: drainState(), activeEpic: VIEW, dry: DRY, epics: epicsPublic(VIEW), testReqs: ctx.reqs, inbox: ctx.inbox, orderHints: (snapNow() && snapNow().orderHints) || [], train: trainPublic(VIEW), flaky: flakyList(), stagingRed: stgRedMap(),
-            accept: enabled("accept") ? { ...acceptBrief(), runnable: !!PROJECT.accept.run, specGlob: PROJECT.accept.specGlob, standUrl: PROJECT.accept.standUrl || PROJECT.release.stand.url } : null, reminders: enabled("accept") ? remindersPublic() : [],
-            fresh: Object.fromEntries(jobsNow.filter((j) => j.status === "ok" && trees.some((t) => t.key === j.tree)).map((j) => [j.id, jobFresh(j, trees.find((t) => t.key === j.tree))])),
+            }),
+            settings,
+            drain: drainState(),
+            activeEpic: VIEW,
+            dry: DRY,
+            epics: epicsPublic(VIEW),
+            testReqs: ctx.reqs,
+            inbox: ctx.inbox,
+            orderHints: (snapNow() && snapNow().orderHints) || [],
+            train: trainPublic(VIEW),
+            flaky: flakyList(),
+            stagingRed: stgRedMap(),
+            accept: enabled("accept")
+                ? {
+                      ...acceptBrief(),
+                      runnable: !!PROJECT.accept.run,
+                      specGlob: PROJECT.accept.specGlob,
+                      standUrl: PROJECT.accept.standUrl || PROJECT.release.stand.url,
+                  }
+                : null,
+            reminders: enabled("accept") ? remindersPublic() : [],
+            fresh: Object.fromEntries(
+                jobsNow
+                    .filter((j) => j.status === "ok" && trees.some((t) => t.key === j.tree))
+                    .map((j) => [
+                        j.id,
+                        jobFresh(
+                            j,
+                            trees.find((t) => t.key === j.tree),
+                        ),
+                    ]),
+            ),
             tasks: tasksPublic(),
             queue: Object.fromEntries(Object.entries(queues).map(([k, q]) => [k, q.length])),
             digest: digestBrief(settings),
@@ -221,11 +369,23 @@ export async function api(req, res, url) {
         });
     }
     if (req.method === "GET" && url.pathname === "/api/monitor")
-        return send(res, 200, { now: Date.now(), hosts: (() => {
+        return send(res, 200, {
+            now: Date.now(),
+            hosts: (() => {
                 const l = { ...(shardApi().load() || {}) };
                 delete l.local;
                 return l;
-            })(), mem: memState().v, sys: sysState(), stack: stackState(), procs: procRows(), slotUsage: slotUsageState(), serverOnline: shardApi().slotOnline(), hostHealth: shardApi().hostHealth(), sshGate: sshGateStats(), sseClients: sseClients.size });
+            })(),
+            mem: memState().v,
+            sys: sysState(),
+            stack: stackState(),
+            procs: procRows(),
+            slotUsage: slotUsageState(),
+            serverOnline: shardApi().slotOnline(),
+            hostHealth: shardApi().hostHealth(),
+            sshGate: sshGateStats(),
+            sseClients: sseClients.size,
+        });
     if (req.method === "GET" && url.pathname === "/api/epic-progress") {
         const r = await epicProgressOp(url.searchParams.get("epic") || "", url.searchParams.get("hours") || 24);
         return send(res, r.code, r.body);
@@ -236,7 +396,13 @@ export async function api(req, res, url) {
     }
     if (req.method === "GET" && url.pathname === "/api/epic-journal") {
         const q = url.searchParams;
-        const r = await epicJournalOp(q.get("epic") || "", { from: q.get("from") || 0, to: q.get("to") || Infinity, types: q.get("types") || "", limit: q.get("limit") || 2000, format: q.get("format") || "json" });
+        const r = await epicJournalOp(q.get("epic") || "", {
+            from: q.get("from") || 0,
+            to: q.get("to") || Infinity,
+            types: q.get("types") || "",
+            limit: q.get("limit") || 2000,
+            format: q.get("format") || "json",
+        });
         return send(res, r.code, r.body);
     }
     if (req.method === "GET" && url.pathname === "/api/digest-stats")
@@ -256,6 +422,8 @@ export async function api(req, res, url) {
         if (!j)
             return send(res, 404, { error: "нет такого запуска" });
         const q = (k) => url.searchParams.get(k);
+        // Два режима. С grep/max/to — кусок лога текстом для агента (ручка «⤷ Полный лог»), не больше 60 000 знаков.
+        // Без них — дочитывание для страницы с байта from порциями до 400 КБ; next — откуда читать в следующий раз.
         if (q("grep") != null || q("max") != null || q("to") != null) {
             let all = "";
             try {
@@ -291,6 +459,8 @@ export async function api(req, res, url) {
         if (!agentCwd(key))
             return send(res, 404, { error: "нет такого слота" });
         const a = agents.get(key), pub = agentPublic(key);
+        // Первый запрос без живой ленты — прошлые реплики сессии с диска и свежие ответы ревьюера: чат не пустой после
+        // перезапуска диспетчерской.
         const hist = since === 0 && (!a || !a.items.length) ? [...(await readHistory(agentCwd(key), (agentSession(key) || latestSession(agentCwd(key)) || {}).id)), ...recentNotes(key)] : [];
         return send(res, 200, { ...pub, items: a ? a.items.filter((x) => x.rev > since) : [], history: hist, err: a && a.dead ? a.lastErr || "" : "" });
     }
@@ -307,7 +477,12 @@ export async function api(req, res, url) {
         const t = treeByKey(url.searchParams.get("tree") || "");
         if (!t || !exists(t.path))
             return send(res, 404, { error: "нет такого слота" });
-        const [br, work, branch, log] = await Promise.all([git(t.path, ["rev-parse", "--abbrev-ref", "HEAD"]), workChanges(t.path), branchChanges(t.path), git(t.path, ["log", "--format=%h%x09%s", "-6"])]);
+        const [br, work, branch, log] = await Promise.all([
+            git(t.path, ["rev-parse", "--abbrev-ref", "HEAD"]),
+            workChanges(t.path),
+            branchChanges(t.path),
+            git(t.path, ["log", "--format=%h%x09%s", "-6"]),
+        ]);
         return send(res, 200, { branch: br.out, work, branch_files: branch, recent: log.out ? log.out.split("\n").map((l) => l.split("\t")) : [] });
     }
     if (req.method === "GET" && url.pathname === "/api/filediff") {
@@ -339,10 +514,14 @@ export async function api(req, res, url) {
         const r = await annotGet(url.searchParams.get("tree") || "", url.searchParams.get("doc") || "plan");
         return send(res, r.code, r.body);
     }
+    // бэклог сам различает чтение и запись и сам проверяет токен на записи — поэтому до общей проверки ниже
     if (url.pathname === "/api/backlog")
         return backlogHttp(req, res, { send, readBody, token: TOKEN, gate: () => null });
+    // ───────────────────────────── изменения (POST с токеном страницы) ─────────────────────────────
     if (req.method !== "POST")
         return send(res, 404, { error: "нет такого адреса" });
+    // Токен новый при каждом запуске сервера и есть только в index.html, которую отдаёт этот же сервер: запрос со страницы
+    // чужого сайта его не знает. После перезапуска старая вкладка получает 403 и просьбу обновиться.
     if (req.headers["x-dash-token"] !== TOKEN)
         return send(res, 403, { error: "нет токена запуска: обновите страницу" });
     const b = await readBody(req);
@@ -350,14 +529,28 @@ export async function api(req, res, url) {
         for (const f of ORCH_ALIAS_FIELDS)
             if (b[f] === "orchestrator")
                 b[f] = VK;
+    // Сухой режим (пробный экземпляр на копии данных): имитация влива для проверок страницы, а из настоящих мутаций —
+    // только те, что не трогают git, агентов и прогоны.
     if (DRY && url.pathname === "/api/dry/merge-sim") {
         const t = snapNow() && snapNow().trees.find((x) => x.key === String(b.key || "") && x.kind === "slot");
         if (!t)
             return send(res, 404, { error: "нет такого слота в снимке" });
-        const keys = markMergedNow({ task: "merge", status: "ok", endedAt: Date.now(), steps: [{ cmd: "git", args: ["merge", "--no-ff", t.branch] }], mergeSha: /^[0-9a-f]{40}$/.test(String(b.sha || "")) ? { [t.branch]: String(b.sha) } : {} });
+        const keys = markMergedNow({
+            task: "merge",
+            status: "ok",
+            endedAt: Date.now(),
+            steps: [{ cmd: "git", args: ["merge", "--no-ff", t.branch] }],
+            mergeSha: /^[0-9a-f]{40}$/.test(String(b.sha || "")) ? { [t.branch]: String(b.sha) } : {},
+        });
         return send(res, 200, { keys, message: keys.length ? "влив сымитирован: " + keys.join(", ") : "впереди staging ничего — отмечать нечего" });
     }
-    if (DRY && url.pathname !== "/api/drain" && !(url.pathname === "/api/epic" && b.op === "activate") && !(url.pathname === "/api/accept" && ["item", "verdict", "comment"].includes(String(b.op))) && !["/api/annot", "/api/ownerq-answer", "/api/retro"].includes(url.pathname))
+    if (
+        DRY &&
+        url.pathname !== "/api/drain" &&
+        !(url.pathname === "/api/epic" && b.op === "activate") &&
+        !(url.pathname === "/api/accept" && ["item", "verdict", "comment"].includes(String(b.op))) &&
+        !["/api/annot", "/api/ownerq-answer", "/api/retro"].includes(url.pathname)
+    )
         return send(res, 403, { error: "сухой режим: это действие в пробном экземпляре не выполняется" });
     if (url.pathname === "/api/retro") {
         const r = await retroStart(String(b.epic || ""), { by: "кнопка", force: !!b.force });
@@ -366,7 +559,15 @@ export async function api(req, res, url) {
     if (url.pathname === "/api/shard") {
         try {
             if (b.op === "start" || b.op === "prep" || b.op === "rerun")
-                return send(res, 200, { ...(await shardApi().start({ prepOnly: b.op === "prep", rerunRed: b.op === "rerun" })), message: b.op === "prep" ? "подготовка машин начата" : b.op === "rerun" ? "перепрогон красных частей начат" : "прогон начат" });
+                return send(res, 200, {
+                    ...(await shardApi().start({ prepOnly: b.op === "prep", rerunRed: b.op === "rerun" })),
+                    message:
+                        b.op === "prep"
+                            ? "подготовка машин начата"
+                            : b.op === "rerun"
+                              ? "перепрогон красных частей начат"
+                              : "прогон начат",
+                });
             if (b.op === "cancel")
                 return send(res, 200, { ...(await shardApi().cancel()), message: "остановлено" });
             if (b.op === "clean") {
@@ -383,6 +584,8 @@ export async function api(req, res, url) {
             return send(res, 409, { error: e.message });
         }
     }
+    // После любой мутации (кроме предпросмотра проверок) — новый снимок и новая версия состояния: страница увидит
+    // результат нажатия, не дожидаясь планового обхода. preflight ничего не меняет — лишний снимок не нужен.
     if (url.pathname !== "/api/preflight")
         res.on("finish", () => {
             kick();
@@ -417,20 +620,41 @@ export async function api(req, res, url) {
         }
         else
             steps = [stepOfTask(task, tree.path, b.input)];
+        // Тот же прогон уже ждёт в очереди — отдаём его, а не ставим второй (двойное нажатие, кнопка и автопоезд разом).
         {
             const dup = jobList().find((j) => j.tree === tree.key && j.task === b.task && (j.input || "") === String(task.input ? b.input || "" : "") && ["queued", "waiting"].includes(j.status));
             if (dup)
                 return send(res, 200, { ...publicJob(dup), duplicate: true });
         }
+        // Ворота прогона (без force): после коммита волны код заморожен; прогон не нужен, если на этом же коде он уже
+        // зелёный или дважды красный (runGate); из набора берутся только незелёные спеки (narrowBySuites).
         if (!b.force) {
-            const inp = task.input ? String(b.input || "") : "", fpNow = await codeFp(tree.path, true), who = (tree.tag || tree.key) + ": «" + task.label + (inp ? " " + inp.slice(0, 60) + (inp.length > 60 ? "…" : "") : "") + "» — ";
+            const inp = task.input ? String(b.input || "") : "",
+                fpNow = await codeFp(tree.path, true),
+                who =
+                    (tree.tag || tree.key) +
+                    ": «" +
+                    task.label +
+                    (inp ? " " + inp.slice(0, 60) + (inp.length > 60 ? "…" : "") : "") +
+                    "» — ";
             const frozen = !NO_GATE.has(b.task) && frozenAfterCommit(tree.key, fpNow, b.task, inp);
             if (frozen)
                 return send(res, 200, { gated: true, label: task.label, message: who + "не запускаю: " + frozen });
-            const g = runGate({ jobs: jobList(), tree: tree.key, task: b.task, input: inp, fp: fpNow, dist: DIST_TASKS.has(b.task), covers: (k) => jobCovers(k, { task: b.task, input: inp }), realFail, inherited: (k) => onlyStagingRed(k.id), freshOk: (k) => {
+            const g = runGate({
+                jobs: jobList(),
+                tree: tree.key,
+                task: b.task,
+                input: inp,
+                fp: fpNow,
+                dist: DIST_TASKS.has(b.task),
+                covers: (k) => jobCovers(k, { task: b.task, input: inp }),
+                realFail,
+                inherited: (k) => onlyStagingRed(k.id),
+                freshOk: (k) => {
                     const tt = snapNow() && snapNow().trees.find((x) => x.key === tree.key);
                     return !!tt && tt.fp === fpNow && jobFresh(k, tt) === "ok";
-                } });
+                },
+            });
             if (!g.run)
                 return send(res, 200, { gated: true, label: task.label, job: g.job ? publicJob(g.job) : null, message: who + "не запускаю: " + g.why });
             const nr = narrowBySuites(tree.key, b.task, inp, fpNow);
@@ -440,14 +664,57 @@ export async function api(req, res, url) {
                 const out = [];
                 for (const r of nr.runs) {
                     const tk = TASKS[r.task];
-                    out.push(await enqueue({ treeKey: tree.key, cwd: tree.path, label: tk.label, taskId: r.task, input: tk.input ? r.input : "", lane: tk.lane, profile: b.profile, steps: [stepOfTask(tk, tree.path, r.input)], extra: { by: BY_PAGE + " (только незелёные)" } }));
+                    out.push(
+                        await enqueue({
+                            treeKey: tree.key,
+                            cwd: tree.path,
+                            label: tk.label,
+                            taskId: r.task,
+                            input: tk.input ? r.input : "",
+                            lane: tk.lane,
+                            profile: b.profile,
+                            steps: [stepOfTask(tk, tree.path, r.input)],
+                            extra: { by: BY_PAGE + " (только незелёные)" },
+                        }),
+                    );
                 }
-                return send(res, 200, { ...publicJob(out[0]), narrowed: true, message: who + "только незелёные спеки: " + nr.n + " из " + nr.total + (out.length > 1 ? ", частями: " + out.length : "") });
+                return send(res, 200, {
+                    ...publicJob(out[0]),
+                    narrowed: true,
+                    message:
+                        who +
+                        "только незелёные спеки: " +
+                        nr.n +
+                        " из " +
+                        nr.total +
+                        (out.length > 1 ? ", частями: " + out.length : ""),
+                });
             }
         }
+        // Ввод не совпал ни с одной спекой — прогон вернул бы «нет тестов», и это легко принять за зелёное.
         if (task.input && specAware(b.task) && taskSpecMatches(tree.path, b.task, b.input) === 0)
-            return send(res, 200, { notNeeded: true, label: task.label, message: (tree.tag || tree.key) + ": по вводу «" + b.input + "» в ветке нет ни одной спеки задачи «" + task.label + "» — прогон дал бы «нет тестов». Красный тест ещё не написан или ввод неверен." });
-        const job = await enqueue({ treeKey: tree.key, cwd: tree.path, label: task.label, taskId: b.task, input: task.input ? b.input : "", lane: task.lane, profile: b.profile, steps, extra: { by: BY_PAGE } });
+            return send(res, 200, {
+                notNeeded: true,
+                label: task.label,
+                message:
+                    (tree.tag || tree.key) +
+                    ": по вводу «" +
+                    b.input +
+                    "» в ветке нет ни одной спеки задачи «" +
+                    task.label +
+                    "» — прогон дал бы «нет тестов». Красный тест ещё не написан или ввод неверен.",
+            });
+        const job = await enqueue({
+            treeKey: tree.key,
+            cwd: tree.path,
+            label: task.label,
+            taskId: b.task,
+            input: task.input ? b.input : "",
+            lane: task.lane,
+            profile: b.profile,
+            steps,
+            extra: { by: BY_PAGE },
+        });
         return send(res, 200, publicJob(job));
     }
     if (url.pathname === "/api/run-staging") {
@@ -456,7 +723,17 @@ export async function api(req, res, url) {
             return send(res, 400, { error: "задача — одна из: " + Object.keys(TASKS).join(", ") });
         if (task.input && !INPUT_RE.test(String(b.input || "")))
             return send(res, 400, { error: `нужен ввод: ${task.input.label}` });
-        const job = await enqueue({ treeKey: "orchestrator-staging", cwd: MAIN, label: task.label + " · staging", taskId: b.task, input: task.input ? String(b.input) : "", lane: task.lane, profile: b.profile, steps: [stepOfTask(task, MAIN, b.input)], extra: { by: BY_PAGE } });
+        const job = await enqueue({
+            treeKey: "orchestrator-staging",
+            cwd: MAIN,
+            label: task.label + " · staging",
+            taskId: b.task,
+            input: task.input ? String(b.input) : "",
+            lane: task.lane,
+            profile: b.profile,
+            steps: [stepOfTask(task, MAIN, b.input)],
+            extra: { by: BY_PAGE },
+        });
         return send(res, 200, publicJob(job));
     }
     if (url.pathname === "/api/run-staging-guards") {
@@ -465,7 +742,18 @@ export async function api(req, res, url) {
             return send(res, 400, { error: "у проекта нет гардов без ввода (stations.guards или задачи с gate: true)" });
         const out = [];
         for (const id of ids)
-            out.push(await enqueue({ treeKey: "orchestrator-staging", cwd: MAIN, label: TASKS[id].label + " · staging", taskId: id, lane: TASKS[id].lane, profile: b.profile, steps: [stepOfTask(TASKS[id], MAIN)], extra: { by: BY_PAGE } }));
+            out.push(
+                await enqueue({
+                    treeKey: "orchestrator-staging",
+                    cwd: MAIN,
+                    label: TASKS[id].label + " · staging",
+                    taskId: id,
+                    lane: TASKS[id].lane,
+                    profile: b.profile,
+                    steps: [stepOfTask(TASKS[id], MAIN)],
+                    extra: { by: BY_PAGE },
+                }),
+            );
         return send(res, 200, { ...publicJob(out[0]), jobs: out.map((j) => j.id), message: "Гарды на staging поставлены: " + ids.map((id) => TASKS[id].label).join(", ") });
     }
     if (url.pathname === "/api/cancel") {
@@ -473,6 +761,8 @@ export async function api(req, res, url) {
         if (!j)
             return send(res, 404, { error: "нет такого запуска" });
         logEvent("job.cancel", { id: j.id, tree: j.tree, status: j.status, by: BY_PAGE });
+        // В очереди — просто снять. Ждущий и идущий — отметка cancelled: итог запишет сам раннер, когда процесс выйдет;
+        // удалённый прогон сначала снимается на машине, потом гасится местный процесс связи с ней.
         if (j.status === "queued") {
             for (const q of Object.values(queues)) {
                 const i = q.indexOf(j);
@@ -503,6 +793,7 @@ export async function api(req, res, url) {
             const a = await startAgent(key, { resume: !!b.resume, model: String(b.model || "").replace(/[^a-z0-9.\-]/gi, "") });
             return send(res, 200, agentPublic(key));
         }
+        // Стартовое сообщение слота: готовый файл из папки промптов, иначе собранное из персоны и плана волны.
         if (op === "prompt") {
             const f = fs.existsSync(PROMPTS_DIR) ? fs.readdirSync(PROMPTS_DIR).find((x) => x.includes(key)) : null;
             if (f)
@@ -516,7 +807,9 @@ export async function api(req, res, url) {
             const text0 = String(b.text || "").trim();
             if (!text0)
                 return send(res, 400, { error: "пустое сообщение" });
+            // Сообщение от окна диспетчерской помечается: агент не должен принять его за слово владельца (коммит, влив).
             const text = byDispatcher && !/^\[Диспетчерская/.test(text0) ? "[Диспетчерская, не слово владельца]\n" + text0 : text0;
+            // Владелец ответил сам — его вопросы и карточка «запустить слот» по этому агенту больше не нужны.
             if (!byDispatcher) {
                 const n0 = inboxCards().length;
                 keepCards((x) => !(x.tree === key && (x.kind === "ownerq" || x.kind === "slotstart")));
@@ -525,13 +818,27 @@ export async function api(req, res, url) {
             }
             logEvent(byDispatcher ? "dispatcher.message" : "owner.message", { key, chars: text.length, brief: brief(text) });
             a = await sendUserText(key, text, { owner: !byDispatcher, by: byDispatcher ? "dispatcher" : "", model: String(b.model || "").replace(/[^a-z0-9.\-]/gi, "") });
+            // Режим «без владельца» включается и выключается словами в чате («я тут»), не только переключателем.
             if (!byDispatcher) {
                 const au = autoOwnerToggle(text);
                 if (au !== null) {
                     settings.autoOwnerUntil = au;
                     saveJson(SETTINGS_FILE, settings);
                     logEvent("auto.owner.mode", { on: au > 0, until: au });
-                    push(a, { id: "auo-" + a.rev, t: "status", text: au ? "Режим «без владельца» включён до " + new Date(au).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + ": вопросы владельцу получают рекомендованный ответ (кроме денег, прав и прода). Выключить — «я тут»." : "Режим «без владельца» выключен." });
+                    push(a, {
+                        id: "auo-" + a.rev,
+                        t: "status",
+                        text: au
+                            ? "Режим «без владельца» включён до " +
+                              new Date(au).toLocaleString("ru-RU", {
+                                  day: "2-digit",
+                                  month: "2-digit",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                              }) +
+                              ": вопросы владельцу получают рекомендованный ответ (кроме денег, прав и прода). Выключить — «я тут»."
+                            : "Режим «без владельца» выключен.",
+                    });
                 }
             }
             if (!byDispatcher && isOrch(key)) {
@@ -571,12 +878,21 @@ export async function api(req, res, url) {
         const t = treeByKey(j.tree) || TREES[0], key = isOrch(b.to) || b.to === "orchestrator" ? orchOfKey(t.key) : t.key;
         if (!agentCwd(key))
             return send(res, 404, { error: "у слота нет папки" });
+        // Слоту отчёт уходит пачкой (sendBatch: итоги нескольких прогонов одним сообщением, повторно — нельзя);
+        // оркестратору и отчёт о сжатии базовой линии — сразу этим текстом.
         const text = buildReport(j, { to: key, record: !b.preview && (isOrch(key) || j.note === "baseline-shrunk") });
         if (b.preview)
             return send(res, 200, { text, key });
         if (!isOrch(key) && j.note !== "baseline-shrunk") {
             if (j.reported)
-                return send(res, 409, { error: "этот прогон уже отправлен агенту" + (j.reportedAt ? " в " + new Date(j.reportedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "") });
+                return send(res, 409, {
+                    error:
+                        "этот прогон уже отправлен агенту" +
+                        (j.reportedAt
+                            ? " в " +
+                              new Date(j.reportedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+                            : ""),
+                });
             const r = await sendBatch(t.key, [j.id]);
             return send(res, r.code, r.code === 200 ? { ...agentPublic(t.key), key: t.key, batched: r.body.batched } : r.body);
         }
@@ -651,6 +967,8 @@ export async function api(req, res, url) {
             if (!b.on)
                 return send(res, 200, { ok: true, on: false, message: "Автопоезд ветки выключен: станции, коммит и поезд — вручную" });
         }
+        // Кнопка владельца: забыть, какие станции автопоезд уже ставил на этой ветке, и прогнать его один раз, даже если
+        // общий автопоезд выключен; общий переключатель возвращается, когда проход закончен.
         for (const k of [...autoRan])
             if (k.startsWith(key + "|chain|"))
                 autoRan.delete(k);
@@ -684,6 +1002,7 @@ export async function api(req, res, url) {
         const waves = (Array.isArray(b.waves) ? b.waves : []).map((w) => String(w).toUpperCase()).filter((w) => /^WV-[0-9]{4}$/.test(w));
         if (!waves.length)
             return send(res, 400, { error: "нет списка вагонов" });
+        // Порядок пишет команда реестра epic.mjs (одна реализация на страницу и оркестратора), затем реестр перечитывается.
         const r = await epicOrderWagons(t.tag, waves, t.epic || "");
         if (r.status !== 0)
             return send(res, 409, { error: (r.stderr || r.stdout || "epic.mjs order-wagons не сработал").trim().split(/\r?\n/).pop() });
@@ -701,7 +1020,15 @@ export async function api(req, res, url) {
         {
             const t0 = snapNow() && snapNow().trees.find((x) => x.key === String(b.tree || ""));
             if (t0 && t0.train && (t0.wagons || []).some((w) => w.state !== "staging"))
-                return send(res, 409, { error: "у поезда остались невлитые вагоны (" + t0.wagons.filter((w) => w.state !== "staging").map((w) => w.wave).join(", ") + ") — поезд живёт до закрытия эпика, в архив нельзя" });
+                return send(res, 409, {
+                    error:
+                        "у поезда остались невлитые вагоны (" +
+                        t0.wagons
+                            .filter((w) => w.state !== "staging")
+                            .map((w) => w.wave)
+                            .join(", ") +
+                        ") — поезд живёт до закрытия эпика, в архив нельзя",
+                });
         }
         const r = await archiveSlotOp(String(b.tree || ""));
         return send(res, r.code, r.body);
@@ -725,7 +1052,13 @@ export async function api(req, res, url) {
         if (r.ok)
             return send(res, 200, { ok: true, message: t.tag + ": " + r.text });
         if (r.dirty && r.dirty.length)
-            return send(res, 409, { error: t.tag + ": в слоте незакоммиченные правки в файлах, которые правит и staging (" + r.dirty.slice(0, 3).join(", ") + "): влив не начат, агент получил просьбу закоммитить" });
+            return send(res, 409, {
+                error:
+                    t.tag +
+                    ": в слоте незакоммиченные правки в файлах, которые правит и staging (" +
+                    r.dirty.slice(0, 3).join(", ") +
+                    "): влив не начат, агент получил просьбу закоммитить",
+            });
         if (r.conflict)
             return send(res, 409, { error: t.tag + ": конфликт с staging в " + r.conflict.length + " файл(ах) — влив откатан, агент получил список: " + r.conflict.slice(0, 4).join(", ") });
         return send(res, 409, { error: t.tag + ": " + (r.skip || r.fail) });
@@ -750,6 +1083,7 @@ export async function api(req, res, url) {
         const pid = Number(b.pid), p = procRows().find((x) => x.pid === pid);
         if (!p)
             return send(res, 404, { error: "процесса уже нет в списке — обновите страницу" });
+        // pid берётся только из списка монитора с отметкой killable: страница не может остановить произвольный процесс
         if (!p.killable || pid === process.pid)
             return send(res, 409, { error: "этот процесс останавливать нельзя" });
         await killPid(pid);
@@ -780,10 +1114,13 @@ export async function api(req, res, url) {
             a = await ensureAgent(t.key);
         if (a.busy)
             return send(res, 409, { error: "агент сейчас отвечает — дождитесь конца ответа" });
+        // capture — следующий ответ агента перехватит приёмка как чек-лист (accept.mjs captureReply), а не передача
         a.capture = { kind: "stand-checklist", tree: t.key, branch: t.branch, startRev: a.rev };
         deliver(a, STAND_ASK, "accept", { by: "dispatcher" });
         return send(res, 200, { ...agentPublic(t.key), key: t.key });
     }
+    // Подготовка к перезапуску (restart-dashboard.mjs): новые прогоны и передачи не начинаются, ответ — занят ли сервер.
+    // Агент, который больше 5 минут ждёт разрешения, перезапуск не держит: человек может не ответить вовсе.
     if (url.pathname === "/api/drain") {
         const was = !!drainState();
         if (b.on) {
@@ -923,6 +1260,8 @@ export async function api(req, res, url) {
         if (!t || !exists(t.path))
             return send(res, 404, { error: "нет такого слота" });
         const msg = String(b.message || "").trim(), paths = Array.isArray(b.paths) ? b.paths.map(String) : [];
+        // Коммит со страницы: только явно выбранные файлы, которые git сейчас считает изменёнными, без похожих на секреты,
+        // не в staging/main; git commit --only — в коммит не попадёт то, что агент успел добавить в индекс сам.
         if (msg.length < 5 || msg.length > 2000)
             return send(res, 400, { error: "сообщение коммита: от 5 до 2000 знаков" });
         if (!paths.length || paths.length > 600 || !paths.every(safeRel))
@@ -947,7 +1286,13 @@ export async function api(req, res, url) {
     }
     if (url.pathname === "/api/stage") {
         const tree = treeByKey(b.tree);
-        if (!tree || !exists(tree.path) || !STATIONS.some((s) => s.id === b.stage) || (b.value !== undefined && ![true, false, null].includes(b.value)) || (b.value === undefined && typeof b.note !== "string"))
+        if (
+            !tree ||
+            !exists(tree.path) ||
+            !STATIONS.some((s) => s.id === b.stage) ||
+            (b.value !== undefined && ![true, false, null].includes(b.value)) ||
+            (b.value === undefined && typeof b.note !== "string")
+        )
             return send(res, 400, { error: "неизвестный слот или станция" });
         const br = (await withGitPriority(() => git(tree.path, ["rev-parse", "--abbrev-ref", "HEAD"]))).out;
         const k = `${tree.key}|${br}`;
@@ -956,6 +1301,8 @@ export async function api(req, res, url) {
         if (b.stage === "review" && b.value === true && settings.autoTrain)
             setTimeout(() => autoChain(tree.key, "ревью принято вручную").catch((e) => console.error("автопоезд:", e.message)), 1500);
         await withGitPriority(() => rebuildOne(tree.key)).catch(() => { });
+        // Если в это время шла полная сборка снимка, она могла взять отметку до нажатия и затереть её — пересобрать
+        // слот ещё раз после неё.
         {
             const inflight = rebuildingNow();
             if (inflight)
@@ -995,7 +1342,14 @@ export async function api(req, res, url) {
     }
     if (url.pathname === "/api/epic") {
         const op = String(b.op || ""), id = String(b.id || "");
-        const r = op === "activate" ? activateEpic(id) : op === "archive" ? setEpicStatus(id, "closed") : op === "restore" ? setEpicStatus(id, "open") : { code: 400, body: { error: "op: activate, archive или restore" } };
+        const r =
+            op === "activate"
+                ? activateEpic(id)
+                : op === "archive"
+                  ? setEpicStatus(id, "closed")
+                  : op === "restore"
+                    ? setEpicStatus(id, "open")
+                    : { code: 400, body: { error: "op: activate, archive или restore" } };
         return send(res, r.code, r.body);
     }
     if (url.pathname === "/api/rebuild") {
@@ -1008,6 +1362,7 @@ export async function api(req, res, url) {
         await rebuild();
         return send(res, 200, { ok: true });
     }
+    // Догнать удалённый staging: только в чистой основной папке на staging; разошлись — merge --no-ff, иначе перемотка.
     if (url.pathname === "/api/sync-staging") {
         const br = (await git(MAIN, ["rev-parse", "--abbrev-ref", "HEAD"])).out;
         if (br !== "staging")
@@ -1020,9 +1375,38 @@ export async function api(req, res, url) {
         if (!behind)
             return send(res, 200, { ok: true, message: "локальный staging уже содержит " + UP_STAGING });
         const steps = ahead
-            ? [{ cmd: "git", args: ["merge", "--no-ff", UP_STAGING, "-m", "merge: " + UP_STAGING + " в локальный staging"], show: "git merge --no-ff " + UP_STAGING + " (ветки разошлись: своих " + ahead + ", чужих " + behind + ")", cwd: MAIN }]
-            : [{ cmd: "git", args: ["merge", "--ff-only", UP_STAGING], show: "git merge --ff-only " + UP_STAGING + " (перемотка на " + behind + ")", cwd: MAIN }];
-        const job = await enqueue({ treeKey: "orchestrator-staging", cwd: MAIN, label: ahead ? "Слить " + UP_STAGING + " в локальный staging" : "Догнать " + UP_STAGING, taskId: "sync-staging", lane: "ops", steps, extra: { pipeline: true } });
+            ? [
+                  {
+                      cmd: "git",
+                      args: ["merge", "--no-ff", UP_STAGING, "-m", "merge: " + UP_STAGING + " в локальный staging"],
+                      show:
+                          "git merge --no-ff " +
+                          UP_STAGING +
+                          " (ветки разошлись: своих " +
+                          ahead +
+                          ", чужих " +
+                          behind +
+                          ")",
+                      cwd: MAIN,
+                  },
+              ]
+            : [
+                  {
+                      cmd: "git",
+                      args: ["merge", "--ff-only", UP_STAGING],
+                      show: "git merge --ff-only " + UP_STAGING + " (перемотка на " + behind + ")",
+                      cwd: MAIN,
+                  },
+              ];
+        const job = await enqueue({
+            treeKey: "orchestrator-staging",
+            cwd: MAIN,
+            label: ahead ? "Слить " + UP_STAGING + " в локальный staging" : "Догнать " + UP_STAGING,
+            taskId: "sync-staging",
+            lane: "ops",
+            steps,
+            extra: { pipeline: true },
+        });
         return send(res, 200, { ok: true, id: job.id, message: (ahead ? "Слияние" : "Перемотка") + " поставлено: " + job.id + (enabled("release") ? ". Пуш staging — при выкате стенда." : "") });
     }
     if (url.pathname === "/api/fetch") {
@@ -1044,7 +1428,16 @@ export async function api(req, res, url) {
         if (b.op === "start") {
             try {
                 const j = await trainStart(viewOf(req, url));
-                return send(res, 200, { ok: true, job: publicJob(j), message: "Поезд: " + trainNow().keys.map((k) => treeByKey(k).tag).join(" + ") + " — проверка на staging + все вместе поставлена" });
+                return send(res, 200, {
+                    ok: true,
+                    job: publicJob(j),
+                    message:
+                        "Поезд: " +
+                        trainNow()
+                            .keys.map((k) => treeByKey(k).tag)
+                            .join(" + ") +
+                        " — проверка на staging + все вместе поставлена",
+                });
             }
             catch (e) {
                 return send(res, 400, { error: e.message });
@@ -1094,13 +1487,30 @@ export async function api(req, res, url) {
             }
             const steps = v.keys.flatMap((k) => {
                 const t = treeByKey(k);
-                return [{ cmd: "git", args: ["merge", "--no-ff", t.branch, "-m", "merge: " + t.branch], show: "git merge --no-ff " + t.branch + " (" + t.tag + ")", cwd: MAIN }, mergeShaStep(t.branch)];
+                return [
+                    {
+                        cmd: "git",
+                        args: ["merge", "--no-ff", t.branch, "-m", "merge: " + t.branch],
+                        show: "git merge --no-ff " + t.branch + " (" + t.tag + ")",
+                        cwd: MAIN,
+                    },
+                    mergeShaStep(t.branch),
+                ];
             });
-            const job = await enqueue({ treeKey: "orchestrator-staging", cwd: MAIN, label: "Влить поездом: " + v.keys.map((k) => treeByKey(k).tag).join(" + "), taskId: "merge", lane: "ops", steps, extra: { pipeline: true, trainMerge: trainNow().id } });
+            const job = await enqueue({
+                treeKey: "orchestrator-staging",
+                cwd: MAIN,
+                label: "Влить поездом: " + v.keys.map((k) => treeByKey(k).tag).join(" + "),
+                taskId: "merge",
+                lane: "ops",
+                steps,
+                extra: { pipeline: true, trainMerge: trainNow().id },
+            });
             markTrain({ status: "merging", mergeJob: job.id });
             saveTrain();
             return send(res, 200, publicJob(job));
         }
+        // Отметить вагон влитым вручную (влив сделан мимо диспетчерской): sha обязан быть в истории staging.
         if (b.op === "landed") {
             const x = treeByKey(String(b.key || "")), wave = normWave(b.wave), sha = String(b.sha || "").trim();
             if (!x || !isTrain(x))
@@ -1140,6 +1550,11 @@ export async function api(req, res, url) {
     send(res, 404, { error: "нет такого адреса" });
 }
 
+/**
+ * Действие конвейера (влив слота в staging, выкат стенда, выкат в прод) со страницы или из бота (via: "tg").
+ * Проверки preflight повторяются в момент запуска (enqueueChecked), а не только при нажатии: между нажатием и очередью
+ * мог появиться конфликт, коммит или смена ветки. → { code, body }
+ */
 export async function pipelineStart(b, { view = null, via = "" } = {}) {
     const action = b.action;
     if (!PIPELINE_ACTIONS.includes(action))
@@ -1158,7 +1573,18 @@ export async function pipelineStart(b, { view = null, via = "" } = {}) {
     const snapT = t ? ((snapNow() || {}).trees || []).find((x) => x.key === t.key) : null, branch = t ? (snapT && snapT.branch) || t.plannedBranch : undefined;
     const r = recipe(action, { slotKey: b.slot, branch });
     if (!r)
-        return { code: 400, body: { error: "нет рецепта: " + (action === "deploy-staging" ? "не задано release.stand.run" : action === "release" ? "нет прод-ветки (repo.upstream.main)" : "нет ветки слота") } };
+        return {
+            code: 400,
+            body: {
+                error:
+                    "нет рецепта: " +
+                    (action === "deploy-staging"
+                        ? "не задано release.stand.run"
+                        : action === "release"
+                          ? "нет прод-ветки (repo.upstream.main)"
+                          : "нет ветки слота"),
+            },
+        };
     if (action === "deploy-staging") {
         const wagons = ((snapNow() && snapNow().trees) || []).filter((x) => x.kind === "slot" && x.merge && !((x.stages || []).find((s) => s.id === "stand") || {}).done)
             .map((x) => ({ key: x.key, tag: x.tag, color: x.color, title: x.title }));
@@ -1169,9 +1595,11 @@ export async function pipelineStart(b, { view = null, via = "" } = {}) {
     logEvent("pipeline", { action, slot: String(b.slot || ""), by: via === "tg" ? "бот" : BY_PAGE });
     const check = async () => {
         const p = await preflight(action, b.slot);
+        // «Всё равно» снимает только мягкие проверки (список FORCE_SOFT в relay.mjs); есть красная жёсткая — отказ всегда.
         const forced = action === "merge" && b.force === true ? p.checks.filter((c) => c.ok === false && FORCE_SOFT.has(c.id)) : [];
         if (!p.ok && !(forced.length && p.checks.every((c) => c.ok !== false || FORCE_SOFT.has(c.id))))
             return { ok: false, why: p.checks.filter((c) => c.ok === false).map((c) => c.text + (c.detail ? " (" + String(c.detail).slice(0, 160) + ")" : "")).join("; ") };
+        // вливается ветка, которую видел владелец при нажатии; в папке слота она могла смениться
         if (t) {
             const live = (p.trees || []).find((x) => x.key === t.key);
             if (live && live.branch && live.branch !== branch)
@@ -1182,7 +1610,11 @@ export async function pipelineStart(b, { view = null, via = "" } = {}) {
             const rn = await releaseNotes().catch(() => null);
             Object.assign(extra, { version: (rn && rn.version) || null, wagons: ((rn && rn.waves) || []).map((w) => ({ key: w.branch, tag: w.tag, color: w.color, title: w.title || w.branch })) });
         }
-        return { ok: true, label: r.label + (forced.length ? " (всё равно: снято — " + forced.map((c) => c.id).join(", ") + ")" : ""), extra: { ...extra, ...(forced.length ? { forced: forced.map((c) => c.text) } : {}) } };
+        return {
+            ok: true,
+            label: r.label + (forced.length ? " (всё равно: снято — " + forced.map((c) => c.id).join(", ") + ")" : ""),
+            extra: { ...extra, ...(forced.length ? { forced: forced.map((c) => c.text) } : {}) },
+        };
     };
     const job = await enqueueChecked({ treeKey: r.treeKey, cwd: r.cwd, label: r.label, taskId: action, lane: r.lane, steps: r.steps, extra: { pipeline: true } }, check);
     return { code: 200, body: publicJob(job) };
@@ -1201,15 +1633,13 @@ export function preflightCmd(action, slotKey) {
     }
 }
 
-/** Остановить процесс со страницы (только из списка «можно остановить» монитора). */
+/** Остановить процесс со страницы (только из списка «можно остановить» монитора) вместе с потомками: на Windows —
+ *  taskkill /T, на остальных ОС — обход дерева процессов (proc-tree.mjs), иначе дети остались бы сиротами. */
 function killPid(pid) {
     return new Promise((r) => {
         if (process.platform === "win32")
             return execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => r());
-        try {
-            process.kill(pid, "SIGTERM");
-        }
-        catch { }
+        killPosixTree(pid);
         r();
     });
 }

@@ -1,6 +1,31 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { ORCH_TRAINS_RULE, TRAIN_AREAS, addWagon, removeWagon, findTrain, findWagon, isTrain, moveWagon, newTrain, nextTrainTag, normWave, orderWagons, parseWaveLog, queueState, stagedMarks, trainCommitWaves, trainMergeMessage, trainNext, trainNextAct, trainSlotName, wagonOfTree, wagonStation, waveTrailer, wavesOfMerge } from "./train-rules.mjs";
+import {
+    ORCH_TRAINS_RULE,
+    TRAIN_AREAS,
+    addWagon,
+    removeWagon,
+    findTrain,
+    findWagon,
+    isTrain,
+    moveWagon,
+    newTrain,
+    nextTrainTag,
+    normWave,
+    orderWagons,
+    parseWaveLog,
+    queueState,
+    stagedMarks,
+    trainCommitWaves,
+    trainMergeMessage,
+    trainNext,
+    trainNextAct,
+    trainSlotName,
+    wagonOfTree,
+    wagonStation,
+    waveTrailer,
+    wavesOfMerge,
+} from "./train-rules.mjs";
 
 const PALETTE = [["🟩", "#16a34a"], ["🟦", "#2563eb"], ["🟪", "#9333ea"]];
 // Тесты идут на демо-проекте (test/fixtures/project.demo.json): области api (со сборкой) и web.
@@ -105,7 +130,12 @@ describe("реестр поездов", () => {
 });
 
 describe("очередь вагонов по git", () => {
-    const LOG = ["a1b2c3d\x1f1700000100\x1ffeat(x): WV-1014 — участник\x1fWV-1014\x1e", "\nb2c3d4e\x1f1700000050\x1ffix WV-1014: спека\x1fWV-1014\x1e", "\nc3d4e5f\x1f1700000200\x1fWV-1015 артикулы без строки\x1f\x1e", "\nd4e5f6a\x1f1700000300\x1fchore: что-то\x1f\x1e"].join("");
+    const LOG = [
+        "a1b2c3d\x1f1700000100\x1ffeat(x): WV-1014 — участник\x1fWV-1014\x1e",
+        "\nb2c3d4e\x1f1700000050\x1ffix WV-1014: спека\x1fWV-1014\x1e",
+        "\nc3d4e5f\x1f1700000200\x1fWV-1015 артикулы без строки\x1f\x1e",
+        "\nd4e5f6a\x1f1700000300\x1fchore: что-то\x1f\x1e",
+    ].join("");
     test("разбор лога: строка Wave: — главная; номер из подписи — только для своих коммитов ветки; время коммита — для диаграммы", () => {
         assert.deepEqual(parseWaveLog(LOG).map((c) => c.waves), [["WV-1014"], ["WV-1014"], [], []]);
         assert.deepEqual(parseWaveLog(LOG, { bySubject: true }).map((c) => c.waves), [["WV-1014"], ["WV-1014"], ["WV-1015"], []]);
@@ -190,9 +220,28 @@ describe("влив и страница", () => {
         assert.equal(wagonStation({ wave: "WV-3", state: "wait", waitFor: ["WV-1020@Т3"] }).label, "ждёт WV-1020@Т3");
         assert.equal(wagonStation({ wave: "WV-2", state: "work", commits: 0 }, { tree: "WV-1", issued: "WV-1" }).tone, "depot", "голова ещё не выдана — следующий");
         assert.deepEqual(wagonStation({ wave: "WV-2", state: "work", commits: 0 }, { tree: "WV-2", issued: "WV-2", cur: { id: "impl", label: "Код" } }), { id: "impl", label: "Код", tone: "work" });
-        assert.deepEqual(wagonStation({ wave: "WV-2", state: "work", commits: 2 }, { tree: "WV-2", issued: "WV-2", cur: { id: "review", label: "Ревью" }, committed: true }), { id: "review", label: "Ревью", tone: "check" });
-        assert.deepEqual(wagonStation({ wave: "WV-2", state: "work", commits: 2 }, { tree: "WV-2", issued: "WV-2", cur: { id: "staging", label: "В staging" }, committed: true }), { id: "staging", label: "ждёт влива", tone: "check" });
-        assert.equal(wagonStation({ wave: "WV-2", state: "work", commits: 2 }, { tree: "WV-2", issued: "WV-2", cur: { id: "tests", label: "Тесты" }, committed: false }).tone, "work", "правки в папке — ещё работа");
+        assert.deepEqual(
+            wagonStation(
+                { wave: "WV-2", state: "work", commits: 2 },
+                { tree: "WV-2", issued: "WV-2", cur: { id: "review", label: "Ревью" }, committed: true },
+            ),
+            { id: "review", label: "Ревью", tone: "check" },
+        );
+        assert.deepEqual(
+            wagonStation(
+                { wave: "WV-2", state: "work", commits: 2 },
+                { tree: "WV-2", issued: "WV-2", cur: { id: "staging", label: "В staging" }, committed: true },
+            ),
+            { id: "staging", label: "ждёт влива", tone: "check" },
+        );
+        assert.equal(
+            wagonStation(
+                { wave: "WV-2", state: "work", commits: 2 },
+                { tree: "WV-2", issued: "WV-2", cur: { id: "tests", label: "Тесты" }, committed: false },
+            ).tone,
+            "work",
+            "правки в папке — ещё работа",
+        );
         assert.equal(wagonStation({ wave: "WV-1", state: "staging" }, { tree: "WV-1", stages: st(["stand"]) }).label, "Приёмка");
         assert.deepEqual(wagonStation({ wave: "WV-1", state: "staging" }, { tree: "WV-1", stages: st(["prod"]) }), { id: "prod", label: "В проде", tone: "done" });
         assert.equal(wagonStation({ wave: "WV-1", state: "staging" }, { tree: "WV-1", stages: st([]) }).label, "В staging → стенд");
@@ -203,7 +252,12 @@ describe("влив и страница", () => {
 });
 
 describe("trainCommitWaves: номер строки Wave у агента поезда", () => {
-    const wagons = [{ wave: "WV-1109", state: "staging", commits: 0 }, { wave: "WV-1110", state: "staging", commits: 0 }, { wave: "WV-1122", state: "work", commits: 0 }, { wave: "WV-1112", state: "depot", commits: 0 }];
+    const wagons = [
+        { wave: "WV-1109", state: "staging", commits: 0 },
+        { wave: "WV-1110", state: "staging", commits: 0 },
+        { wave: "WV-1122", state: "work", commits: 0 },
+        { wave: "WV-1112", state: "depot", commits: 0 },
+    ];
     test("вагон дерева уже влит — новый код голове: WV-1122 агента не переписывается на WV-1110", () => {
         const r = trainCommitWaves("wv-1110", wagons);
         assert.equal(r.cur, "WV-1122");

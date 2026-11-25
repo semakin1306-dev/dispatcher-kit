@@ -61,7 +61,13 @@ test("порча ловится: импорт из несуществующег�
     const tmp = copyPage();
     try {
         fs.appendFileSync(path.join(tmp, "ui", "tasks.js"), '\nimport { zzNope } from "./core.js";\nimport { openWarm } from "./warm.js";\n');
-        fs.writeFileSync(path.join(tmp, "index.html"), fs.readFileSync(path.join(tmp, "index.html"), "utf8").replace("</head>", '<link rel="stylesheet" href="https://cdn.example.com/x.css"></head>').replace("<body>", '<body onload="x()">'));
+        fs.writeFileSync(
+            path.join(tmp, "index.html"),
+            fs
+                .readFileSync(path.join(tmp, "index.html"), "utf8")
+                .replace("</head>", '<link rel="stylesheet" href="https://cdn.example.com/x.css"></head>')
+                .replace("<body>", '<body onload="x()">'),
+        );
         const { errors } = await checkUi(tmp);
         const has = (re) => assert.ok(errors.some((e) => re.test(e)), re + "\n" + errors.join("\n"));
         has(/tasks\.js: импорт из несуществующего warm\.js/);

@@ -59,11 +59,30 @@ export function reviewContext(t) {
             plan = plan.slice(0, 9000) + "\n… (план обрезан)";
     }
     let prev = "";
-    const last = [...jobList()].reverse().find((j) => j.tree === t.key && j.task === "review" && j.review && j.review.verdict && j.review.verdict !== "ЗА" && (!t.train || ((j.wagons || {}).waves || []).includes(t.wagon)));
+    const last = [...jobList()]
+        .reverse()
+        .find(
+            (j) =>
+                j.tree === t.key &&
+                j.task === "review" &&
+                j.review &&
+                j.review.verdict &&
+                j.review.verdict !== "ЗА" &&
+                (!t.train || ((j.wagons || {}).waves || []).includes(t.wagon)),
+        );
     if (last) {
         const a = agents.get(t.key), items = a ? a.items : [], i = items.map((x) => x.t === "user" && /Ревью|ревьюер/.test(String(x.text || ""))).lastIndexOf(true);
         const reply = i >= 0 ? items.slice(i + 1).filter((x) => x.t === "assistant" && String(x.text || "").trim()).map((x) => x.text).join("\n").trim() : "";
-        prev = "— Вердикт " + last.review.verdict + " (" + last.id + "):\n" + String(last.review.text || "").slice(0, 3500) + (reply ? "\n— Ответ автора:\n" + reply.slice(-4000) : "\n— Ответа автора дашборд не видит (агент перезапускался) — суди по коду.");
+        prev =
+            "— Вердикт " +
+            last.review.verdict +
+            " (" +
+            last.id +
+            "):\n" +
+            String(last.review.text || "").slice(0, 3500) +
+            (reply
+                ? "\n— Ответ автора:\n" + reply.slice(-4000)
+                : "\n— Ответа автора дашборд не видит (агент перезапускался) — суди по коду.");
     }
     return { plan, prev };
 }
@@ -96,7 +115,18 @@ export async function startReviewNow(key, force) {
     if (!force) {
         const fp = await codeFp(t.path, true), last = [...jobList()].reverse().find((j) => j.tree === key && j.task === "review" && ["ok", "fail"].includes(j.status) && j.review);
         if (last && last.fpStart === last.fpEnd && last.fpEnd === fp)
-            throw new Error(t.tag + ": ревью на этом коде уже есть (вердикт " + last.review.verdict + ", " + last.id + ")" + (last.review.verdict !== "ЗА" && !last.reported ? " — замечания ещё не отданы агенту: кнопка «→ Агенту замечания ревью»" : "") + ". Код не менялся, повтор даст то же самое");
+            throw new Error(
+                t.tag +
+                    ": ревью на этом коде уже есть (вердикт " +
+                    last.review.verdict +
+                    ", " +
+                    last.id +
+                    ")" +
+                    (last.review.verdict !== "ЗА" && !last.reported
+                        ? " — замечания ещё не отданы агенту: кнопка «→ Агенту замечания ревью»"
+                        : "") +
+                    ". Код не менялся, повтор даст то же самое",
+            );
     }
     const br = (await git(t.path, ["rev-parse", "--abbrev-ref", "HEAD"])).out;
     const ctx = reviewContext(t);
@@ -106,7 +136,16 @@ export async function startReviewNow(key, force) {
     // Ревьюер — разовый запуск рантайма: дерево только на чтение, из оболочки — только просмотр истории git.
     // Его ответ пишется в лог прогона, вердикт оттуда достаёт parseReview.
     const step = { cwd: t.path, show: "разовый агент (" + who + ", только чтение)", js: async (write, job) => {
-            const r = await runOnce({ prompt, cwd: t.path, model, readOnly: true, allowBash: REVIEW_BASH, maxTurns: 60, timeoutMs: REVIEW_LIMIT_MS, onProc: (c) => procs.set(job.id, c) }).finally(() => procs.delete(job.id));
+            const r = await runOnce({
+                prompt,
+                cwd: t.path,
+                model,
+                readOnly: true,
+                allowBash: REVIEW_BASH,
+                maxTurns: 60,
+                timeoutMs: REVIEW_LIMIT_MS,
+                onProc: (c) => procs.set(job.id, c),
+            }).finally(() => procs.delete(job.id));
             write(String(r.text || "") + "\n");
             if (!r.ok)
                 throw new Error("ревьюер завершился с кодом " + (r.code ?? "?"));
@@ -123,8 +162,20 @@ export function reviewEscalate(t) {
     if (jobList().some((j) => j.tree === t.key && j.task === "review" && !FINAL.includes(j.status)))
         return;
     const last = [...jobList()].reverse().find((j) => j.tree === t.key && j.task === "review" && j.review);
-    const txt = "Ответ слота " + t.tag + " (" + t.key + "): ревью дважды вернулось с вопросами, агент разобрал их (согласен с частью, с остальным — нет, доводы в его последнем ответе). Автопоезд третье ревью сам не ставит.\n\nПоследнее ревью (" + (last ? last.id : "?") + "):\n" + String((last && last.review && last.review.text) || "").slice(0, 3000) +
-        "\n\nРеши: принять волну с этими разногласиями — отдельной строкой «ПРИНЯТЬ РЕВЬЮ " + t.tag + "» (дашборд отметит станцию, автопоезд поставит коммит); или назови пункт, который слот обязан поправить, — блоком slot:" + t.tag + ".";
+    const txt =
+        "Ответ слота " +
+        t.tag +
+        " (" +
+        t.key +
+        "): ревью дважды вернулось с вопросами, агент разобрал их (согласен с частью, с остальным — нет, доводы в его последнем ответе). Автопоезд третье ревью сам не ставит.\n\nПоследнее ревью (" +
+        (last ? last.id : "?") +
+        "):\n" +
+        String((last && last.review && last.review.text) || "").slice(0, 3000) +
+        "\n\nРеши: принять волну с этими разногласиями — отдельной строкой «ПРИНЯТЬ РЕВЬЮ " +
+        t.tag +
+        "» (дашборд отметит станцию, автопоезд поставит коммит); или назови пункт, который слот обязан поправить, — блоком slot:" +
+        t.tag +
+        ".";
     if (!inboxCards().some((x) => x.kind === "relay" && x.tree === t.key && isOrch(x.to) && /дважды вернулось с вопросами/.test(x.text || ""))) {
         const card = { id: ibId(), kind: "relay", tree: t.key, to: "orchestrator", toTag: "ОРК", text: txt, at: Date.now() };
         addCard(card);
@@ -177,7 +228,14 @@ export function loadReviewNotes() {
 export const recentNotes = (key) => (S.reviewNotes[key] || []).filter((n) => Date.now() - n.at < 48 * 3600e3);
 
 export function reviewToChat(job) {
-    const note = { id: "rv-" + job.id, t: "review", at: Date.now(), jobId: job.id, verdict: job.review ? job.review.verdict : "", text: job.review ? job.review.text : (job.summary || "ревьюер не дал вердикта") };
+    const note = {
+        id: "rv-" + job.id,
+        t: "review",
+        at: Date.now(),
+        jobId: job.id,
+        verdict: job.review ? job.review.verdict : "",
+        text: job.review ? job.review.text : job.summary || "ревьюер не дал вердикта",
+    };
     S.reviewNotes[job.tree] = [...(S.reviewNotes[job.tree] || []).filter((n) => n.id !== note.id), note].slice(-3);
     saveJson(REVIEW_NOTES_FILE, S.reviewNotes);
     const a = agents.get(job.tree);

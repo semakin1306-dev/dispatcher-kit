@@ -17,64 +17,70 @@ const has = (project, dotted) => {
 }
 
 export const MODULES = [
-  {
-    id: "review",
-    title: "Независимое ревью",
-    about: "Разовый агент-ревьюер читает правку слота перед вливом и выносит вердикт: ЗА, ВОПРОСЫ или ПРОТИВ.",
-    default: true,
-    missing: () => [],
-  },
-  {
-    id: "backlog",
-    title: "Бэклог",
-    about: "Карточки идей и находок, которые не входят в текущий эпик, и их разбор.",
-    default: true,
-    missing: () => [],
-  },
-  {
-    id: "retro",
-    title: "Ретро эпика",
-    about: "После закрытия эпика разовый агент разбирает журнал событий и предлагает правки процесса карточками бэклога.",
-    default: false,
-    after: ["backlog"],
-    missing: () => [],
-  },
-  {
-    id: "machines",
-    title: "Машины прогонов",
-    about: "Проверки идут не только на этой машине, но и на других по ssh: код доставляется по sha, место выбирается по памяти.",
-    default: false,
-    missing: (p) => Object.values(p.machines || {}).some((m) => m.ssh) ? [] : ["в `machines` нет ни одной машины с полем `ssh`"],
-  },
-  {
-    id: "release",
-    title: "Выкат",
-    about: "Выкат стенда и прода командами из конфига; влив интеграционной ветки в прод-ветку — только кнопкой человека.",
-    default: false,
-    missing: (p) => has(p, "release.stand.run") || has(p, "release.prod.run") || has(p, "release.prod.pushDeploys") ? [] : ["не задано ни `release.stand.run`, ни `release.prod.run`, ни `release.prod.pushDeploys`"],
-  },
-  {
-    id: "accept",
-    title: "Приёмка на стенде",
-    about: "Агент слота пишет чек-лист приёмки, прогон идёт командой из конфига, вердикт ставит человек.",
-    default: false,
-    missing: (p) => has(p, "accept.run") ? [] : ["не задано `accept.run` — команда прогона приёмки"],
-  },
-  {
-    id: "tg",
-    title: "Телеграм-бот вопросов",
-    about: "Вопросы агентов приходят в Телеграм с кнопками вариантов; ответ из бота равен ответу со страницы.",
-    default: false,
-    missing: () => [],
-  },
-  {
-    id: "win-desktop",
-    title: "Рабочий стол Windows",
-    about: "Монитор машины, раскладка окон редактора по слотам, ярлыки запуска.",
-    default: false,
-    platform: "win32",
-    missing: () => [],
-  },
+    {
+        id: "review",
+        title: "Независимое ревью",
+        about: "Разовый агент-ревьюер читает правку слота перед вливом и выносит вердикт: ЗА, ВОПРОСЫ или ПРОТИВ.",
+        default: true,
+        missing: () => [],
+    },
+    {
+        id: "backlog",
+        title: "Бэклог",
+        about: "Карточки идей и находок, которые не входят в текущий эпик, и их разбор.",
+        default: true,
+        missing: () => [],
+    },
+    {
+        id: "retro",
+        title: "Ретро эпика",
+        about: "После закрытия эпика разовый агент разбирает журнал событий и предлагает правки процесса карточками бэклога.",
+        default: false,
+        after: ["backlog"],
+        missing: () => [],
+    },
+    {
+        id: "machines",
+        title: "Машины прогонов",
+        about: "Проверки идут не только на этой машине, но и на других по ssh: код доставляется по sha, место выбирается по памяти.",
+        default: false,
+        missing: (p) =>
+            Object.values(p.machines || {}).some((m) => m.ssh)
+                ? []
+                : ["в `machines` нет ни одной машины с полем `ssh`"],
+    },
+    {
+        id: "release",
+        title: "Выкат",
+        about: "Выкат стенда и прода командами из конфига; влив интеграционной ветки в прод-ветку — только кнопкой человека.",
+        default: false,
+        missing: (p) =>
+            has(p, "release.stand.run") || has(p, "release.prod.run") || has(p, "release.prod.pushDeploys")
+                ? []
+                : ["не задано ни `release.stand.run`, ни `release.prod.run`, ни `release.prod.pushDeploys`"],
+    },
+    {
+        id: "accept",
+        title: "Приёмка на стенде",
+        about: "Агент слота пишет чек-лист приёмки, прогон идёт командой из конфига, вердикт ставит человек.",
+        default: false,
+        missing: (p) => (has(p, "accept.run") ? [] : ["не задано `accept.run` — команда прогона приёмки"]),
+    },
+    {
+        id: "tg",
+        title: "Телеграм-бот вопросов",
+        about: "Вопросы агентов приходят в Телеграм с кнопками вариантов; ответ из бота равен ответу со страницы.",
+        default: false,
+        missing: () => [],
+    },
+    {
+        id: "win-desktop",
+        title: "Рабочий стол Windows",
+        about: "Монитор машины, раскладка окон редактора по слотам, ярлыки запуска.",
+        default: false,
+        platform: "win32",
+        missing: () => [],
+    },
 ]
 
 export const MODULE_IDS = MODULES.map((m) => m.id)

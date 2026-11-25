@@ -260,7 +260,19 @@ test("разбор: комментарии и строки не в счёт, ${�
         "const a = [...S.jobs]", "if (S.x === 1) S.y++", "delete S.acc[k]", "x.S.z = 1", "const re = /S.q/; f(S)",
     ].join("\n");
     const { hits, bare } = scanState(src);
-    assert.deepEqual(hits.map((h) => h.field + ":" + h.kind + ":" + h.line), ["snap:read:2", "train:write:3", "manual:mutate:4", "inbox:mutate:5", "jobs:read:6", "x:read:7", "y:write:7", "acc:mutate:8"]);
+    assert.deepEqual(
+        hits.map((h) => h.field + ":" + h.kind + ":" + h.line),
+        [
+            "snap:read:2",
+            "train:write:3",
+            "manual:mutate:4",
+            "inbox:mutate:5",
+            "jobs:read:6",
+            "x:read:7",
+            "y:write:7",
+            "acc:mutate:8",
+        ],
+    );
     assert.deepEqual(bare, [10]);
 });
 
@@ -270,7 +282,16 @@ if (process.argv.includes("--print")) {
         if (r.field)
             ((by[r.field] ||= {})[r.mod] ||= []).push(r.line + (r.kind === "read" ? "" : r.kind === "write" ? "w" : "m"));
     const f = foreign(rows);
-    console.log("обращений к S: " + rows.length + "; чужих чтений: " + Object.values(f.reads).reduce((a, l) => a + l.length, 0) + ", чужих записей: " + f.writes.length + ", полей без объявления: " + f.unknown.length);
+    console.log(
+        "обращений к S: " +
+            rows.length +
+            "; чужих чтений: " +
+            Object.values(f.reads).reduce((a, l) => a + l.length, 0) +
+            ", чужих записей: " +
+            f.writes.length +
+            ", полей без объявления: " +
+            f.unknown.length,
+    );
     console.log("поле | владелец | кто обращается (модуль:строки; w — запись, m — правка внутри)");
     for (const fld of Object.keys(S))
         console.log(fld + " | " + (OWNERS[fld] || "?") + " | " + Object.entries(by[fld] || {}).map(([m, l]) => (m === OWNERS[fld] ? "*" : "") + m + ":" + l.join(",")).join("; "));

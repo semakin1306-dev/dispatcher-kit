@@ -42,7 +42,18 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * по ответу об автономии. selfCommit — коммиты агента слота: word | station | free (commit-rules.mjs).
  */
 export const SETTINGS_FILE = path.join(DATA, "settings.json")
-export const settings = { autoResults: true, autoTrain: false, autoCommit: false, autoMerge: false, autoSyncConflict: false, fullPermissions: false, selfCommit: "word", retroAuto: false, tgBot: false, commitTrailer: "" }
+export const settings = {
+  autoResults: true,
+  autoTrain: false,
+  autoCommit: false,
+  autoMerge: false,
+  autoSyncConflict: false,
+  fullPermissions: false,
+  selfCommit: "word",
+  retroAuto: false,
+  tgBot: false,
+  commitTrailer: "",
+}
 
 // Журнал прогонов: runs.jsonl, только дозапись. Каждая смена записи прогона — строка; при старте побеждает последняя
 // строка по id. В памяти — последние KEEP_JOBS прогонов, на диске — все.

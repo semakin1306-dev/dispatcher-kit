@@ -19,7 +19,14 @@ const CHECKS = ["build", "guards", "tests", "review", "regress"];
 const tree = (o = {}) => ({ key: KEY, kind: "slot", branch: "dev/wv-0000-sample", exists: true, readOnly: false, ahead: 1, dirtyTracked: 0, dirtyUntracked: 0, hasCode: true, fp: FP, ownerQ: null,
     verdict: { tests: "green", build: "notneeded", guards: "green", regress: "notneeded", note: "", bnote: "", gnote: "", rnote: "" }, ...o });
 
-const greenAuto = () => ({ impl: "коммитов впереди staging: 1", build: "сборка не нужна", guards: "тайпчек долга зелёный", tests: "зелёные на текущем коде", review: "независимый ревьюер «ЗА»", regress: "тронутые пути не задевают соседей" });
+const greenAuto = () => ({
+    impl: "коммитов впереди staging: 1",
+    build: "сборка не нужна",
+    guards: "тайпчек долга зелёный",
+    tests: "зелёные на текущем коде",
+    review: "независимый ревьюер «ЗА»",
+    regress: "тронутые пути не задевают соседей",
+});
 const done = (st) => st.filter((x) => x.done).map((x) => x.id);
 const MERGE = { sha: "46e748eac8a1b2c3d4e5f60718293a4b5c6d7e8f", ct: 1793880000000, subject: "Merge branch 'dev/wv-0000-sample' into staging" };
 
@@ -66,7 +73,21 @@ describe("dropEmptyChecks — пустая ветка проверки не за
 
 describe("mergedCarry — влитая ветка засчитывает проверки, прошедшие до влива", () => {
     test("влита и после влива ничего нет — тесты/гарды/регресс зелёные, сборка ok, пояснения сняты, merged", () => {
-        const t = tree({ ahead: 0, hasCode: false, verdict: { tests: "stale", build: "stale", guards: "none", regress: "notneeded", note: "зелёные тесты шли на другом коде", bnote: "x", gnote: "y", rnote: "z" } }), auto = {};
+        const t = tree({
+                ahead: 0,
+                hasCode: false,
+                verdict: {
+                    tests: "stale",
+                    build: "stale",
+                    guards: "none",
+                    regress: "notneeded",
+                    note: "зелёные тесты шли на другом коде",
+                    bnote: "x",
+                    gnote: "y",
+                    rnote: "z",
+                },
+            }),
+            auto = {};
         mergedCarry(t, auto, MERGE);
         assert.deepEqual(t.verdict, { tests: "green", build: "ok", guards: "green", regress: "notneeded", note: "", bnote: "", gnote: "", rnote: "", merged: true });
         for (const k of CHECKS)
@@ -91,7 +112,18 @@ describe("mergedCarry — влитая ветка засчитывает про�
     });
     test("после влива доделка (коммиты или правки) — проверки заново, вердикт не трогается (влита, впереди 2 коммита)", () => {
         for (const o of [{ ahead: 2 }, { ahead: 0, dirtyTracked: 1 }]) {
-            const t = tree({ ...o, verdict: { tests: "stale", build: "ok", guards: "green", regress: "green", note: "зелёные тесты шли на другом коде" } }), before = JSON.stringify(t.verdict), auto = {};
+            const t = tree({
+                    ...o,
+                    verdict: {
+                        tests: "stale",
+                        build: "ok",
+                        guards: "green",
+                        regress: "green",
+                        note: "зелёные тесты шли на другом коде",
+                    },
+                }),
+                before = JSON.stringify(t.verdict),
+                auto = {};
             mergedCarry(t, auto, MERGE);
             assert.equal(JSON.stringify(t.verdict), before);
             assert.deepEqual(auto, {});
@@ -215,7 +247,14 @@ test("STAGING_MERGE_RE: влив ветки в staging — да, подтяги�
     const { STAGING_MERGE_RE } = await import("./stations.mjs");
     for (const s of ["merge: dev/wv-0010-orders-list — П1", "merge: dev/tr-web-c4 — поезд Т1#4: WV-0015", "merge: hotfix/login-redirect — PUT", "Merge branch 'dev/wv-0900-x' into staging"])
         assert.ok(STAGING_MERGE_RE.test(s), s);
-    for (const s of ["merge: staging в dev/wv-0010-x", "merge: staging -> dev/wv-0010-x", "Merge branch 'staging' into dev/tr-web-guards", "merge: main -> staging (хотфикс)", "hotfix: staging -> main (сайт)", "release: staging -> main"])
+    for (const s of [
+        "merge: staging в dev/wv-0010-x",
+        "merge: staging -> dev/wv-0010-x",
+        "Merge branch 'staging' into dev/tr-web-guards",
+        "merge: main -> staging (хотфикс)",
+        "hotfix: staging -> main (сайт)",
+        "release: staging -> main",
+    ])
         assert.ok(!STAGING_MERGE_RE.test(s), s);
 });
 

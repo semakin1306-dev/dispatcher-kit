@@ -54,7 +54,19 @@ function barsOf(t, evs, now) {
         const start = starts[0] || t.firstCommitAt || 0;
         const landed = t.merge && t.merge.ct && !t.reopened ? { at: t.merge.ct, sha: t.merge.sha } : (merges.find((x) => x.at >= start) || null);
         const doneAt = (start && dones.find((d) => d >= start && (!landed || d <= landed.at))) || 0;
-        return [{ wave: (t.wave || "").toUpperCase() || t.tag, title: t.title || "", ci: -1, start, doneAt, mergedAt: landed ? landed.at : 0, mergeSha: landed ? landed.sha : "", after: [], slot: true }];
+        return [
+            {
+                wave: (t.wave || "").toUpperCase() || t.tag,
+                title: t.title || "",
+                ci: -1,
+                start,
+                doneAt,
+                mergedAt: landed ? landed.at : 0,
+                mergeSha: landed ? landed.sha : "",
+                after: [],
+                slot: true,
+            },
+        ];
     }
     const wv = t.wagonsView || t.wagons || [], issued = new Map();
     for (const e of mine)
@@ -175,7 +187,18 @@ export function ganttLayout({ trees = [], events = [], now = Date.now(), openAsk
             if (b)
                 b.waits.push({ ...w, to: w.to || b.end || now });
         }
-        return { key: t.key, tag: t.tag || t.key, title: t.title || "", color: t.color || "#8b929c", train: !!t.train, branch: t.branch || "", deps: t.deps || [], bars, syncs: syncs.sort((a, b) => a.at - b.at), stale };
+        return {
+            key: t.key,
+            tag: t.tag || t.key,
+            title: t.title || "",
+            color: t.color || "#8b929c",
+            train: !!t.train,
+            branch: t.branch || "",
+            deps: t.deps || [],
+            bars,
+            syncs: syncs.sort((a, b) => a.at - b.at),
+            stale,
+        };
     });
     const byTag = new Map(rows.map((r) => [String(r.tag), r])), byWave = new Map();
     for (const r of rows)
@@ -242,7 +265,25 @@ export function ganttLayout({ trees = [], events = [], now = Date.now(), openAsk
     const to = Math.max(now, ...times) + PAD;
     for (const r of rows)
         delete r.deps;
-    return { now, from, to, rows: [{ key: STAGING_KEY, tag: "staging", title: "вливы", color: "#e0663a", staging: true, marks: marks.sort((a, b) => a.at - b.at), questions: general }, ...rows], links, forecast: fc };
+    return {
+        now,
+        from,
+        to,
+        rows: [
+            {
+                key: STAGING_KEY,
+                tag: "staging",
+                title: "вливы",
+                color: "#e0663a",
+                staging: true,
+                marks: marks.sort((a, b) => a.at - b.at),
+                questions: general,
+            },
+            ...rows,
+        ],
+        links,
+        forecast: fc,
+    };
 }
 
 function barAt(bars, at) {
@@ -263,7 +304,17 @@ function forecastOf(rows, now) {
             per.set(r.key, { med: epicMed, basis: "эпик", n: epicN });
     }
     if (!per.size)
-        return { ok: false, note: "прогноза нет: влитых волн в эпике " + epicN + " (нужно от " + FORECAST_MIN_EPIC + ", у поезда — от " + FORECAST_MIN_TRAIN + " своих) — очередь показана порядком, без времени" };
+        return {
+            ok: false,
+            note:
+                "прогноза нет: влитых волн в эпике " +
+                epicN +
+                " (нужно от " +
+                FORECAST_MIN_EPIC +
+                ", у поезда — от " +
+                FORECAST_MIN_TRAIN +
+                " своих) — очередь показана порядком, без времени",
+        };
     const byTag = new Map(rows.map((r) => [String(r.tag), r]));
     const predEnd = (r, b) => Math.max(0, ...b.after.map((d) => {
         const [wv, tg] = String(d).split("@");
@@ -311,5 +362,17 @@ function forecastOf(rows, now) {
             delete b.fEnd;
         }
     const used = [...per.values()];
-    return { ok: true, basis: [...new Set(used.map((p) => p.basis))].join(", "), medianMs: median(used.map((p) => p.med)), note: "прогноз по медиане «выдача → влив»: " + used.map((p) => p.basis).filter((x, i, a) => a.indexOf(x) === i).join(" / ") + ", волн " + Math.max(...used.map((p) => p.n)) };
+    return {
+        ok: true,
+        basis: [...new Set(used.map((p) => p.basis))].join(", "),
+        medianMs: median(used.map((p) => p.med)),
+        note:
+            "прогноз по медиане «выдача → влив»: " +
+            used
+                .map((p) => p.basis)
+                .filter((x, i, a) => a.indexOf(x) === i)
+                .join(" / ") +
+            ", волн " +
+            Math.max(...used.map((p) => p.n)),
+    };
 }

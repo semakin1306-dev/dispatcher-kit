@@ -57,7 +57,19 @@ function repo() {
 test("сброс в здешней папке: страховочный тег и reset --hard на цель", async () => {
     const { d, one, two } = repo();
     let log = "";
-    const r = await localSlotReset({ key: "slot1", branch: "dev/x", pcPath: d, target: one, expect: { pcHead: two }, tags: [{ name: "backup/e1/slot1/t", sha: two, what: "здешняя ветка" }] }, (s) => { log += s; });
+    const r = await localSlotReset(
+        {
+            key: "slot1",
+            branch: "dev/x",
+            pcPath: d,
+            target: one,
+            expect: { pcHead: two },
+            tags: [{ name: "backup/e1/slot1/t", sha: two, what: "здешняя ветка" }],
+        },
+        (s) => {
+            log += s;
+        },
+    );
     assert.deepEqual(r, { ok: true });
     assert.equal(g(d, "rev-parse", "HEAD"), one);
     assert.equal(g(d, "rev-parse", "backup/e1/slot1/t"), two);

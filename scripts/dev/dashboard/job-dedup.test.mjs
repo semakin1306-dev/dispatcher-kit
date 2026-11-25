@@ -38,7 +38,16 @@ test("два одновременных enqueue одного прогона (п�
     loadJobs([]);
     for (const q of Object.values(queues))
         q.length = 0;
-    const a = { treeKey: "orchestrator-staging", cwd: process.cwd(), label: "x", taskId: "api-test", input: "wv-0001", lane: "db", steps: [{ show: "x", cmd: "node", args: ["-v"], cwd: process.cwd() }], extra: { requeuedFrom: "j1" } };
+    const a = {
+        treeKey: "orchestrator-staging",
+        cwd: process.cwd(),
+        label: "x",
+        taskId: "api-test",
+        input: "wv-0001",
+        lane: "db",
+        steps: [{ show: "x", cmd: "node", args: ["-v"], cwd: process.cwd() }],
+        extra: { requeuedFrom: "j1" },
+    };
     const [j1, j2] = await Promise.all([enqueue(a), enqueue({ ...a, extra: { requeuedFrom: "j2" } })]);
     assert.equal(j1.id, j2.id);
 });

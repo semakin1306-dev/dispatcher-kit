@@ -38,7 +38,13 @@ export const BASH_ASK = [
 /** Своё в своей ветке, пока открыто разрешение коммита (кнопка или самокоммит слота). */
 export const GIT_GRANT_OK = /^git\s+(add\s+(?!.*(?:\s-A\b|\s--all\b|\s-u\b|\s\.(?:\s|$)|\*))|commit\b(?!.*--no-verify)|status|diff|log|show|rev-parse|branch\s+--show-current|ls-files|check-ignore)/
 /** Режим «без владельца»: агенту слота в своей ветке ещё и влив staging с разбором конфликта. */
-export const gitNightRe = (remote = "origin") => new RegExp("^(cd\\s+\\S+\\s*$|git\\s+(add\\s+(?!.*(?:\\s-A\\b|\\s--all\\b|\\s-u\\b|\\s\\.(?:\\s|$)|\\*))|commit\\b(?!.*--no-verify)|merge\\s+(staging|" + esc(remote) + "\\/staging|--continue|--abort|--no-edit\\s+staging|--no-ff\\s+staging)\\b|checkout\\s+(--ours|--theirs|--)\\s|restore\\s|status|diff|log|show|rev-parse|ls-files|branch\\s+--show-current|merge-base|check-ignore))")
+export const gitNightRe = (remote = "origin") =>
+  new RegExp(
+    "^(cd\\s+\\S+\\s*$|git\\s+(add\\s+(?!.*(?:\\s-A\\b|\\s--all\\b|\\s-u\\b|\\s\\.(?:\\s|$)|\\*))|commit\\b(?!.*--no-verify)|merge\\s+(staging|" +
+      esc(remote) +
+      "\\/staging|--continue|--abort|--no-edit\\s+staging|--no-ff\\s+staging)\\b|checkout\\s+(--ours|--theirs|--)\\s|" +
+      "restore\\s|status|diff|log|show|rev-parse|ls-files|branch\\s+--show-current|merge-base|check-ignore))",
+  )
 /** Чтение — его можно и в папках диспетчерской, и над защищёнными файлами. */
 export const READ_VERB = /^(cat|type|ls|dir|head|tail|wc|grep|rg|find|stat|file|less|more|tree)\b|^git\s+(-C\s+\S+\s+)?(status|log|diff|show|ls-files|rev-parse|branch\s+--show-current|blame)\b/i
 /** Инструменты диспетчерской, которые агентам можно звать; сброс ветки слота — только с --dry-run (сам сброс — слово человека). */

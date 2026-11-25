@@ -63,7 +63,12 @@ const PYTEST_RED = [
     "── fail (код 1) за 1 с ──",
 ].join("\n");
 
-const TSC_RED = Array.from({ length: 6 }, (_, i) => `src/m${i}.ts(3,20): error TS2307: Cannot find module '@demo/core' or its corresponding type declarations.`).join("\n") + "\n── fail (код 2) за 9 с ──";
+const TSC_RED =
+    Array.from(
+        { length: 6 },
+        (_, i) =>
+            `src/m${i}.ts(3,20): error TS2307: Cannot find module '@demo/core' or its corresponding type declarations.`,
+    ).join("\n") + "\n── fail (код 2) за 9 с ──";
 
 const PW_RED = [
     "Running 4 tests using 2 workers",
@@ -189,7 +194,16 @@ describe("ревью, дифф, повторы, куски", () => {
         assert.equal(digestDiff("diff --git a/x b/x\n+1\n", { budget: 500 }), "diff --git a/x b/x\n+1\n");
     });
     test("collapse: строки, отличные только числами и хешами, — одной со счётчиком", () => {
-        assert.deepEqual(collapse(["Progress: resolved 1, added 0", "Progress: resolved 2689, added 971", "снимок 96c4ba6f48 готов", "снимок 7d12e50a72 готов", "другое"]), ["Progress: resolved 1, added 0  (×2)", "снимок 96c4ba6f48 готов  (×2)", "другое"]);
+        assert.deepEqual(
+            collapse([
+                "Progress: resolved 1, added 0",
+                "Progress: resolved 2689, added 971",
+                "снимок 96c4ba6f48 готов",
+                "снимок 7d12e50a72 готов",
+                "другое",
+            ]),
+            ["Progress: resolved 1, added 0  (×2)", "снимок 96c4ba6f48 готов  (×2)", "другое"],
+        );
     });
     test("sliceLog: grep с контекстом и номерами строк, разрыв «…», предел --max и продолжение --from", () => {
         const t = Array.from({ length: 50 }, (_, i) => (i === 10 || i === 30 ? "FAIL x" + i : "строка " + i)).join("\n");

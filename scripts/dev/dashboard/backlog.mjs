@@ -67,7 +67,15 @@ const waveOfBranch = (br) => {
     return m ? "WV-" + m[1].padStart(4, "0") : "";
 };
 
-const epicsPub = () => openEpics().map((e) => ({ id: e.id, title: e.title || e.id, waves: (e.slots || []).filter((x) => !x.archived).map((x) => ({ wv: waveOfBranch(x.branch), tag: x.tag, title: x.title })).filter((x) => x.wv) }));
+const epicsPub = () =>
+    openEpics().map((e) => ({
+        id: e.id,
+        title: e.title || e.id,
+        waves: (e.slots || [])
+            .filter((x) => !x.archived)
+            .map((x) => ({ wv: waveOfBranch(x.branch), tag: x.tag, title: x.title }))
+            .filter((x) => x.wv),
+    }));
 
 function outbox(kind, to, text) {
     fs.appendFileSync(OUTBOX, JSON.stringify({ at: Date.now(), kind, to, text }) + "\n");
@@ -102,7 +110,14 @@ export async function backlogOp(b) {
         backlogItems(true);
         if (b.research) {
             const rr = await backlogOp({ op: "research", id: r.item.id });
-            return { code: rr.code, body: { ...rr.body, item: publicItem(backlogItems(true).find((x) => x.id === r.item.id) || r.item), message: r.item.id + " добавлен; " + (rr.body.message || rr.body.error || "") } };
+            return {
+                code: rr.code,
+                body: {
+                    ...rr.body,
+                    item: publicItem(backlogItems(true).find((x) => x.id === r.item.id) || r.item),
+                    message: r.item.id + " добавлен; " + (rr.body.message || rr.body.error || ""),
+                },
+            };
         }
         return { code: 200, body: { ok: true, item: publicItem(r.item), message: r.item.id + " добавлен в бэклог" } };
     }
@@ -209,7 +224,20 @@ export function backlogDoc(id) {
         return null;
     }
     const it = cur.item;
-    return { tree: id, tag: id, title: it.title, wave: it.wave || "", epic: it.epic || null, orch: it.epic && epicById(it.epic) ? orchKey(it.epic) : null, kind: "backlog", key: "backlog|" + id, file: fwd(cur.path), text: cur.text, to: BACKLOG_KEY, agent: BACKLOG_KEY };
+    return {
+        tree: id,
+        tag: id,
+        title: it.title,
+        wave: it.wave || "",
+        epic: it.epic || null,
+        orch: it.epic && epicById(it.epic) ? orchKey(it.epic) : null,
+        kind: "backlog",
+        key: "backlog|" + id,
+        file: fwd(cur.path),
+        text: cur.text,
+        to: BACKLOG_KEY,
+        agent: BACKLOG_KEY,
+    };
 }
 
 let refreshTimer = null;
@@ -229,7 +257,20 @@ export async function backlogHttp(req, res, h) {
         refreshTimer.unref();
     }
     if (req.method === "GET") {
-        return h.send(res, 200, { dir: fwd(BACKLOG_DIR), tree: fwd(BACKLOG_WT), cli: BL_CLI, items: backlogItems().map(publicItem), statuses: STATUSES, words: STATUS_WORD, retro: retroTriageBrief(), epics: epicsPub(), agent: agentPublic(BACKLOG_KEY), dry: DRY, sink: SINK, now: Date.now() });
+        return h.send(res, 200, {
+            dir: fwd(BACKLOG_DIR),
+            tree: fwd(BACKLOG_WT),
+            cli: BL_CLI,
+            items: backlogItems().map(publicItem),
+            statuses: STATUSES,
+            words: STATUS_WORD,
+            retro: retroTriageBrief(),
+            epics: epicsPub(),
+            agent: agentPublic(BACKLOG_KEY),
+            dry: DRY,
+            sink: SINK,
+            now: Date.now(),
+        });
     }
     if (req.method !== "POST")
         return h.send(res, 404, { error: "нет такого адреса" });

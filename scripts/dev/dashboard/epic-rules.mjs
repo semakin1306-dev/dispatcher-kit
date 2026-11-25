@@ -8,6 +8,7 @@ import { readJson, saveJson } from "./store.mjs";
 import { DATA, DRY, HERE, logEvent } from "./config.mjs";
 import { openEpics, orchKey } from "./trees.mjs";
 import { PROJECT } from "../slots.mjs";
+import { prompt } from "../prompts.mjs";
 
 export const RULES_REL = ".claude/plans/waves/agent-briefs/SESSIONS-common-rules.md";
 export const RULES_TEMPLATE = path.join(HERE, "..", "..", "..", "agent-briefs", "SESSIONS-common-rules.md");
@@ -47,9 +48,9 @@ export function rulesLint(text, project = PROJECT) {
 }
 
 export function rulesTask({ file, findings }) {
-    return ["Диспетчерская: общие правила сессий эпика (" + file.replace(/\\/g, "/") + ") расходятся с тем, как устроены слоты: по ним агенты слотов сами готовят папку и гоняют проверки, которые делает диспетчерская, получают ложное красное и встают.",
+    return [prompt("epic-rules-head", { file: file.replace(/\\/g, "/") }),
         "Устаревшие строки:", ...findings.map((f) => "- стр. " + f.n + ": «" + f.line + "» — " + f.why),
-        "Перепиши раздел «Первые шаги» и эти строки по образцу " + RULES_TEMPLATE.replace(/\\/g, "/") + " (разделы «Первые шаги» и «Проверки» — как там; своё эпика оставь). Это твой файл плана — правка твоя, слотам пересылать не нужно: они читают файл сами, а абзац «ОКРУЖЕНИЕ ПАПКИ» в их подсказке уже говорит то же.",
+        prompt("epic-rules-fix", { template: RULES_TEMPLATE.replace(/\\/g, "/") }),
     ].join("\n");
 }
 

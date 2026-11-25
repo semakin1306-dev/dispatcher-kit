@@ -16,7 +16,29 @@ import { bumpVer } from "./events.mjs";
 import { execFile } from "./spawner.mjs";
 import { getSecret, secretStamp } from "./secrets.mjs";
 import { wordGrants } from "./owner-word.mjs";
-import { BOT_ABOUT, CB_RE, TG_MAX_AGE_MS, TG_TEXT_WAIT_MS, allPicked, answeredMessage, backoffMs, buttonCheck, buttonId, cardQuestions, composeTgAnswer, failKind, goneMessage, mergeDoneMessage, mergeMessage, needsDashboard, questionMessage, redact, senderOk, statusText, textPrompt } from "./tg-rules.mjs";
+import {
+    BOT_ABOUT,
+    CB_RE,
+    TG_MAX_AGE_MS,
+    TG_TEXT_WAIT_MS,
+    allPicked,
+    answeredMessage,
+    backoffMs,
+    buttonCheck,
+    buttonId,
+    cardQuestions,
+    composeTgAnswer,
+    failKind,
+    goneMessage,
+    mergeDoneMessage,
+    mergeMessage,
+    needsDashboard,
+    questionMessage,
+    redact,
+    senderOk,
+    statusText,
+    textPrompt,
+} from "./tg-rules.mjs";
 
 /** Имя секрета с токеном бота (secrets.mjs): переменная DISPATCHER_SECRET_TG_TOKEN, файл или DPAPI. */
 export const TG_SECRET = "tg-token";
@@ -166,7 +188,14 @@ export function createTgBot(deps) {
             if (st.cards[c.id])
                 continue;
             const hash = sha(c.text);
-            const prev = Object.keys(st.cards).find((id) => !ids.has(id) && st.cards[id].tree === c.tree && st.cards[id].hash === hash && ["open", "gone"].includes(st.cards[id].state) && t - (st.cards[id].sentAt || 0) < DEDUP_MS);
+            const prev = Object.keys(st.cards).find(
+                (id) =>
+                    !ids.has(id) &&
+                    st.cards[id].tree === c.tree &&
+                    st.cards[id].hash === hash &&
+                    ["open", "gone"].includes(st.cards[id].state) &&
+                    t - (st.cards[id].sentAt || 0) < DEDUP_MS,
+            );
             if (prev) {
                 const rec = st.cards[prev];
                 delete st.cards[prev];
@@ -295,12 +324,22 @@ export function createTgBot(deps) {
         const rec = st.merges[btn.mkey];
         btn.used = true;
         // порог слова — одна таблица на всю диспетчерскую (owner-word.mjs); сервер проверит его ещё раз
-        const r = wordGrants("tg", "merge") ? await deps.merge(rec.slot).catch((e) => ({ code: 500, body: { error: e.message } })) : { code: 403, body: { error: "влив из Telegram не разрешён — на дашборде" } };
+        const r = wordGrants("tg", "merge")
+            ? await deps.merge(rec.slot).catch((e) => ({ code: 500, body: { error: e.message } }))
+            : { code: 403, body: { error: "влив из Telegram не разрешён — на дашборде" } };
         rec.state = r.code === 200 ? "merging" : "failed";
         rec.closedAt = now();
         closeButtons(rec);
         deps.log("tg.merge", { tree: rec.slot, ok: r.code === 200, job: (r.body && r.body.id) || null, error: r.code === 200 ? undefined : String((r.body && r.body.error) || "").slice(0, 200) });
-        await edit(rec.mid, mergeDoneMessage(rec.who, r.code === 200 ? "⏳ Влив поставлен в очередь (" + r.body.id + "): условия проверит сервер, итог — на дашборде." : "✗ Не поставлен: " + ((r.body && r.body.error) || "отказ")));
+        await edit(
+            rec.mid,
+            mergeDoneMessage(
+                rec.who,
+                r.code === 200
+                    ? "⏳ Влив поставлен в очередь (" + r.body.id + "): условия проверит сервер, итог — на дашборде."
+                    : "✗ Не поставлен: " + ((r.body && r.body.error) || "отказ"),
+            ),
+        );
     }
     let rejLogged = 0;
     async function onCallback(cq) {
@@ -359,7 +398,11 @@ export function createTgBot(deps) {
         if (!cardId && st.wait && now() <= st.wait.until)
             cardId = st.wait.cardId;
         if (!cardId)
-            return reply(rt && Object.values(st.merges).some((r) => r.mid === rt) ? "Влив — только кнопкой «Влить в staging»." : "Не понял, к какому вопросу ответ: ответьте reply на сообщение вопроса или нажмите «✍ Ответить текстом».");
+            return reply(
+                rt && Object.values(st.merges).some((r) => r.mid === rt)
+                    ? "Влив — только кнопкой «Влить в staging»."
+                    : "Не понял, к какому вопросу ответ: ответьте reply на сообщение вопроса или нажмите «✍ Ответить текстом».",
+            );
         const rec = st.cards[cardId];
         if (!rec || !cardOpen(cardId))
             return reply("На этот вопрос уже ответили (или его сняли) — повторно не отправляю.");
@@ -393,7 +436,15 @@ export function createTgBot(deps) {
         });
     }
     async function poll(quick = false) {
-        const ups = await deps.api("getUpdates", { ...(st.offset ? { offset: st.offset } : {}), timeout: quick ? 0 : 50, allowed_updates: ["message", "callback_query"] }, { timeoutMs: quick ? 20000 : 65000 });
+        const ups = await deps.api(
+            "getUpdates",
+            {
+                ...(st.offset ? { offset: st.offset } : {}),
+                timeout: quick ? 0 : 50,
+                allowed_updates: ["message", "callback_query"],
+            },
+            { timeoutMs: quick ? 20000 : 65000 },
+        );
         for (const u of ups || []) {
             st.offset = Math.max(st.offset || 0, u.update_id + 1);
             try {
@@ -547,5 +598,11 @@ export function tgPublic() {
     if (!S.tg)
         return { on: false, ...statusText("off") };
     const st = S.tg.store || {};
-    return { on: !!settings.tgBot, ...statusText(S.tg.status.code, S.tg.status.detail), linked: !!(S.tg.meta && S.tg.meta.chatId != null), open: Object.values(st.cards || {}).filter((r) => r.state === "open").length, at: S.tg.status.at };
+    return {
+        on: !!settings.tgBot,
+        ...statusText(S.tg.status.code, S.tg.status.detail),
+        linked: !!(S.tg.meta && S.tg.meta.chatId != null),
+        open: Object.values(st.cards || {}).filter((r) => r.state === "open").length,
+        at: S.tg.status.at,
+    };
 }

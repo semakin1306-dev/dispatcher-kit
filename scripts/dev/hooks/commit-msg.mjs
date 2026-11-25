@@ -15,6 +15,7 @@ import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { fixWaveMessage } from "../dashboard/commit-rules.mjs"
+import { samePath } from "../paths.mjs"
 
 export const SCRIPT = fileURLToPath(import.meta.url)
 export const WAVE_FILE = "dispatcher-wave.json"
@@ -49,7 +50,12 @@ export function writeSlotWave(dir, { cur = "", allowed = [] } = {}) {
 
 /** Номер волны для хука: файл диспетчерской, иначе ветка. → { cur, allowed } */
 export function slotWave(gitDir) {
-  try { const w = JSON.parse(fs.readFileSync(path.join(gitDir, WAVE_FILE), "utf8")); if (w && (w.cur || (w.allowed || []).length)) return { cur: w.cur || "", allowed: w.allowed || [] } } catch { /* нет файла — по ветке */ }
+  try {
+    const w = JSON.parse(fs.readFileSync(path.join(gitDir, WAVE_FILE), "utf8"))
+    if (w && (w.cur || (w.allowed || []).length)) return { cur: w.cur || "", allowed: w.allowed || [] }
+  } catch {
+    /* нет файла — по ветке */
+  }
   let head = ""; try { head = fs.readFileSync(path.join(gitDir, "HEAD"), "utf8") } catch { /* без HEAD номера нет */ }
   const m = /^ref:\s*refs\/heads\/(.+)$/m.exec(head), w = m && /wv-?0*(\d{1,4})(?!\d)/i.exec(m[1])
   return w ? { cur: "WV-" + w[1].padStart(4, "0"), allowed: [] } : { cur: "", allowed: [] }
@@ -74,7 +80,9 @@ export function installSlotHooks(dir, { wave = null, node = process.execPath } =
   const ours = path.join(gitDir, HOOKS_DIR), origFile = path.join(ours, ORIG_FILE)
   const effective = path.resolve(dir, git(dir, ["rev-parse", "--git-path", "hooks"]))
   let orig = effective
-  if (fwd(effective).toLowerCase() === fwd(ours).toLowerCase()) { try { orig = fs.readFileSync(origFile, "utf8").trim() } catch { orig = path.join(git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "hooks") } }
+  // своя папка уже стоит (повторная установка): git и .git-файл пишут путь каждый по-своему — сравнение по файловой системе,
+  // иначе папка слота запомнилась бы как папка проекта и хуки передавали бы вызов сами себе
+  if (samePath(effective, ours)) { try { orig = fs.readFileSync(origFile, "utf8").trim() } catch { orig = path.join(git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "hooks") } }
   fs.mkdirSync(ours, { recursive: true })
   fs.writeFileSync(origFile, fwd(orig) + "\n")
   const fwdTo = (name) => "h=" + sq(fwd(path.join(orig, name))) + "\n[ -x \"$h\" ] && exec \"$h\" \"$@\"\nexit 0\n"
@@ -95,7 +103,13 @@ if (isMain) {
   const args = process.argv.slice(2)
   if (args[0] === "--install") {
     const dir = path.resolve(args[1] || "."), wi = args.indexOf("--wave")
-    try { const r = installSlotHooks(dir, { wave: wi > 0 ? args[wi + 1] : null }); console.log("хуки слота: " + r.hooks + " (хуки проекта: " + r.orig + ")") } catch (e) { console.error(e.message); process.exitCode = 1 }
+    try {
+      const r = installSlotHooks(dir, { wave: wi > 0 ? args[wi + 1] : null })
+      console.log("хуки слота: " + r.hooks + " (хуки проекта: " + r.orig + ")")
+    } catch (e) {
+      console.error(e.message)
+      process.exitCode = 1
+    }
   } else if (args[0]) {
     // Хук не останавливает коммит: любая ошибка — только строка в stderr.
     try {

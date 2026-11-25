@@ -3,17 +3,42 @@
 export const EPIC_FIELDS = ["epic", "tree", "key", "slot", "orch", "from", "to"];
 
 export const GLOBAL_EVENTS = new Map([
-    ["server.pulse", "пульс сервера раз в минуту"], ["slow.loop", "задержка цикла сервера"], ["server.start", "запуск диспетчерской"],
-    ["restart.interrupted", "оборвано перезапуском"], ["drain", "подготовка к перезапуску"], ["pc.gap", "ПК спал"],
-    ["logs.rotated", "уборка логов"], ["events.rotated", "уборка журнала"], ["jobs.infra-migrated", "перевод старых прогонов"],
-    ["graph.queue", "очередь записи в граф"], ["graph.server", "сервер графа"], ["ssh.gate", "очередь ssh"],
-    ["host.state", "машина прогонов"], ["host.reason", "машина прогонов"], ["settings", "настройки панели"], ["merge.auto.toggle", "выключатель автовлива (20.11)"], ["slot.sync.auto.toggle", "выключатель автоподтягивания (20.11)"], ["auto.owner.mode", "режим «без владельца»"],
-    ["accept.synced", "чек-листы приёмки (по волнам)"], ["release.notes", "заметки релиза"], ["backlog.add", "бэклог (вне эпика)"],
-    ["backlog.set", "бэклог (вне эпика)"], ["backlog.sent", "бэклог (вне эпика)"], ["backlog.tree", "дерево агента бэклога"], ["warm.auto", "подогрев кеша"],
-    ["hawk.intake", "ошибки прода (Hawk) — бэклог"], ["machine.relay", "реле машин"], ["deadline.hit", "сроки ожиданий"], ["retro.start", "ретро — поле epic ставится явно"],
-    ["state.corrupt", "битый файл состояния"], ["hygiene.run", "уборка деревьев (все слоты)"], ["hygiene.done", "уборка деревьев (все слоты)"],
+    ["server.pulse", "пульс сервера раз в минуту"],
+    ["slow.loop", "задержка цикла сервера"],
+    ["server.start", "запуск диспетчерской"],
+    ["restart.interrupted", "оборвано перезапуском"],
+    ["drain", "подготовка к перезапуску"],
+    ["pc.gap", "ПК спал"],
+    ["logs.rotated", "уборка логов"],
+    ["events.rotated", "уборка журнала"],
+    ["jobs.infra-migrated", "перевод старых прогонов"],
+    ["graph.queue", "очередь записи в граф"],
+    ["graph.server", "сервер графа"],
+    ["ssh.gate", "очередь ssh"],
+    ["host.state", "машина прогонов"],
+    ["host.reason", "машина прогонов"],
+    ["settings", "настройки панели"],
+    ["merge.auto.toggle", "выключатель автовлива (20.11)"],
+    ["slot.sync.auto.toggle", "выключатель автоподтягивания (20.11)"],
+    ["auto.owner.mode", "режим «без владельца»"],
+    ["accept.synced", "чек-листы приёмки (по волнам)"],
+    ["release.notes", "заметки релиза"],
+    ["backlog.add", "бэклог (вне эпика)"],
+    ["backlog.set", "бэклог (вне эпика)"],
+    ["backlog.sent", "бэклог (вне эпика)"],
+    ["backlog.tree", "дерево агента бэклога"],
+    ["warm.auto", "подогрев кеша"],
+    ["hawk.intake", "ошибки прода (Hawk) — бэклог"],
+    ["machine.relay", "реле машин"],
+    ["deadline.hit", "сроки ожиданий"],
+    ["retro.start", "ретро — поле epic ставится явно"],
+    ["state.corrupt", "битый файл состояния"],
+    ["hygiene.run", "уборка деревьев (все слоты)"],
+    ["hygiene.done", "уборка деревьев (все слоты)"],
     ["train.run", "поезд влива: несколько слотов (ключи — в keys)"],
-    ["tg.status", "бот владельца в Telegram: связь (один на все эпики)"], ["tg.reject", "бот в Telegram: чужой отправитель"], ["tg.error", "бот в Telegram: отказ запроса"],
+    ["tg.status", "бот владельца в Telegram: связь (один на все эпики)"],
+    ["tg.reject", "бот в Telegram: чужой отправитель"],
+    ["tg.error", "бот в Telegram: отказ запроса"],
 ]);
 
 export const GLOBAL_IN_JOURNAL = new Set(["server.start", "restart.interrupted", "drain", "host.state", "host.reason", "pc.gap", "auto.owner.mode"]);
@@ -71,7 +96,14 @@ const who = (k) => (typeof k === "string" ? k.replace(/^orchestrator@.*/, "ОР�
 
 export function journalLine(e) {
     const pair = e.from || e.to ? who(e.from || "") + " → " + who(e.to || "") : who(e.tree || e.key || e.slot || "");
-    const what = e.brief || e.detail || e.why || e.summary || (e.cmd ? e.cmd + " " + (e.target || "") + (e.ok === false ? " — отказ" : "") : "") || (e.task ? e.task + (e.status ? " " + e.status : "") : "") || (e.verdict ? "вердикт " + e.verdict : "");
+    const what =
+        e.brief ||
+        e.detail ||
+        e.why ||
+        e.summary ||
+        (e.cmd ? e.cmd + " " + (e.target || "") + (e.ok === false ? " — отказ" : "") : "") ||
+        (e.task ? e.task + (e.status ? " " + e.status : "") : "") ||
+        (e.verdict ? "вердикт " + e.verdict : "");
     const size = e.chars ? " (" + e.chars + " зн.)" : e.sec ? " (" + e.sec + " с)" : "";
     return hhmm(e.at) + " " + e.type + (pair.trim() ? " " + pair : "") + (what ? ": " + String(what).replace(/\s+/g, " ").slice(0, 200) : "") + size;
 }

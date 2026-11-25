@@ -14,7 +14,13 @@ const { provide } = await import("./late.mjs");
 const { S } = await import("./state.mjs");
 const { addJob, jobList, loadJobs } = await import("./jobs.mjs");
 const E = await import("./epics.mjs");
-after(async () => { const st = await import("./store.mjs"); await st.settled(); st.flushSync(); await st.settled(); fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => {
+    const st = await import("./store.mjs");
+    await st.settled();
+    st.flushSync();
+    await st.settled();
+    fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
 let calls = [];
 
 provide({ "runner.mjs": { enqueue: async (o) => {

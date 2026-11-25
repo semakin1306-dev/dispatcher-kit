@@ -30,7 +30,11 @@ test("слот: выдача — agent.start, ГОТОВО — slot.done, вли
 });
 
 test("поезд: полосы вагонов по times, ожидание ВЛИТЬ с подписью проверок, вопрос оркестратора по метке и его длительность", () => {
-    const t = train("tr-a", "Т1", [wag("WV-1001", "staging", { issuedAt: at(0), doneAt: at(2), mergedAt: at(4), mergeSha: "m1" }), wag("WV-1002", "work", { issuedAt: at(4.5), doneAt: at(6) }), wag("WV-1003", "depot")]);
+    const t = train("tr-a", "Т1", [
+        wag("WV-1001", "staging", { issuedAt: at(0), doneAt: at(2), mergedAt: at(4), mergeSha: "m1" }),
+        wag("WV-1002", "work", { issuedAt: at(4.5), doneAt: at(6) }),
+        wag("WV-1003", "depot"),
+    ]);
     const events = [
         { at: at(6.5), type: "merge.wait", tree: "tr-a", need: "sec,regress" }, { at: at(7), type: "merge.wait.red", tree: "tr-a" },
         { at: at(7), type: "owner.question", tree: "orchestrator@e", brief: "1. Влить Т1 сейчас? (а) да" }, { at: at(9), type: "owner.answer", key: "orchestrator@e", via: "tg" },
@@ -75,7 +79,11 @@ test("живое ожидание ВЛИТЬ (t.mergeWait) и закрытое �
 
 test("подтягивания staging: журнал + syncMark без двойной отметки; засечка «отстаёт и пересекается»", () => {
     const t = { key: "s1", tag: "П1", kind: "slot", wave: "wv-1", branch: "dev/s1", firstCommitAt: at(1), syncMark: { at: at(3) + 2000, how: "merge" }, behind: 4, staleRisk: ["a.ts", "b.ts"] };
-    const events = [{ at: at(2), type: "slot.sync", key: "s1", result: "ok", detail: "перемотано на staging" }, { at: at(3), type: "slot.sync", key: "s1", result: "ok", detail: "слияние" }, { at: at(3.5), type: "slot.sync", key: "s1", result: "fail" }];
+    const events = [
+        { at: at(2), type: "slot.sync", key: "s1", result: "ok", detail: "перемотано на staging" },
+        { at: at(3), type: "slot.sync", key: "s1", result: "ok", detail: "слияние" },
+        { at: at(3.5), type: "slot.sync", key: "s1", result: "fail" },
+    ];
     const r = ganttLayout({ trees: [t], events, now: NOW }).rows[1];
     assert.deepEqual(r.syncs.map((s) => [s.at, s.how]), [[at(2), "ff"], [at(3), "merge"]]);
     assert.deepEqual(r.stale, { at: NOW, behind: 4, n: 2, files: ["a.ts", "b.ts"] });

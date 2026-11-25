@@ -4,7 +4,21 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { validateProject, normalizeProject, loadProject, loadProjectCode, forgetProject, expandPath, branchNameOk, ProjectConfigError, BASE_DENY, HOME, agentBinPath, isBareCommand, fwd } from "./project.mjs"
+import {
+  validateProject,
+  normalizeProject,
+  loadProject,
+  loadProjectCode,
+  forgetProject,
+  expandPath,
+  branchNameOk,
+  ProjectConfigError,
+  BASE_DENY,
+  HOME,
+  agentBinPath,
+  isBareCommand,
+  fwd,
+} from "./project.mjs"
 import { moduleStates, MODULE_IDS } from "./modules-catalog.mjs"
 
 const DEMO = path.join(HOME, "test", "fixtures", "project.demo.json")

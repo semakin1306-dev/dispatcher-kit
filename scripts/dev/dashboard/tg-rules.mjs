@@ -6,7 +6,15 @@ import { composeAnswers, optPrefix, ownerQuestions, answerText as optAnswerText 
 // Вопрос про выкат, прод или «принудительно» боту не отдаётся: приходит уведомление «нужно решение на дашборде» без
 // кнопок. \b в JS кириллицу не видит — границы слова через просмотр вокруг.
 const W = "[а-яёa-z0-9_]";
-export const DASH_ONLY_RE = new RegExp("(?<!" + W + ")(?:прод(?:а|е|у|ом)?|продакшн[а-яё]*|production|prod|main|релиз[а-яё]*|release|выкат[а-яё]*|выкаты[а-яё]*|раскат[а-яё]*|деплой[а-яё]*|deploy[a-z]*|принудительн[а-яё]*|force|пуш[а-яё]*|push|сброс[а-яё]*|reset)(?!" + W + ")", "i");
+export const DASH_ONLY_RE = new RegExp(
+    "(?<!" +
+        W +
+        ")(?:прод(?:а|е|у|ом)?|продакшн[а-яё]*|production|prod|main|релиз[а-яё]*|release|выкат[а-яё]*|выкаты[а-яё]*|" +
+        "раскат[а-яё]*|деплой[а-яё]*|deploy[a-z]*|принудительн[а-яё]*|force|пуш[а-яё]*|push|сброс[а-яё]*|reset)(?!" +
+        W +
+        ")",
+    "i",
+);
 export const needsDashboard = (text) => DASH_ONLY_RE.test(String(text || ""));
 /** Срок жизни кнопки; DASH_TG_BUTTON_HOURS перекрывает. */
 export const TG_BUTTON_TTL_MS = (Number(process.env.DASH_TG_BUTTON_HOURS) || 24) * 3600e3;
@@ -148,9 +156,24 @@ export function backoffMs(kind, fails = 1, retryAfter = 0) {
 }
 
 const SETUP_CMD = "node scripts/dev/tg-setup.mjs";
-const STATUS = { off: "выключен", dry: "сухой экземпляр — не опрашивает", "no-token": "нет токена — запустите " + SETUP_CMD, starting: "подключаюсь…", ok: "подключён", conflict: "409: getUpdates читает кто-то ещё", auth: "токен отвергнут — заново " + SETUP_CMD, net: "нет сети до api.telegram.org", api: "Telegram отказал", rate: "Telegram просит паузу (429)" };
+const STATUS = {
+    off: "выключен",
+    dry: "сухой экземпляр — не опрашивает",
+    "no-token": "нет токена — запустите " + SETUP_CMD,
+    starting: "подключаюсь…",
+    ok: "подключён",
+    conflict: "409: getUpdates читает кто-то ещё",
+    auth: "токен отвергнут — заново " + SETUP_CMD,
+    net: "нет сети до api.telegram.org",
+    api: "Telegram отказал",
+    rate: "Telegram просит паузу (429)",
+};
 /** Строка состояния для страницы: { code, text, warn }. */
-export const statusText = (code, detail = "") => ({ code, text: (STATUS[code] || code) + (detail && code !== "ok" ? " (" + cut(detail, 120) + ")" : ""), warn: ["conflict", "auth", "net", "api", "no-token"].includes(code) });
+export const statusText = (code, detail = "") => ({
+    code,
+    text: (STATUS[code] || code) + (detail && code !== "ok" ? " (" + cut(detail, 120) + ")" : ""),
+    warn: ["conflict", "auth", "net", "api", "no-token"].includes(code),
+});
 
 /** Токен — вон из любой строки, которая может попасть в журнал или на страницу. */
 export const redact = (s, token) => {

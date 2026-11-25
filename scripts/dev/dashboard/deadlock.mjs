@@ -1,6 +1,7 @@
 // deadlock.mjs — детектор тупиков правил: одна и та же просьба с одной и той же причиной отказа несколько раз подряд на
 // том же коде — замкнутый круг. Каждый отказ по отдельности верен, вместе они стоят на месте; такой круг поднимается
 // человеку карточкой, а не повторяется молча.
+import { prompt } from "../prompts.mjs";
 export const DEADLOCK_STREAK = 3;
 const KEEP = 400;
 export const normWhy = (why) => String(why || "").replace(/\s*\([^)]*\)/g, "").replace(/\bj\d+\b/g, "j").replace(/\s+/g, " ").trim().slice(0, 300);
@@ -23,7 +24,7 @@ export function streakNote(map, scope, sig, now = Date.now()) {
 }
 
 export const streakClear = (map, scope) => map.delete(scope);
-export const DEADLOCK_HINT = "Повтор той же просьбы ничего не даст: каждое правило по отдельности отказывает верно, вместе они не пускают. Реши, что меняется — код (правка в слоте), порядок (сначала другая ветка), путь (поезд влива вместо прогона, «принудительно» по слову владельца) — или вынеси владельцу одним пунктом в «Вопросы владельцу».";
+export const DEADLOCK_HINT = prompt("deadlock-hint");
 
 export function deadlockText({ what, why, n, since, now = Date.now() }) {
     const min = Math.max(1, Math.round((now - since) / 60000));

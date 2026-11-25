@@ -14,4 +14,15 @@ import * as runner from "./runner.mjs"
 import * as stations from "./stations.mjs"
 import * as snapshot from "./snapshot.mjs"
 
-provide({ "accept.mjs": accept, "agents.mjs": agentsMod, "autochain.mjs": autochain, "monitor.mjs": monitor, "pipeline.mjs": pipeline, "relay.mjs": relay, "review.mjs": review, "runner.mjs": runner, "stations.mjs": stations, "snapshot.mjs": snapshot })
+provide({
+  "accept.mjs": accept,
+  "agents.mjs": agentsMod,
+  "autochain.mjs": autochain,
+  "monitor.mjs": monitor,
+  "pipeline.mjs": pipeline,
+  "relay.mjs": relay,
+  "review.mjs": review,
+  "runner.mjs": runner,
+  "stations.mjs": stations,
+  "snapshot.mjs": snapshot,
+})

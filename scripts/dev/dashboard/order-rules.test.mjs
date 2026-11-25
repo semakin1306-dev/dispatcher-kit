@@ -3,7 +3,17 @@ import assert from "node:assert/strict";
 import { buildOrderMap, mayMergeNow } from "./ui/order-rules.js";
 
 const MERGED = { ahead: 0, stages: [{ id: "commit", done: true }, { id: "staging", done: true }] };
-const T = (tag, deps = [], o = {}) => ({ key: "w-" + tag, tag, title: "волна " + tag, color: "#" + tag.slice(1).padStart(6, "0"), kind: "slot", ahead: 1, deps: deps.map(([t, merged]) => ({ key: "w-" + t, tag: t, merged: !!merged })), stages: [], ...o });
+const T = (tag, deps = [], o = {}) => ({
+    key: "w-" + tag,
+    tag,
+    title: "волна " + tag,
+    color: "#" + tag.slice(1).padStart(6, "0"),
+    kind: "slot",
+    ahead: 1,
+    deps: deps.map(([t, merged]) => ({ key: "w-" + t, tag: t, merged: !!merged })),
+    stages: [],
+    ...o,
+});
 const tags = (ns) => ns.map((n) => n.tag).join(",");
 
 test("серые — без зависимостей (любой порядок); цветные — в цепочках; волна = 1 + самая поздняя зависимость", () => {

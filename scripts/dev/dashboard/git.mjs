@@ -87,7 +87,35 @@ export async function git(cwd, args, timeout = 20000, raw = false) {
     const release = await gitSlot();
     try {
         const t0 = Date.now(), what = "git " + args.slice(0, 2).join(" ");
-        const r = await procBy((done) => gitExec("git", args, { cwd, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }, (err, stdout, stderr) => done({ ok: !err, out: raw ? String(stdout || "") : String(stdout || "").trim(), err: String(stderr || "").trim() })), timeout, what + " в " + cwd, (cap) => ({ ok: false, out: "", err: what + ": процесс не вернул ответ за " + human(cap) + " — снят", hung: true }), killTree);
+        const r = await procBy(
+            (done) =>
+                gitExec(
+                    "git",
+                    args,
+                    {
+                        cwd,
+                        timeout,
+                        windowsHide: true,
+                        maxBuffer: 16 * 1024 * 1024,
+                        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+                    },
+                    (err, stdout, stderr) =>
+                        done({
+                            ok: !err,
+                            out: raw ? String(stdout || "") : String(stdout || "").trim(),
+                            err: String(stderr || "").trim(),
+                        }),
+                ),
+            timeout,
+            what + " в " + cwd,
+            (cap) => ({
+                ok: false,
+                out: "",
+                err: what + ": процесс не вернул ответ за " + human(cap) + " — снят",
+                hung: true,
+            }),
+            killTree,
+        );
         if (process.env.DASH_TIMING && Date.now() - t0 > 1500)
             console.log("[время] git " + (Date.now() - t0) + " мс: " + args.slice(0, 4).join(" ") + " в " + cwd);
         return r;

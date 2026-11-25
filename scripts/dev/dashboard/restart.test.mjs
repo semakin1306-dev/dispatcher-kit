@@ -52,13 +52,22 @@ describe("pageToken — токен запуска со страницы", () => 
 
 describe("markBootInterrupted — итог «оборвано при перезапуске»", () => {
     test("идущие, ждущие и стоящие в очереди — interrupted с пометкой; список для события", () => {
-        const runs = [{ id: "j1", task: "api-test", tree: "wv1", status: "ok" }, { id: "j2", task: "slot-up", tree: "wv2", status: "running" }, { id: "j3", task: "slot-up", tree: "wv2", status: "queued" }, { id: "j4", task: "lint", tree: "wv3", status: "waiting", endedAt: 5 }];
+        const runs = [
+            { id: "j1", task: "api-test", tree: "wv1", status: "ok" },
+            { id: "j2", task: "slot-up", tree: "wv2", status: "running" },
+            { id: "j3", task: "slot-up", tree: "wv2", status: "queued" },
+            { id: "j4", task: "lint", tree: "wv3", status: "waiting", endedAt: 5 },
+        ];
         const { runs: out, cut } = markBootInterrupted(runs, 1000);
         assert.deepEqual(out.map((j) => j.status), ["ok", "interrupted", "interrupted", "interrupted"]);
         assert.ok(out.slice(1).every((j) => j.bootInterrupted));
         assert.equal(out[1].endedAt, 1000);
         assert.equal(out[3].endedAt, 5);
-        assert.deepEqual(cut, [{ id: "j2", task: "slot-up", tree: "wv2", was: "running" }, { id: "j3", task: "slot-up", tree: "wv2", was: "queued" }, { id: "j4", task: "lint", tree: "wv3", was: "waiting" }]);
+        assert.deepEqual(cut, [
+            { id: "j2", task: "slot-up", tree: "wv2", was: "running" },
+            { id: "j3", task: "slot-up", tree: "wv2", was: "queued" },
+            { id: "j4", task: "lint", tree: "wv3", was: "waiting" },
+        ]);
         assert.equal(runs[1].status, "running");
     });
 });
@@ -108,11 +117,26 @@ describe("startReason — причина запуска для события se
     });
 });
 
-const FAKE = `const http=require("http");const s=http.createServer((q,r)=>{if(q.url==="/"){r.end('<meta name="dash-token" content="abc123">');return}let b="";q.on("data",d=>b+=d);q.on("end",()=>{if(q.url==="/api/drain"){if(q.headers["x-dash-token"]!=="abc123"){r.writeHead(403,{"content-type":"application/json"});r.end(JSON.stringify({error:"нет токена запуска"}));return}process.stdout.write("drain "+b+"\\n");r.writeHead(503,{"content-type":"application/json"});r.end(JSON.stringify({error:"занят"}));return}r.writeHead(404);r.end("{}")})});s.listen(0,"127.0.0.1",()=>process.stdout.write("PORT "+s.address().port+"\\n"))`;
+const FAKE =
+    `const http=require("http");const s=http.createServer((q,r)=>{if(q.url==="/"){r.end('<meta ` +
+    `name="dash-token" content="abc123">');return}let b="";q.on("data",d=>b+=d);` +
+    `q.on("end",()=>{if(q.url==="/api/drain"){if(q.headers["x-dash-token"]!=="abc123"){` +
+    `r.writeHead(403,{"content-type":"application/json"});r.end(JSON.stringify({error:"нет ` +
+    `токена запуска"}));return}process.stdout.write("drain ` +
+    `"+b+"\\n");r.writeHead(503,{"content-type":"application/json"});r.end(JSON.stringify({error:"занят"}));return}` +
+    `r.writeHead(404);r.end("{}")})});s.listen(0,"127.0.0.1",()=>process.stdout.write("PORT ` +
+    `"+s.address().port+"\\n"))`;
 
 test("dash-sentry.mjs --dry-run: тот же процесс держит порт и молчит 4 мин — «перезапуск»; пульс свежий — «ничего»", { timeout: 60000 }, async () => {
     const SENTRY = resolve(HERE, "../../../tools/dash-sentry.mjs");
-    const fake = spawn(process.execPath, ["-e", `const s=require("http").createServer((q,r)=>r.end("{}"));s.listen(0,"127.0.0.1",()=>process.stdout.write("PORT "+s.address().port+"\\n"))`], { stdio: ["ignore", "pipe", "inherit"] });
+    const fake = spawn(
+        process.execPath,
+        [
+            "-e",
+            `const s=require("http").createServer((q,r)=>r.end("{}"));s.listen(0,"127.0.0.1",()=>process.stdout.write("PORT "+s.address().port+"\\n"))`,
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+    );
     let out = "";
     fake.stdout.on("data", (d) => {
         out += d;
@@ -173,7 +197,10 @@ test("restart-dashboard.mjs: сервер не ответил на /api/drain 3 
         alive = false;
     });
     try {
-        const r = spawn(process.execPath, [RESTART, "--skip-checks"], { env: { ...process.env, DASH_PORT: port, DASH_DIR: dir, DASH_DATA: dir, DASH_DRAIN_PAUSE_MS: "50" }, stdio: ["ignore", "pipe", "pipe"] });
+        const r = spawn(process.execPath, [RESTART, "--skip-checks"], {
+            env: { ...process.env, DASH_PORT: port, DASH_DIR: dir, DASH_DATA: dir, DASH_DRAIN_PAUSE_MS: "50" },
+            stdio: ["ignore", "pipe", "pipe"],
+        });
         let log = "";
         r.stdout.on("data", (d) => {
             log += d;

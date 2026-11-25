@@ -25,7 +25,14 @@ export const secretsDir = (data = DATA) => path.join(data, "secrets");
 
 // Опции у каждой функции — для тестов и утилит: env, dir (папка секретов), platform, dpapi (подмена шифрования),
 // execFile (запуск PowerShell), warn (куда писать предупреждения).
-const optsOf = (o = {}) => ({ env: o.env || process.env, dir: o.dir || secretsDir(), platform: o.platform || process.platform, dpapi: o.dpapi || dpapi, execFile: o.execFile, warn: o.warn || ((s) => console.warn(s)) });
+const optsOf = (o = {}) => ({
+    env: o.env || process.env,
+    dir: o.dir || secretsDir(),
+    platform: o.platform || process.platform,
+    dpapi: o.dpapi || dpapi,
+    execFile: o.execFile,
+    warn: o.warn || ((s) => console.warn(s)),
+});
 const plainFile = (o, name) => path.join(o.dir, name);
 const vaultFile = (o, name) => path.join(o.dir, name + ".dpapi");
 const exists = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
@@ -43,7 +50,22 @@ export function dpapi(op, buf, { entropy, execFile = cp.execFile } = {}) {
         "$e=[Text.Encoding]::UTF8.GetBytes('" + entropy + "'); $s=[Security.Cryptography.DataProtectionScope]::CurrentUser; " +
         "[Console]::Out.Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::" + (op === "protect" ? "Protect" : "Unprotect") + "($b,$e,$s)))";
     return new Promise((res, rej) => {
-        const c = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { windowsHide: true, timeout: 60000, maxBuffer: 64e6 }, (err, out, er) => err ? rej(new Error("хранилище Windows: " + String(er || err.message).trim().split("\n")[0])) : res(Buffer.from(String(out).trim(), "base64")));
+        const c = execFile(
+            "powershell.exe",
+            ["-NoProfile", "-NonInteractive", "-Command", ps],
+            { windowsHide: true, timeout: 60000, maxBuffer: 64e6 },
+            (err, out, er) =>
+                err
+                    ? rej(
+                          new Error(
+                              "хранилище Windows: " +
+                                  String(er || err.message)
+                                      .trim()
+                                      .split("\n")[0],
+                          ),
+                      )
+                    : res(Buffer.from(String(out).trim(), "base64")),
+        );
         c.stdin.end(buf.toString("base64"));
     });
 }

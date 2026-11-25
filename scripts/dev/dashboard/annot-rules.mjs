@@ -1,6 +1,12 @@
 // annot-rules.mjs — чистые правила разметки: разбиение markdown на блоки, построчный дифф, нормализация замечаний и
 // тексты сообщений агенту (замечания к документу, к правке, одобрение, ответ на вопрос). Без файлов и сети.
-const FENCE = /^\s*(```|~~~)/, HEAD = /^(#{1,6})\s+(.*)$/, ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/, ROW = /^\s*\|.*\|\s*$/, SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/, HR = /^\s*([-*_])(\s*\1){2,}\s*$/, QUOTE = /^\s*>\s?(.*)$/;
+const FENCE = /^\s*(```|~~~)/,
+    HEAD = /^(#{1,6})\s+(.*)$/,
+    ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/,
+    ROW = /^\s*\|.*\|\s*$/,
+    SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/,
+    HR = /^\s*([-*_])(\s*\1){2,}\s*$/,
+    QUOTE = /^\s*>\s?(.*)$/;
 
 export function mdBlocks(text) {
     const ls = String(text ?? "").replace(/\r\n?/g, "\n").split("\n"), out = [];
@@ -202,7 +208,22 @@ export function normNote(n, blocks) {
         return null;
     const b2 = n.blockEnd != null ? bs.find((x) => x.i === Number(n.blockEnd)) : null, last = b2 && b2.i > b.i ? b2 : b;
     const sel = cap(String(n.sel || "").trim(), 1500);
-    return { ...out, block: b.i, blockEnd: last.i, line: sel ? fragmentLine(b, sel) : b.line, lineEnd: last.end, sel, quote: cap(sel || bs.filter((x) => x.i >= b.i && x.i <= last.i).map((x) => x.text).join("\n"), 1500) };
+    return {
+        ...out,
+        block: b.i,
+        blockEnd: last.i,
+        line: sel ? fragmentLine(b, sel) : b.line,
+        lineEnd: last.end,
+        sel,
+        quote: cap(
+            sel ||
+                bs
+                    .filter((x) => x.i >= b.i && x.i <= last.i)
+                    .map((x) => x.text)
+                    .join("\n"),
+            1500,
+        ),
+    };
 }
 
 const quoteOf = (s) => String(s || "").split("\n").slice(0, 12).map((l) => "   > " + l).join("\n") + (String(s || "").split("\n").length > 12 ? "\n   > …" : "");
@@ -221,22 +242,91 @@ function noteBody(n) {
 export function docMessage(doc, notes, general = "") {
     const ns = [...notes].sort((a, b) => (a.line || 0) - (b.line || 0)), q = ns.filter((n) => n.kind === "question").length;
     const what = doc.kind === "checklist" ? "чек-листу приёмки " + (doc.wave || "") : doc.kind === "plan" ? "плану волны " + (doc.wave || "") : "документу " + (doc.title || "");
-    const head = "Замечания владельца к " + what.trim() + (doc.file ? " (файл " + doc.file + ")" : "") + " — " + ns.length + " шт., разметка в диспетчерской." +
-        (doc.kind === "checklist" ? " Поправь чек-лист по каждому пункту и пришли его заново блоком ```checklist```." : " Внеси правки в файл по каждому пункту; номера строк — по версии, которую читал владелец.") +
+    const head =
+        "Замечания владельца к " +
+        what.trim() +
+        (doc.file ? " (файл " + doc.file + ")" : "") +
+        " — " +
+        ns.length +
+        " шт., разметка в диспетчерской." +
+        (doc.kind === "checklist"
+            ? " Поправь чек-лист по каждому пункту и пришли его заново блоком ```checklist```."
+            : " Внеси правки в файл по каждому пункту; номера строк — по версии, которую читал владелец.") +
         (q ? " На вопросы (" + q + ") ответь в начале ответа, по номерам." : "");
-    const body = ns.map((n, k) => (k + 1) + ". [" + NOTE_KINDS[n.kind] + "] " + (doc.kind === "checklist" && n.item ? "пункт " + n.item + ", " : "") + lines(n) + "\n" + quoteOf(n.quote) + "\n" + noteBody(n)).join("\n\n");
-    return [head, body, general ? "Общее замечание владельца: " + general : "", doc.kind === "checklist" ? "" : "Когда закончишь — коротко: что поменял по каждому номеру (план владелец перечитает с подсветкой изменений)."].filter(Boolean).join("\n\n");
+    const body = ns
+        .map(
+            (n, k) =>
+                k +
+                1 +
+                ". [" +
+                NOTE_KINDS[n.kind] +
+                "] " +
+                (doc.kind === "checklist" && n.item ? "пункт " + n.item + ", " : "") +
+                lines(n) +
+                "\n" +
+                quoteOf(n.quote) +
+                "\n" +
+                noteBody(n),
+        )
+        .join("\n\n");
+    return [
+        head,
+        body,
+        general ? "Общее замечание владельца: " + general : "",
+        doc.kind === "checklist"
+            ? ""
+            : "Когда закончишь — коротко: что поменял по каждому номеру (план владелец перечитает с подсветкой изменений).",
+    ]
+        .filter(Boolean)
+        .join("\n\n");
 }
 
 export function diffMessage(ctx, notes, general = "") {
     const ns = [...notes].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
-    const head = "Ревью владельца по диффу ветки " + (ctx.branch || "") + " против staging — " + ns.length + " замечани" + (ns.length === 1 ? "е" : ns.length < 5 ? "я" : "й") + ". Исправь в коде по каждому пункту (тесты гоняет владелец; коммит — по правилу КОММИТ твоей подсказки, строка Wave:); на вопросы ответь в начале ответа.";
-    const body = ns.map((n, k) => (k + 1) + ". " + n.path + ":" + n.line + (n.lineEnd > n.line ? "–" + n.lineEnd : "") + (n.side === "old" ? " (удалённая строка, по staging)" : "") + " [" + NOTE_KINDS[n.kind] + "]\n" + (n.code ? n.code.split("\n").slice(0, 12).map((l) => "   │ " + l).join("\n") + "\n" : "") + noteBody(n)).join("\n\n");
+    const head =
+        "Ревью владельца по диффу ветки " +
+        (ctx.branch || "") +
+        " против staging — " +
+        ns.length +
+        " замечани" +
+        (ns.length === 1 ? "е" : ns.length < 5 ? "я" : "й") +
+        ". Исправь в коде по каждому пункту (тесты гоняет владелец; коммит — по правилу КОММИТ твоей подсказки, строка Wave:); на вопросы ответь в начале ответа.";
+    const body = ns
+        .map(
+            (n, k) =>
+                k +
+                1 +
+                ". " +
+                n.path +
+                ":" +
+                n.line +
+                (n.lineEnd > n.line ? "–" + n.lineEnd : "") +
+                (n.side === "old" ? " (удалённая строка, по staging)" : "") +
+                " [" +
+                NOTE_KINDS[n.kind] +
+                "]\n" +
+                (n.code
+                    ? n.code
+                          .split("\n")
+                          .slice(0, 12)
+                          .map((l) => "   │ " + l)
+                          .join("\n") + "\n"
+                    : "") +
+                noteBody(n),
+        )
+        .join("\n\n");
     return [head, body, general ? "Общее: " + general : "", "Ответ — одним блоком: что исправил по каждому номеру (файл:строка), что не стал и почему."].filter(Boolean).join("\n\n");
 }
 
 export function approveMessage(doc, general = "") {
-    return "Владелец одобрил " + (doc.kind === "plan" ? "план волны " + (doc.wave || "") : "документ " + (doc.title || "")) + (doc.file ? " (" + doc.file + ")" : "") + ": план одобрен, работай по нему." + (general ? "\nКомментарий владельца: " + general : "") + "\nЕсли в плане остались открытые вопросы владельцу — они считаются снятыми этим одобрением, кроме явно названных в комментарии.";
+    return (
+        "Владелец одобрил " +
+        (doc.kind === "plan" ? "план волны " + (doc.wave || "") : "документ " + (doc.title || "")) +
+        (doc.file ? " (" + doc.file + ")" : "") +
+        ": план одобрен, работай по нему." +
+        (general ? "\nКомментарий владельца: " + general : "") +
+        "\nЕсли в плане остались открытые вопросы владельцу — они считаются снятыми этим одобрением, кроме явно названных в комментарии."
+    );
 }
 
 export function answerRoute(itemSid, liveSid) {
@@ -248,9 +338,30 @@ export function answerText(item, answer, route, ctx = {}) {
     if (route === "same")
         return "Ответ владельца на твои «Вопросы владельцу»:\n\n" + ans + "\n\nПродолжай работу с учётом ответа.";
     const when = item.at ? new Date(item.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "?";
-    return ["Ответ владельца на вопросы, которые задала прошлая сессия этого " + (ctx.orch ? "оркестратора" : "слота") + " (" + (item.sid ? "сессия " + String(item.sid).slice(0, 8) : "сессия не записана") + ", " + when + "). Сессия с тех пор сменилась" + (ctx.why ? " (" + ctx.why + ")" : "") + " — вот вопрос целиком:",
-        String(item.text || "").split("\n").map((l) => "> " + l).join("\n"),
+    return [
+        "Ответ владельца на вопросы, которые задала прошлая сессия этого " +
+            (ctx.orch ? "оркестратора" : "слота") +
+            " (" +
+            (item.sid ? "сессия " + String(item.sid).slice(0, 8) : "сессия не записана") +
+            ", " +
+            when +
+            "). Сессия с тех пор сменилась" +
+            (ctx.why ? " (" + ctx.why + ")" : "") +
+            " — вот вопрос целиком:",
+        String(item.text || "")
+            .split("\n")
+            .map((l) => "> " + l)
+            .join("\n"),
         "Ответ владельца:\n\n" + ans,
-        [ctx.tag || ctx.wave ? "Волна: " + [ctx.tag, ctx.wave].filter(Boolean).join(" · ") : "", ctx.branch ? "Ветка: " + ctx.branch : "", ctx.plan ? "План: " + ctx.plan : ""].filter(Boolean).join("\n"),
-        "Прочитай план и своё последнее состояние в ветке, затем продолжай работу с учётом ответа."].filter(Boolean).join("\n\n");
+        [
+            ctx.tag || ctx.wave ? "Волна: " + [ctx.tag, ctx.wave].filter(Boolean).join(" · ") : "",
+            ctx.branch ? "Ветка: " + ctx.branch : "",
+            ctx.plan ? "План: " + ctx.plan : "",
+        ]
+            .filter(Boolean)
+            .join("\n"),
+        "Прочитай план и своё последнее состояние в ветке, затем продолжай работу с учётом ответа.",
+    ]
+        .filter(Boolean)
+        .join("\n\n");
 }

@@ -16,7 +16,24 @@ fs.mkdirSync(path.join(TMP, "orch", ".git"), { recursive: true });
 for (const s of ["wv9003-a", "wv9007-b"])
     fs.mkdirSync(path.join(TMP, "wt", s, ".git"), { recursive: true });
 
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "т", status: "open", orch: { path: path.join(TMP, "orch"), branch: "orch/e1" }, slots: [{ slot: "wv9003-a", tag: "П3", branch: "dev/wv-9003", title: "а" }, { slot: "wv9007-b", tag: "П7", branch: "dev/wv-9007", title: "б" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "т",
+                status: "open",
+                orch: { path: path.join(TMP, "orch"), branch: "orch/e1" },
+                slots: [
+                    { slot: "wv9003-a", tag: "П3", branch: "dev/wv-9003", title: "а" },
+                    { slot: "wv9007-b", tag: "П7", branch: "dev/wv-9007", title: "б" },
+                ],
+            },
+        ],
+    }),
+);
 await import("./wiring.mjs");
 const { applyEpics } = await import("./trees.mjs");
 const { loadInbox } = await import("./inbox.mjs");
@@ -85,7 +102,35 @@ test("А2: команда записана в журнал ДО исполнен
 });
 
 test("А2: после перезапуска «идущие» команды — оркестратору отказом «прервано перезапуском», в журнале — fail", async () => {
-    fs.writeFileSync(L.ORCH_LOG_FILE, JSON.stringify({ since: 1, items: [{ id: "k1", at: Date.now() - 60e3, orch: ORCH, cmd: "ВЛИТЬ", target: "П3", line: "ВЛИТЬ П3", state: "run" }, { id: "k2", at: Date.now() - 60e3, orch: ORCH, cmd: "ВЛИТЬ", target: "П9", line: "ВЛИТЬ П9", state: "ok", detail: "вливаю" }], turns: {}, owner: {} }));
+    fs.writeFileSync(
+        L.ORCH_LOG_FILE,
+        JSON.stringify({
+            since: 1,
+            items: [
+                {
+                    id: "k1",
+                    at: Date.now() - 60e3,
+                    orch: ORCH,
+                    cmd: "ВЛИТЬ",
+                    target: "П3",
+                    line: "ВЛИТЬ П3",
+                    state: "run",
+                },
+                {
+                    id: "k2",
+                    at: Date.now() - 60e3,
+                    orch: ORCH,
+                    cmd: "ВЛИТЬ",
+                    target: "П9",
+                    line: "ВЛИТЬ П9",
+                    state: "ok",
+                    detail: "вливаю",
+                },
+            ],
+            turns: {},
+            owner: {},
+        }),
+    );
     L.loadOrchLog();
     await R.orchAfterBoot({ readSession: async () => "", lastAnswer: () => null });
     assert.equal(sends.length, 1);
@@ -139,7 +184,14 @@ test("А3: итог «поставлено X, не понял Y (почему)»
 });
 
 test("А4: отказ ворот по просьбе оркестратора — ему сообщением с причиной и подсказкой; не чаще раза на код и причину", () => {
-    const ask = { tree: "wv9003-a", task: "api-test", input: "wv-0999", by: "просьба оркестратора", fp: "fp1", why: "волна закоммичена, код с коммита не менялся — проверять дальше будет поезд влива" };
+    const ask = {
+        tree: "wv9003-a",
+        task: "api-test",
+        input: "wv-0999",
+        by: "просьба оркестратора",
+        fp: "fp1",
+        why: "волна закоммичена, код с коммита не менялся — проверять дальше будет поезд влива",
+    };
     const msg = R.gateFeedback(ask);
     assert.equal(sends.length, 1);
     assert.equal(sends[0].key, ORCH);

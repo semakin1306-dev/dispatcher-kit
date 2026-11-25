@@ -62,7 +62,14 @@ export async function epicJournalOp(id, { from = 0, to = Infinity, types = "", l
     if (!epic)
         return { code: 404, body: { error: "нет такого эпика" } };
     const events = await readEventsSince(file, Number(from) || 0, JOURNAL_BYTES);
-    const evs = journalOf(events, { epic: epic.id, keys: (epic.slots || []).map((x) => x.slot), from: Number(from) || 0, to: Number(to) || Infinity, types: types ? String(types).split(",").filter(Boolean) : null, limit: Math.min(Math.max(Number(limit) || 2000, 1), 20000) });
+    const evs = journalOf(events, {
+        epic: epic.id,
+        keys: (epic.slots || []).map((x) => x.slot),
+        from: Number(from) || 0,
+        to: Number(to) || Infinity,
+        types: types ? String(types).split(",").filter(Boolean) : null,
+        limit: Math.min(Math.max(Number(limit) || 2000, 1), 20000),
+    });
     if (format === "text")
         return { code: 200, body: { epic: epic.id, n: evs.length, text: evs.map(journalLine).join("\n") } };
     return { code: 200, body: { epic: epic.id, n: evs.length, counts: journalCounts(evs), events: evs } };

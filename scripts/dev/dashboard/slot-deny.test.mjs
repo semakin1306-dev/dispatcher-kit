@@ -13,11 +13,35 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dash-deny-"));
 const WT = path.join(TMP, "wt"), REG = path.join(TMP, "epics.json");
 const slot = (s, tag, extra) => ({ tag, emoji: "🟢", slot: s, branch: "dev/" + s, title: s, color: "#2e7d32", ...extra });
-fs.writeFileSync(REG, JSON.stringify({ active: "e1", epics: [
-    { id: "e1", title: "активный", status: "open", orch: { branch: "dev/epic-e1", path: path.join(TMP, "o1") }, slots: [slot("wva-one", "П1", { area: "api" }), slot("wva-ro", "П2", { readOnly: true })] },
-    { id: "e2", title: "неактивный", status: "open", orch: { branch: "dev/epic-e2", path: path.join(TMP, "o2") }, slots: [slot("wvb-two", "П1", { area: "web", allowEdit: ["/packages/**"] })] },
-    { id: "e3", title: "закрытый", status: "closed", orch: { branch: "dev/epic-e3", path: path.join(TMP, "o3") }, slots: [slot("wvc-three", "П1", { area: "api" })] },
-] }));
+fs.writeFileSync(
+    REG,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "активный",
+                status: "open",
+                orch: { branch: "dev/epic-e1", path: path.join(TMP, "o1") },
+                slots: [slot("wva-one", "П1", { area: "api" }), slot("wva-ro", "П2", { readOnly: true })],
+            },
+            {
+                id: "e2",
+                title: "неактивный",
+                status: "open",
+                orch: { branch: "dev/epic-e2", path: path.join(TMP, "o2") },
+                slots: [slot("wvb-two", "П1", { area: "web", allowEdit: ["/packages/**"] })],
+            },
+            {
+                id: "e3",
+                title: "закрытый",
+                status: "closed",
+                orch: { branch: "dev/epic-e3", path: path.join(TMP, "o3") },
+                slots: [slot("wvc-three", "П1", { area: "api" })],
+            },
+        ],
+    }),
+);
 for (const s of ["wva-one", "wva-ro", "wvb-two", "wvc-three"])
     fs.mkdirSync(path.join(WT, s), { recursive: true });
 const run = (...a) => spawnSync(process.execPath, [path.join(HERE, "..", "slot-workspaces.mjs"), ...a], { encoding: "utf8", env: { ...process.env, DASH_EPIC_FILE: REG, DISPATCHER_WT: WT } });
@@ -121,7 +145,21 @@ test("slot-up сам пишет запреты рантайма и хук commit
     git(R, "commit", "-q", "-m", "init");
     const demo = JSON.parse(fs.readFileSync(path.join(HERE, "..", "..", "..", "test", "fixtures", "project.demo.json"), "utf8"));
     fs.writeFileSync(CFG, JSON.stringify({ ...demo, repo: { ...demo.repo, main: R, worktrees: W, data: path.join(TMP, "data-up") }, slotPrepare: [] }));
-    fs.writeFileSync(EP, JSON.stringify({ active: "e", epics: [{ id: "e", title: "э", status: "open", orch: { branch: "dev/epic-e", path: path.join(TMP, "o") }, slots: [{ tag: "П1", slot: "wv0007-api", branch: "dev/wv-0007-api", area: "api" }] }] }));
+    fs.writeFileSync(
+        EP,
+        JSON.stringify({
+            active: "e",
+            epics: [
+                {
+                    id: "e",
+                    title: "э",
+                    status: "open",
+                    orch: { branch: "dev/epic-e", path: path.join(TMP, "o") },
+                    slots: [{ tag: "П1", slot: "wv0007-api", branch: "dev/wv-0007-api", area: "api" }],
+                },
+            ],
+        }),
+    );
     const env = { ...process.env, DISPATCHER_PROJECT: CFG, DASH_EPIC_FILE: EP };
     for (const k of ["DISPATCHER_MAIN", "DISPATCHER_WT", "DASH_DATA", "DASH_SPARSE"]) delete env[k];
     for (const k of Object.keys(env)) if (/^GIT_/.test(k)) delete env[k];

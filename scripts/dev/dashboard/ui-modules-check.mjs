@@ -73,12 +73,22 @@ function analyze(ast) {
   const block = (sc, body) => { const bs = { names: new Map(), parent: sc, fn: false }; hoist(bs, body, fnOf(sc)); return bs }
   const pattern = (sc, p, write, decl) => {
     if (!p) return
-    if (p.type === "Identifier") { if (!decl) ref(sc, p, write) }
-    else if (p.type === "ObjectPattern") p.properties.forEach((x) => { if (x.type === "RestElement") pattern(sc, x.argument, write, decl); else { if (x.computed) visit(sc, x.key); pattern(sc, x.value, write, decl) } })
-    else if (p.type === "ArrayPattern") p.elements.forEach((x) => pattern(sc, x, write, decl))
-    else if (p.type === "RestElement") pattern(sc, p.argument, write, decl)
-    else if (p.type === "AssignmentPattern") { pattern(sc, p.left, write, decl); visit(sc, p.right) }
-    else visit(sc, p)
+    if (p.type === "Identifier") {
+        if (!decl) ref(sc, p, write);
+    } else if (p.type === "ObjectPattern")
+        p.properties.forEach((x) => {
+            if (x.type === "RestElement") pattern(sc, x.argument, write, decl);
+            else {
+                if (x.computed) visit(sc, x.key);
+                pattern(sc, x.value, write, decl);
+            }
+        });
+    else if (p.type === "ArrayPattern") p.elements.forEach((x) => pattern(sc, x, write, decl));
+    else if (p.type === "RestElement") pattern(sc, p.argument, write, decl);
+    else if (p.type === "AssignmentPattern") {
+        pattern(sc, p.left, write, decl);
+        visit(sc, p.right);
+    } else visit(sc, p);
   }
   const fn = (sc, f) => {
     const fs_ = { names: new Map(), parent: sc, fn: true }
@@ -93,27 +103,104 @@ function analyze(ast) {
     if (!n || typeof n !== "object") return
     if (Array.isArray(n)) return n.forEach((x) => visit(sc, x))
     switch (n.type) {
-      case "Identifier": return ref(sc, n, false)
-      case "FunctionDeclaration": case "FunctionExpression": case "ArrowFunctionExpression": return fn(sc, n)
-      case "ClassDeclaration": case "ClassExpression": visit(sc, n.superClass); n.body.body.forEach((m) => { if (m.computed) visit(sc, m.key); visit(sc, m.value) }); return
-      case "VariableDeclaration": n.declarations.forEach((d) => { pattern(sc, d.id, true, true); visit(sc, d.init) }); return
-      case "MemberExpression": visit(sc, n.object); if (n.computed) visit(sc, n.property); return
-      case "Property": case "MethodDefinition": case "PropertyDefinition": if (n.computed) visit(sc, n.key); visit(sc, n.value); return
-      case "AssignmentExpression": pattern(sc, n.left, true, false); visit(sc, n.right); if (n.operator !== "=" && n.left.type === "Identifier") ref(sc, n.left, false); return
-      case "UpdateExpression": if (n.argument.type === "Identifier") { ref(sc, n.argument, true); ref(sc, n.argument, false) } else visit(sc, n.argument); return
-      case "BlockStatement": case "StaticBlock": { const bs = block(sc, n.body); n.body.forEach((s) => visit(bs, s)); return }
-      case "ForStatement": case "ForInStatement": case "ForOfStatement": {
-        const bs = { names: new Map(), parent: sc, fn: false }, init = n.init || n.left
-        if (init && init.type === "VariableDeclaration" && init.kind !== "var") { const ns = []; init.declarations.forEach((d) => declPattern(d.id, ns)); ns.forEach((x) => bs.names.set(x, init.kind)) }
-        for (const k of ["init", "left", "test", "update", "right"]) if (n[k]) { if (k === "left" && n[k].type !== "VariableDeclaration") pattern(bs, n[k], true, false); else visit(bs, n[k]) }
-        return visit(bs, n.body)
-      }
-      case "CatchClause": { const cs = { names: new Map(), parent: sc, fn: false }, ns = []; declPattern(n.param, ns); ns.forEach((x) => cs.names.set(x, "catch")); return visit(cs, n.body) }
-      case "SwitchStatement": { visit(sc, n.discriminant); const bs = block(sc, n.cases.flatMap((c) => c.consequent)); n.cases.forEach((c) => { visit(bs, c.test); c.consequent.forEach((s) => visit(bs, s)) }); return }
-      case "LabeledStatement": return visit(sc, n.body)
-      case "BreakStatement": case "ContinueStatement": case "ImportDeclaration": case "MetaProperty": case "TemplateElement": case "Literal": return
-      case "ExportNamedDeclaration": if (n.declaration) visit(sc, n.declaration); else if (!n.source) n.specifiers.forEach((s) => ref(sc, s.local, false)); return
-      case "ExportDefaultDeclaration": return visit(sc, n.declaration)
+        case "Identifier":
+            return ref(sc, n, false);
+        case "FunctionDeclaration":
+        case "FunctionExpression":
+        case "ArrowFunctionExpression":
+            return fn(sc, n);
+        case "ClassDeclaration":
+        case "ClassExpression":
+            visit(sc, n.superClass);
+            n.body.body.forEach((m) => {
+                if (m.computed) visit(sc, m.key);
+                visit(sc, m.value);
+            });
+            return;
+        case "VariableDeclaration":
+            n.declarations.forEach((d) => {
+                pattern(sc, d.id, true, true);
+                visit(sc, d.init);
+            });
+            return;
+        case "MemberExpression":
+            visit(sc, n.object);
+            if (n.computed) visit(sc, n.property);
+            return;
+        case "Property":
+        case "MethodDefinition":
+        case "PropertyDefinition":
+            if (n.computed) visit(sc, n.key);
+            visit(sc, n.value);
+            return;
+        case "AssignmentExpression":
+            pattern(sc, n.left, true, false);
+            visit(sc, n.right);
+            if (n.operator !== "=" && n.left.type === "Identifier") ref(sc, n.left, false);
+            return;
+        case "UpdateExpression":
+            if (n.argument.type === "Identifier") {
+                ref(sc, n.argument, true);
+                ref(sc, n.argument, false);
+            } else visit(sc, n.argument);
+            return;
+        case "BlockStatement":
+        case "StaticBlock": {
+            const bs = block(sc, n.body);
+            n.body.forEach((s) => visit(bs, s));
+            return;
+        }
+        case "ForStatement":
+        case "ForInStatement":
+        case "ForOfStatement": {
+            const bs = { names: new Map(), parent: sc, fn: false },
+                init = n.init || n.left;
+            if (init && init.type === "VariableDeclaration" && init.kind !== "var") {
+                const ns = [];
+                init.declarations.forEach((d) => declPattern(d.id, ns));
+                ns.forEach((x) => bs.names.set(x, init.kind));
+            }
+            for (const k of ["init", "left", "test", "update", "right"])
+                if (n[k]) {
+                    if (k === "left" && n[k].type !== "VariableDeclaration") pattern(bs, n[k], true, false);
+                    else visit(bs, n[k]);
+                }
+            return visit(bs, n.body);
+        }
+        case "CatchClause": {
+            const cs = { names: new Map(), parent: sc, fn: false },
+                ns = [];
+            declPattern(n.param, ns);
+            ns.forEach((x) => cs.names.set(x, "catch"));
+            return visit(cs, n.body);
+        }
+        case "SwitchStatement": {
+            visit(sc, n.discriminant);
+            const bs = block(
+                sc,
+                n.cases.flatMap((c) => c.consequent),
+            );
+            n.cases.forEach((c) => {
+                visit(bs, c.test);
+                c.consequent.forEach((s) => visit(bs, s));
+            });
+            return;
+        }
+        case "LabeledStatement":
+            return visit(sc, n.body);
+        case "BreakStatement":
+        case "ContinueStatement":
+        case "ImportDeclaration":
+        case "MetaProperty":
+        case "TemplateElement":
+        case "Literal":
+            return;
+        case "ExportNamedDeclaration":
+            if (n.declaration) visit(sc, n.declaration);
+            else if (!n.source) n.specifiers.forEach((s) => ref(sc, s.local, false));
+            return;
+        case "ExportDefaultDeclaration":
+            return visit(sc, n.declaration);
     }
     for (const k in n) if (k !== "type" && k !== "start" && k !== "end" && n[k] && typeof n[k] === "object") visit(sc, n[k])
   }
@@ -212,7 +299,10 @@ export async function checkUi(dash = HERE) {
             }
             const from = r.resolved === top && local.get(r.name);
             if (from && r.write) errors.push(`${f}:${line}: присваивание импортированному «${r.name}» — запись общего состояния только setState("${r.name}", …)`);
-            if (from && r.topLevel && f !== "main.js" && !["state.js", "core.js"].includes(from)) errors.push(`${f}:${line}: «${r.name}» из ${from} на верхнем уровне — при кольцевых импортах модуль может быть ещё не исполнен; перенесите в функцию`);
+            if (from && r.topLevel && f !== "main.js" && !["state.js", "core.js"].includes(from))
+                errors.push(
+                    `${f}:${line}: «${r.name}» из ${from} на верхнем уровне — при кольцевых импортах модуль может быть ещё не исполнен; перенесите в функцию`,
+                );
         }
         mods[f] = { exports, imports, readers: {} };
     }
@@ -247,9 +337,16 @@ export async function checkUi(dash = HERE) {
     const css = fs.readdirSync(ui).filter((f) => f.endsWith(".css"));
     for (const f of ["index.html", ...css.map((x) => "ui/" + x)]) {
         const src = fs.readFileSync(path.join(dash, f), "utf8");
-        for (const m of src.matchAll(/(?:\b(?:href|src)\s*=\s*["']|url\(\s*["']?|@import\s+["'])((?:https?:)?\/\/[^"')\s]+)/g)) errors.push(`${f}: внешний адрес ${m[1]} — страница должна работать без сети`);
-        for (const m of src.matchAll(/\b(?:href|src)\s*=\s*["']\/ui\/(?:v__UIVER__\/)?([^"'?#]+)/g)) if (!fs.existsSync(path.join(ui, m[1])) && !UI_SHARED[m[1]]) errors.push(`${f}: ссылка на /ui/${m[1]} — такого файла в ui/ нет`);
-        for (const m of src.matchAll(/url\(\s*["']?(?!data:|#|https?:|\/\/)([^"')]+)["']?\s*\)/g)) if (!fs.existsSync(path.join(ui, m[1].replace(/^\/ui\//, "").replace(/[?#].*$/, "")))) errors.push(`${f}: url(${m[1]}) — такого файла в ui/ нет`);
+        for (const m of src.matchAll(
+            /(?:\b(?:href|src)\s*=\s*["']|url\(\s*["']?|@import\s+["'])((?:https?:)?\/\/[^"')\s]+)/g,
+        ))
+            errors.push(`${f}: внешний адрес ${m[1]} — страница должна работать без сети`);
+        for (const m of src.matchAll(/\b(?:href|src)\s*=\s*["']\/ui\/(?:v__UIVER__\/)?([^"'?#]+)/g))
+            if (!fs.existsSync(path.join(ui, m[1])) && !UI_SHARED[m[1]])
+                errors.push(`${f}: ссылка на /ui/${m[1]} — такого файла в ui/ нет`);
+        for (const m of src.matchAll(/url\(\s*["']?(?!data:|#|https?:|\/\/)([^"')]+)["']?\s*\)/g))
+            if (!fs.existsSync(path.join(ui, m[1].replace(/^\/ui\//, "").replace(/[?#].*$/, ""))))
+                errors.push(`${f}: url(${m[1]}) — такого файла в ui/ нет`);
     }
     return { errors, mods, deep: !!acorn };
 }

@@ -66,7 +66,16 @@ fs.writeFileSync(REG, JSON.stringify({ active: "e", epics: [{ id: "e", status: "
                 { tag: "П3", slot: "wv9302-recon", branch: "dev/wv-9302-recon", readOnly: true }
             ] }] }));
 
-const slotUp = (slot, ...extra) => spawnSync(process.execPath, [SLOTUP, slot, "--branch", "dev/" + slot.replace(/^wv(\d+)/, "wv-$1"), "--root", WTD, "--no-prepare", ...extra], { cwd: REPO, encoding: "utf8", env: { ...process.env, DASH_EPIC_FILE: REG, DISPATCHER_MAIN: REPO, DISPATCHER_WT: WTD, DASH_SPARSE: "0" } });
+const slotUp = (slot, ...extra) =>
+    spawnSync(
+        process.execPath,
+        [SLOTUP, slot, "--branch", "dev/" + slot.replace(/^wv(\d+)/, "wv-$1"), "--root", WTD, "--no-prepare", ...extra],
+        {
+            cwd: REPO,
+            encoding: "utf8",
+            env: { ...process.env, DASH_EPIC_FILE: REG, DISPATCHER_MAIN: REPO, DISPATCHER_WT: WTD, DASH_SPARSE: "0" },
+        },
+    );
 const SP = path.join(WTD, "wv9300-be");
 
 test("slot-up: без включения — полная выкладка, как было", () => {

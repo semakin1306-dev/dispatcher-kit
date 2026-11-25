@@ -93,7 +93,14 @@ export function startModules(ctx = {}) {
   const out = { started: [], failed: [] }
   for (const id of order) {
     if (!enabled(id) || started.has(id) || !boots.has(id)) continue
-    try { boots.get(id)(ctx); started.add(id); out.started.push(id) } catch (e) { out.failed.push({ id, error: String(e && e.message || e) }); console.error("модуль " + id + ":", e && e.message || e) }
+    try {
+      boots.get(id)(ctx)
+      started.add(id)
+      out.started.push(id)
+    } catch (e) {
+      out.failed.push({ id, error: String((e && e.message) || e) })
+      console.error("модуль " + id + ":", (e && e.message) || e)
+    }
   }
   return out
 }

@@ -32,7 +32,21 @@ fs.writeFileSync(path.join(WT, SLOT, "b.txt"), "лишний\n");
 g(path.join(WT, SLOT), "add", "-A");
 g(path.join(WT, SLOT), "commit", "-q", "-m", "лишний коммит");
 const EXTRA = g(path.join(WT, SLOT), "rev-parse", "HEAD");
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "т", status: "open", orch: { path: path.join(TMP, "orch"), branch: "orch/e1" }, slots: [{ slot: SLOT, tag: "П2", branch: BR, title: "WV-1104", area: "api" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "т",
+                status: "open",
+                orch: { path: path.join(TMP, "orch"), branch: "orch/e1" },
+                slots: [{ slot: SLOT, tag: "П2", branch: BR, title: "WV-1104", area: "api" }],
+            },
+        ],
+    }),
+);
 await import("./wiring.mjs");
 const { applyEpics } = await import("./trees.mjs");
 const { EPIC_CLI } = await import("../slots.mjs");

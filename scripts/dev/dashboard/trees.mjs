@@ -30,8 +30,41 @@ export function applyEpics() {
         delete PRESETS[k];
     for (const epic of S.EPICS) {
         const orch = orchOf(epic);
-        TREES.push({ key: orchKey(epic.id), kind: "orch", epic: epic.id, tag: orch.tag, emoji: orch.emoji, title: orch.title, color: orch.color, path: path.normalize(epic.orch.path), readOnly: false }, ...epic.slots.filter((x) => !x.archived).map((x) => ({ key: x.slot, kind: "slot", epic: epic.id, tag: x.tag, emoji: x.emoji, title: x.title, color: x.color, path: path.join(WT, x.slot), plannedBranch: x.branch, area: x.area || null, readOnly: isReconSlot(x),
-            ...(isTrain(x) ? { train: true, trainArea: x.trainArea || null, wagons: JSON.parse(JSON.stringify(x.wagons || [])) } : {}) })));
+        TREES.push(
+            {
+                key: orchKey(epic.id),
+                kind: "orch",
+                epic: epic.id,
+                tag: orch.tag,
+                emoji: orch.emoji,
+                title: orch.title,
+                color: orch.color,
+                path: path.normalize(epic.orch.path),
+                readOnly: false,
+            },
+            ...epic.slots
+                .filter((x) => !x.archived)
+                .map((x) => ({
+                    key: x.slot,
+                    kind: "slot",
+                    epic: epic.id,
+                    tag: x.tag,
+                    emoji: x.emoji,
+                    title: x.title,
+                    color: x.color,
+                    path: path.join(WT, x.slot),
+                    plannedBranch: x.branch,
+                    area: x.area || null,
+                    readOnly: isReconSlot(x),
+                    ...(isTrain(x)
+                        ? {
+                              train: true,
+                              trainArea: x.trainArea || null,
+                              wagons: JSON.parse(JSON.stringify(x.wagons || [])),
+                          }
+                        : {}),
+                })),
+        );
         PRESETS[orchKey(epic.id)] = [];
         for (const x of epic.slots)
             PRESETS[x.slot] = JSON.parse(JSON.stringify(isTrain(x) ? trainCur.get(x.slot) || ((x.wagons || [])[0] || {}).presets || [] : x.presets || []));

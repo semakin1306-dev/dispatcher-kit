@@ -8,9 +8,22 @@ process.env.DASH_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "dash-idle-"));
 process.env.DASH_DRY = "1";
 after(() => fs.rmSync(process.env.DASH_DATA, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 const A = await import("./agents.mjs");
+const { promptSource } = await import("../prompts.mjs");
 const { orchNudgeDue } = await import("./loops.mjs");
 const MIN = 60e3, now = 10000 * MIN;
-const base = { now, busy: false, queued: false, liveJobs: 0, lastWork: now - (A.IDLE_NUDGE_MIN + 1) * MIN, orchSawAt: 0, lastNudge: 0, slotsWithSession: 3, slotsWaitingOwner: 1, idleMs: A.IDLE_NUDGE_MIN * MIN, everyMs: A.IDLE_NUDGE_EVERY_MIN * MIN };
+const base = {
+    now,
+    busy: false,
+    queued: false,
+    liveJobs: 0,
+    lastWork: now - (A.IDLE_NUDGE_MIN + 1) * MIN,
+    orchSawAt: 0,
+    lastNudge: 0,
+    slotsWithSession: 3,
+    slotsWaitingOwner: 1,
+    idleMs: A.IDLE_NUDGE_MIN * MIN,
+    everyMs: A.IDLE_NUDGE_EVERY_MIN * MIN,
+};
 const due = (o) => orchNudgeDue({ ...base, ...o }).due;
 
 describe("сторож простоя", () => {
@@ -56,7 +69,7 @@ describe("порядок влива — командой оркестратор�
         assert.deepEqual(parse("пиши строку ПОРЯДОК П1 ПОСЛЕ П2 отдельно"), []);
     });
     test("правило оркестратора о конфликтах: порядок ставит он, храповики пересобираются, владельца не спрашивать", () => {
-        const src = fs.readFileSync(new URL("./agents.mjs", import.meta.url), "utf8");
+        const src = A.agentSystemPrompt("orchestrator@idle-test");
         assert.match(src, /КОНФЛИКТЫ ВЕТОК ПО ОБЩИМ ФАЙЛАМ/);
         assert.match(src, /базовые линии/, "храповики гардов пересобираются командой гарда, а не сливаются руками");
         assert.match(src, /Владельца по порядку влива не спрашивай/);
@@ -76,10 +89,10 @@ describe("отказ команды оркестратора доходит до
 
 describe("правила темпа", () => {
     test("стартовый промпт слота: станции подряд, один доклад в конце, без «остановись до вывода»", () => {
-        const src = fs.readFileSync(new URL("./agents.mjs", import.meta.url), "utf8");
-        assert.ok(!/остановись до его вывода/.test(src));
-        assert.match(src, /Промежуточных докладов по станциям не шли/);
-        assert.match(src, /ТЕМП СЛОТОВ/);
+        const slot = promptSource("slot-task"), orch = promptSource("orch-system");
+        assert.ok(!/остановись до его вывода/.test(slot + orch));
+        assert.match(slot, /Промежуточных докладов по станциям не шли/);
+        assert.match(orch, /ТЕМП СЛОТОВ/);
     });
     test("персона слота: разведка — не отдельный ответ, есть раздел «Когда заканчивать ход»", () => {
         const p = fs.readFileSync(new URL("../../../agent-briefs/SLOT-ENGINEER-persona.md", import.meta.url), "utf8");

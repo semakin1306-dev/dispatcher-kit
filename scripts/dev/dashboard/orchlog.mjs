@@ -35,7 +35,10 @@ export const cmdKey = (turn, text, index) => (turn ? String(turn) : crypto.creat
 
 export function loadOrchLog(now = Date.now()) {
     const v = readJson(ORCH_LOG_FILE, null);
-    S.orchLog = v && Array.isArray(v.items) ? { since: v.since || now, items: v.items, turns: v.turns || {}, owner: v.owner || {}, real: v.real || {} } : { since: now, items: [], turns: {}, owner: {}, real: {} };
+    S.orchLog =
+        v && Array.isArray(v.items)
+            ? { since: v.since || now, items: v.items, turns: v.turns || {}, owner: v.owner || {}, real: v.real || {} }
+            : { since: now, items: [], turns: {}, owner: {}, real: {} };
     if (!v)
         persistSync();
     return S.orchLog;

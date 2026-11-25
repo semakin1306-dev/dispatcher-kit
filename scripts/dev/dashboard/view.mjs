@@ -24,7 +24,21 @@ const CHECKS = ["build", "tests", "guards", "regress", "review"];
 /** Задачи-гейты проекта (гарды): по ним судят о ветке без своих наборов тестов. */
 const gateIds = () => Object.values(PROJECT.tasks || {}).filter((x) => x.gate).map((x) => x.id);
 // Набор спек через «|»: прогон надмножества тоже засчитывается.
-export const lastJobIn = (tree, task, input) => [...jobList()].reverse().find((j) => j.tree === tree && j.task === task && (input == null || (j.input || "") === input || (!!input && input.includes("|") && input.split("|").every((n) => String(j.input || "").split("|").includes(n)))));
+export const lastJobIn = (tree, task, input) =>
+    [...jobList()].reverse().find(
+        (j) =>
+            j.tree === tree &&
+            j.task === task &&
+            (input == null ||
+                (j.input || "") === input ||
+                (!!input &&
+                    input.includes("|") &&
+                    input.split("|").every((n) =>
+                        String(j.input || "")
+                            .split("|")
+                            .includes(n),
+                    ))),
+    );
 
 export function stagesView(t, ag) {
     const st = t.stages || [];
@@ -33,7 +47,13 @@ export function stagesView(t, ag) {
     const i = st.findIndex((x) => x.id === "impl");
     if (i < 0)
         return st;
-    return st.map((x, k) => (k >= i && x.source !== "manual" && ["impl", "build", "tests", "guards", "regress", "review", "commit"].includes(x.id) ? { ...x, done: false, hint: k === i ? "агент сейчас пишет код" : x.hint } : x));
+    return st.map((x, k) =>
+        k >= i &&
+        x.source !== "manual" &&
+        ["impl", "build", "tests", "guards", "regress", "review", "commit"].includes(x.id)
+            ? { ...x, done: false, hint: k === i ? "агент сейчас пишет код" : x.hint }
+            : x,
+    );
 }
 
 export function farOf(st, t, ag) {
@@ -92,7 +112,18 @@ export function nextStep(t, st, ag, far) {
         return { kind: "info", text: "Идут или ждут запуски этого слота" };
     if (!t.readOnly && !t.ahead && !t.dirtyTracked && !t.dirtyUntracked && !(t.verdict && t.verdict.merged)) {
         if (t.train && t.wagonStaged)
-            return { kind: "info", text: "Код вагона " + t.wagon + " уже в staging (коммитов: " + t.wagonStaged + ", влиты с другим вагоном), вагон не закрыт: в ветке нового кода нет" + (ag && ag.busy ? " — агент работает" : " — агент ждёт следующего шага (ваше слово или условие из плана)") };
+            return {
+                kind: "info",
+                text:
+                    "Код вагона " +
+                    t.wagon +
+                    " уже в staging (коммитов: " +
+                    t.wagonStaged +
+                    ", влиты с другим вагоном), вагон не закрыт: в ветке нового кода нет" +
+                    (ag && ag.busy
+                        ? " — агент работает"
+                        : " — агент ждёт следующего шага (ваше слово или условие из плана)"),
+            };
         return { kind: "info", text: ag && !ag.busy && !ag.running ? "Кода ещё нет, агент не работает: ждёт сообщения" : "Кода ещё нет: агент пишет — ждём его отчёт" };
     }
     if (failed) {
@@ -108,45 +139,128 @@ export function nextStep(t, st, ag, far) {
             return c;
     }
     switch (cur.id) {
-        case "plan": return { kind: "info", text: "Нет плана волны — это работа оркестратора" };
-        case "impl": return { kind: "info", text: "Агент пишет код — ждём его отчёт" };
-        case "build": return { kind: "go", text: v.bnote || "Собрать перед тестами" + (t.buildWhat ? ": " + t.buildWhat : ""), act: "build" };
-        case "tests": return { kind: "go", text: v.note || "Прогнать тесты " + (t.train ? "вагона " + (t.wagon || "") : "волны"), act: "tests" };
+        case "plan":
+            return { kind: "info", text: "Нет плана волны — это работа оркестратора" };
+        case "impl":
+            return { kind: "info", text: "Агент пишет код — ждём его отчёт" };
+        case "build":
+            return {
+                kind: "go",
+                text: v.bnote || "Собрать перед тестами" + (t.buildWhat ? ": " + t.buildWhat : ""),
+                act: "build",
+            };
+        case "tests":
+            return {
+                kind: "go",
+                text: v.note || "Прогнать тесты " + (t.train ? "вагона " + (t.wagon || "") : "волны"),
+                act: "tests",
+            };
         case "guards":
             if (v.guards === "fail" && v.gfail)
-                return { kind: "bad", text: v.gfail + ". Перепрогонять нечего — нужна правка кода агентом слота", act: "advice", jobId: v.gfailJob };
-            return { kind: "go", text: v.gnote || "Прогнать гарды — задачи-гейты проекта: " + (gateIds().join(", ") || "в конфиге их нет"), act: "guards" };
+                return {
+                    kind: "bad",
+                    text: v.gfail + ". Перепрогонять нечего — нужна правка кода агентом слота",
+                    act: "advice",
+                    jobId: v.gfailJob,
+                };
+            return {
+                kind: "go",
+                text:
+                    v.gnote || "Прогнать гарды — задачи-гейты проекта: " + (gateIds().join(", ") || "в конфиге их нет"),
+                act: "guards",
+            };
         case "review": {
             const r = t.review;
-            const n = r && r.fresh && r.verdict && r.verdict !== "ЗА"
-                ? (reviewOwed(t) ? { kind: "bad", text: "Ревьюер: " + r.verdict + ". Замечания ещё НЕ отданы агенту волны — повторять ревью незачем, код тот же" } : { kind: "info", text: "Ревьюер: " + r.verdict + ". Замечания у агента — ждём правку; если вопросы снимаются без правок, отметьте станцию «Ревью» кликом" })
-                : { kind: "go", text: r && !r.fresh ? "Код менялся после ревью — повторить" : "Независимое ревью: отдельная сессия без контекста автора посмотрит дифф" };
+            const n =
+                r && r.fresh && r.verdict && r.verdict !== "ЗА"
+                    ? reviewOwed(t)
+                        ? {
+                              kind: "bad",
+                              text:
+                                  "Ревьюер: " +
+                                  r.verdict +
+                                  ". Замечания ещё НЕ отданы агенту волны — повторять ревью незачем, код тот же",
+                          }
+                        : {
+                              kind: "info",
+                              text:
+                                  "Ревьюер: " +
+                                  r.verdict +
+                                  ". Замечания у агента — ждём правку; если вопросы снимаются без правок, отметьте станцию «Ревью» кликом",
+                          }
+                    : {
+                          kind: "go",
+                          text:
+                              r && !r.fresh
+                                  ? "Код менялся после ревью — повторить"
+                                  : "Независимое ревью: отдельная сессия без контекста автора посмотрит дифф",
+                      };
             return { ...n, act: "review" };
         }
-        case "regress": return { kind: "go", text: v.rnote || "Прогнать регресс: соседи по тронутым путям — " + (t.regress || []).map((x) => x.label + (x.input ? " " + x.input : "")).join("; "), act: "regress" };
+        case "regress":
+            return {
+                kind: "go",
+                text:
+                    v.rnote ||
+                    "Прогнать регресс: соседи по тронутым путям — " +
+                        (t.regress || []).map((x) => x.label + (x.input ? " " + x.input : "")).join("; "),
+                act: "regress",
+            };
         case "commit":
             if (t.dirtyTracked)
-                return { kind: "warn", text: `Нужен коммит: в слоте ${t.dirtyTracked} изменённых файлов. Кнопка отправит задачу агенту слота: подпись он напишет сам`, act: "commit" };
+                return {
+                    kind: "warn",
+                    text: `Нужен коммит: в слоте ${t.dirtyTracked} изменённых файлов. Кнопка отправит задачу агенту слота: подпись он напишет сам`,
+                    act: "commit",
+                };
             return { kind: "info", text: "В ветке нет коммитов: закоммитьте работу слота" };
         case "staging": {
             if (t.dirtyTracked)
-                return { kind: "warn", text: `Нужен коммит: в слоте ${t.dirtyTracked} изменённых файлов. Кнопка отправит задачу агенту слота: подпись он напишет сам`, act: "commit" };
-            if (!t.ahead)
-                return { kind: "info", text: "В ветке нет коммитов — вливать нечего" };
+                return {
+                    kind: "warn",
+                    text: `Нужен коммит: в слоте ${t.dirtyTracked} изменённых файлов. Кнопка отправит задачу агенту слота: подпись он напишет сам`,
+                    act: "commit",
+                };
+            if (!t.ahead) return { kind: "info", text: "В ветке нет коммитов — вливать нечего" };
             const w = (t.deps || []).filter((d) => !d.merged);
             if (w.length)
-                return { kind: "warn", text: "Вливать после " + w.map((d) => d.tag).join(", ") + ": эта волна стоит на их коде, а они ещё не в staging. Кнопка «Влить» появится, когда " + (w.length > 1 ? "они будут влиты" : w[0].tag + " будет влита") };
+                return {
+                    kind: "warn",
+                    text:
+                        "Вливать после " +
+                        w.map((d) => d.tag).join(", ") +
+                        ": эта волна стоит на их коде, а они ещё не в staging. Кнопка «Влить» появится, когда " +
+                        (w.length > 1 ? "они будут влиты" : w[0].tag + " будет влита"),
+                };
             const gap = st.filter((x) => CHECKS.includes(x.id) && !x.done);
             if (gap.length)
-                return { kind: "warn", text: "Вливать рано: не пройдено «" + gap.map((x) => x.label).join("», «") + "» на нынешнем коде. Если проверка правда не нужна — отметьте станцию кликом или «Влить…» → «Влить всё равно»", act: gap[0].id, mergeSoft: !gap.some((x) => x.id === "build" || x.id === "tests") };
+                return {
+                    kind: "warn",
+                    text:
+                        "Вливать рано: не пройдено «" +
+                        gap.map((x) => x.label).join("», «") +
+                        "» на нынешнем коде. Если проверка правда не нужна — отметьте станцию кликом или «Влить…» → «Влить всё равно»",
+                    act: gap[0].id,
+                    mergeSoft: !gap.some((x) => x.id === "build" || x.id === "tests"),
+                };
             if (wagonUnfinished(t, waveFinalOf(t)))
-                return { kind: "info", text: "Станции зелёные, но агент не доложил «ГОТОВО» по вагону " + t.wagon + " — вливать рано: диспетчерская спросит агента сама. Влить без доклада — «Влить…» → «Влить всё равно»" };
+                return {
+                    kind: "info",
+                    text:
+                        "Станции зелёные, но агент не доложил «ГОТОВО» по вагону " +
+                        t.wagon +
+                        " — вливать рано: диспетчерская спросит агента сама. Влить без доклада — «Влить…» → «Влить всё равно»",
+                };
             return { kind: "go", text: "Можно вливать в staging", act: "merge" };
         }
-        case "accept": return { kind: "go", text: "Принять на стенде: чек-лист в панели «Приёмка»", act: "accept" };
-        case "stand": return { kind: "go", stand: true, text: "Выкатить staging на стенд и принять", act: "stand" };
-        case "prod": return { kind: "go", text: "Принять стенд и выкатить в прод", act: "prod" };
-        case "site": return { kind: "info", text: "Проверьте результат на сайте и отметьте станцию кликом" };
+        case "accept":
+            return { kind: "go", text: "Принять на стенде: чек-лист в панели «Приёмка»", act: "accept" };
+        case "stand":
+            return { kind: "go", stand: true, text: "Выкатить staging на стенд и принять", act: "stand" };
+        case "prod":
+            return { kind: "go", text: "Принять стенд и выкатить в прод", act: "prod" };
+        case "site":
+            return { kind: "info", text: "Проверьте результат на сайте и отметьте станцию кликом" };
     }
     return { kind: "info", text: cur.label };
 }
@@ -192,8 +306,20 @@ export function treeView(t, ctx) {
         return { cur: null, next: { kind: "info", text: "папка слота готовится" }, group: slotGroup(t, ag, null, ctx), readyStg: false };
     const st = stagesView(t, ag), far = farOf(st, t, ag);
     const mw = !(t.verdict && t.verdict.merged) ? mergeWaitView(t.key) : null;
-    const next = (!(t.verdict && t.verdict.merged) && prepNext({ jobs: jobList().filter((j) => j.tree === t.key && j.task === "slot-up") })) || (mw ? { kind: mw.state === "red" ? "warn" : "info", text: mw.text, act: "mergewait" } : null) || nextStep(t, st, ag, far);
-    return { stages: st, cur: far + 1, next, readyStg: readyStg(t, st), group: slotGroup(t, ag, next, ctx), ...(mw ? { mergeWait: mw } : {}), ...(t.train ? { wagonsView: wagonsView(t, st, far) } : {}) };
+    const next =
+        (!(t.verdict && t.verdict.merged) &&
+            prepNext({ jobs: jobList().filter((j) => j.tree === t.key && j.task === "slot-up") })) ||
+        (mw ? { kind: mw.state === "red" ? "warn" : "info", text: mw.text, act: "mergewait" } : null) ||
+        nextStep(t, st, ag, far);
+    return {
+        stages: st,
+        cur: far + 1,
+        next,
+        readyStg: readyStg(t, st),
+        group: slotGroup(t, ag, next, ctx),
+        ...(mw ? { mergeWait: mw } : {}),
+        ...(t.train ? { wagonsView: wagonsView(t, st, far) } : {}),
+    };
 }
 
 export function ganttView(views, epic, ctx = {}, now = Date.now()) {

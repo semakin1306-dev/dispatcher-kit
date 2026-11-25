@@ -43,7 +43,21 @@ process.env.DASH_ORCH_STEP_MS = "200";
 fs.mkdirSync(process.env.DASH_DATA, { recursive: true });
 fs.mkdirSync(path.join(TMP, "orch", ".git"), { recursive: true });
 fs.mkdirSync(path.join(TMP, "wt", "wv9020-a", ".git"), { recursive: true });
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "т", status: "open", orch: { path: path.join(TMP, "orch"), branch: "orch/e1" }, slots: [{ slot: "wv9020-a", tag: "П2", branch: "dev/wv-9020", title: "волна" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "т",
+                status: "open",
+                orch: { path: path.join(TMP, "orch"), branch: "orch/e1" },
+                slots: [{ slot: "wv9020-a", tag: "П2", branch: "dev/wv-9020", title: "волна" }],
+            },
+        ],
+    }),
+);
 after(async () => {
     // отложенные записи файлов состояния (журнал команд оркестратора) — дописать до уборки папки
     const st = await import("./store.mjs");

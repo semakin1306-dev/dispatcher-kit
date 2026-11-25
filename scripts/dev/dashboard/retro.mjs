@@ -147,7 +147,14 @@ export async function retroInput(epic, { now = Date.now(), events = null, runs =
     const journal = journalOf(events, { epic: epic.id, keys: [...keys], from, to });
     const dir = path.join(RETRO_IN, epic.id);
     fs.mkdirSync(dir, { recursive: true });
-    const files = { progress: fwd(path.join(dir, "progress.json")), failures: fwd(path.join(dir, "failures.md")), journal: fwd(path.join(dir, "journal.txt")), logs: fwd(LOGS), plans: epicPlans(epic), plansDir: fwd(path.join(MAIN, ".claude", "plans", "waves")) };
+    const files = {
+        progress: fwd(path.join(dir, "progress.json")),
+        failures: fwd(path.join(dir, "failures.md")),
+        journal: fwd(path.join(dir, "journal.txt")),
+        logs: fwd(LOGS),
+        plans: epicPlans(epic),
+        plansDir: fwd(path.join(MAIN, ".claude", "plans", "waves")),
+    };
     writeAtomicSync(files.progress, JSON.stringify(progress, null, 1));
     writeAtomicSync(files.failures, "# Группы провалов эпика " + epic.id + "\n\nКрасных прогонов с логом: " + entries.length + ", групп: " + groups.length + ".\n\n" + failuresBrief(groups) + "\n");
     writeAtomicSync(files.journal, journal.filter((e) => !RETRO_JOURNAL_SKIP.has(e.type)).map(journalLine).join("\n") + "\n");
@@ -272,5 +279,19 @@ export function retroGet(id) {
         }
         catch { }
     }
-    return { code: 200, body: { epic: id, title: (e && e.title) || id, closedAt: (e && e.closedAt) || null, retro: r, text, auto: settings.retroAuto !== false, sink: SINK, dir: fwd(RETRO_DIR), running: running.has(id), enabled: retroEnabled() } };
+    return {
+        code: 200,
+        body: {
+            epic: id,
+            title: (e && e.title) || id,
+            closedAt: (e && e.closedAt) || null,
+            retro: r,
+            text,
+            auto: settings.retroAuto !== false,
+            sink: SINK,
+            dir: fwd(RETRO_DIR),
+            running: running.has(id),
+            enabled: retroEnabled(),
+        },
+    };
 }

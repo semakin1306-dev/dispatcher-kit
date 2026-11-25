@@ -3,6 +3,16 @@
 // Вызовы нижних модулей вверх (late.mjs) подключает wiring.mjs — он импортируется первым, до кода этого файла.
 // Модули из каталога (modules-catalog.mjs) регистрируют здесь свой запуск через onModuleBoot; стартуют только включённые
 // (modules.mjs startModules). Выключенный модуль загружен, но ничего не делает, его маршруты отвечают 404.
+//
+// Кто зовёт: server.mjs (точка входа процесса) — импортом; всё ниже выполняется один раз при загрузке модуля.
+// Файлы данных (папка DATA): pulse.json — пульс для внешнего сторожа, last-exit.json — причина прошлой остановки,
+// состояние модулей-владельцев (прогоны, карточки, сессии агентов, настройки) — их load*-функциями.
+// Инварианты порядка:
+//   - всё состояние загружено с диска до первого таймера, который его читает, и до HTTP-сервера;
+//   - таймеры, которые будят агентов, запускают прогоны или трогают git, ставятся с задержкой (десятки секунд после
+//     запуска): сначала снимок и реестр, потом действия — и сразу после перезапуска не стартует всё одновременно;
+//   - в сухом режиме (DRY, пробный экземпляр) таймеры с действиями не ставятся: агенты, прогоны и git не трогаются;
+//   - все интервалы — unref(): процесс держит только HTTP-сервер.
 import "./wiring.mjs"
 import { EPIC_FILE, fwd } from "../slots.mjs"
 import { spawnSync } from "node:child_process"
@@ -16,7 +26,21 @@ import { infraFailure } from "./host-health.mjs"
 import * as acceptMod from "./accept.mjs"
 import { loadTg, startTg, tgAnswered } from "./tg.mjs"
 import { mergeKey } from "./tg-rules.mjs"
-import { AGENT_IDLE_MIN, IDLE_NUDGE_EVERY_MIN, IDLE_NUDGE_MIN, IDLE_NUDGE_TEXT, agentPublic, agentSession, agents, deliver, ensureAgent, loadOrchHeld, loadSessions, push, resumeInterrupted } from "./agents.mjs"
+import {
+    AGENT_IDLE_MIN,
+    IDLE_NUDGE_EVERY_MIN,
+    IDLE_NUDGE_MIN,
+    IDLE_NUDGE_TEXT,
+    agentPublic,
+    agentSession,
+    agents,
+    deliver,
+    ensureAgent,
+    loadOrchHeld,
+    loadSessions,
+    push,
+    resumeInterrupted,
+} from "./agents.mjs"
 import { kickStalled } from "./autochain.mjs"
 import { DATA, DRY, EVENTS_JSONL, FINAL, HERE, HOST, KEEP_JOBS, LOGS, PORT, SETTINGS_FILE, TOKEN, logEvent, rotateLogs, setEventEpicOf, settings } from "./config.mjs"
 import { autoSyncSlots, drainState, loadSyncMarks, orchFollow, provisionMissing } from "./epics.mjs"
@@ -31,7 +55,20 @@ import { resetVer, startHeartbeat } from "./events.mjs"
 import { activity, startLoopWatch } from "./loopwatch.mjs"
 import { loadOrderDismissed, loadTrain } from "./pipeline.mjs"
 import { SAFE_HOOKS, STAGING_BASELINE_RUNS, foreignRedBaseline, loadSpecHist, loadStgRed, recordSpecs, specHistMap } from "./regress.mjs"
-import { RELAY_FACTS_FILE, drainQueued, lastRelay, loadRelaySent, loadTestReqs, mergeExtraPresets, mergeWaitTick, nudgeIdleSlots, orchAfterBoot, relayAfterPrep, slotPromptText, startOffered } from "./relay.mjs"
+import {
+    RELAY_FACTS_FILE,
+    drainQueued,
+    lastRelay,
+    loadRelaySent,
+    loadTestReqs,
+    mergeExtraPresets,
+    mergeWaitTick,
+    nudgeIdleSlots,
+    orchAfterBoot,
+    relayAfterPrep,
+    slotPromptText,
+    startOffered,
+} from "./relay.mjs"
 import { orchNudgeDue } from "./loops.mjs"
 import { autoSyncConflicts } from "./auto-merge.mjs"
 import { loadMergeWait } from "./merge-wait.mjs"
@@ -66,37 +103,98 @@ sweepTmp(DATA)
 // При запуске — событие server.start (версия, причина, когда замолчал прошлый экземпляр); раз в минуту — pulse.json для
 // внешнего сторожа и событие server.pulse с задержкой цикла событий и очередью git. При выходе причина пишется синхронно.
 const PULSE_FILE = path.join(DATA, "pulse.json"), BOOT_STARTED = Date.now()
+// сухой экземпляр на общей папке данных не перетирает пульс настоящего сервера; со своей папкой (DASH_DATA) — пишет
 const pulseWrite = !DRY || !!process.env.DASH_DATA
-const CODE_SHA = (() => { try { return String(spawnSync("git", ["-C", HERE, "rev-parse", "--short", "HEAD"], { encoding: "utf8", windowsHide: true, timeout: 5000 }).stdout || "").trim() } catch { return "" } })()
+const CODE_SHA = (() => {
+    try {
+        return String(
+            spawnSync("git", ["-C", HERE, "rev-parse", "--short", "HEAD"], {
+                encoding: "utf8",
+                windowsHide: true,
+                timeout: 5000,
+            }).stdout || "",
+        ).trim()
+    } catch {
+        return ""
+    }
+})()
 const EXIT_FILE = path.join(DATA, "last-exit.json")
 {
   const prev = readJson(PULSE_FILE, null), prevExit = readJson(EXIT_FILE, null)
   const stop = classifyPrevStop({ prev, prevExit, bootAt: BOOT_STARTED, envReason: String(process.env.DASH_START_REASON || "").trim() })
-  logEvent("server.start", { pid: process.pid, port: PORT, sha: CODE_SHA, reason: startReason(process.env), dry: DRY, stop, prev: prev && prev.at ? { pid: prev.pid, at: prev.at, sha: prev.sha, silentS: Math.round((BOOT_STARTED - prev.at) / 1000) } : null, ...(prevExit && prevExit.pid === (prev && prev.pid) ? { prevExit } : {}) })
-  console.log("запуск: версия " + (CODE_SHA || "?") + ", причина: " + startReason(process.env) + (prev && prev.at ? "; прошлый пульс " + new Date(prev.at).toLocaleTimeString("ru-RU") + " (pid " + prev.pid + ")" : "") + "; прошлый экземпляр: " + stop.why)
+  logEvent("server.start", {
+      pid: process.pid,
+      port: PORT,
+      sha: CODE_SHA,
+      reason: startReason(process.env),
+      dry: DRY,
+      stop,
+      prev:
+          prev && prev.at
+              ? { pid: prev.pid, at: prev.at, sha: prev.sha, silentS: Math.round((BOOT_STARTED - prev.at) / 1000) }
+              : null,
+      ...(prevExit && prevExit.pid === (prev && prev.pid) ? { prevExit } : {}),
+  })
+  console.log(
+      "запуск: версия " +
+          (CODE_SHA || "?") +
+          ", причина: " +
+          startReason(process.env) +
+          (prev && prev.at
+              ? "; прошлый пульс " + new Date(prev.at).toLocaleTimeString("ru-RU") + " (pid " + prev.pid + ")"
+              : "") +
+          "; прошлый экземпляр: " +
+          stop.why,
+  )
 }
+// Причина выхода пишется синхронно (writeJsonSync, appendFileSync): в обработчике exit асинхронная запись не успеет.
+// Один раз: uncaughtExceptionMonitor и следом exit не должны перезаписать причину кодом выхода.
 let exitNoted = false
 const noteExit = (extra) => {
   if (DRY || exitNoted) return
   exitNoted = true
   const rec = exitRecord({ pid: process.pid, now: Date.now(), ...extra })
   try { writeJsonSync(EXIT_FILE, rec) } catch { /* диск недоступен */ }
-  try { fs.appendFileSync(EVENTS_JSONL, JSON.stringify({ at: rec.at, type: "server.exit", pid: process.pid, code: rec.code, signal: rec.signal, ...(rec.error ? { error: rec.error, origin: rec.origin } : {}) }) + "\n") } catch { /* как выше */ }
+  try {
+      fs.appendFileSync(
+          EVENTS_JSONL,
+          JSON.stringify({
+              at: rec.at,
+              type: "server.exit",
+              pid: process.pid,
+              code: rec.code,
+              signal: rec.signal,
+              ...(rec.error ? { error: rec.error, origin: rec.origin } : {}),
+          }) + "\n",
+      )
+  } catch {
+      /* как выше */
+  }
 }
 process.on("exit", (code) => noteExit({ code }))
 process.on("uncaughtExceptionMonitor", (err, origin) => noteExit({ err, origin, code: 1 }))
 for (const sig of ["SIGBREAK", "SIGHUP", "SIGTERM"]) { try { process.on(sig, () => { noteExit({ signal: sig, code: 0 }); process.exit(0) }) } catch { /* сигнала нет на этой ОС */ } }
+// очередь к ssh переполнена — событие не чаще раза в 30 с, иначе журнал эпика забьётся одинаковыми строками
 setSshGateHook((x) => { const now = Date.now(); if (now - (setSshGateHook.last || 0) < 30000) return; setSshGateHook.last = now; logEvent("ssh.gate", x) })
 const pulseRec = (lagMs) => ({ at: Date.now(), pid: process.pid, port: PORT, sha: CODE_SHA, startedAt: BOOT_STARTED, lagMs })
 if (pulseWrite) writeJsonSync(PULSE_FILE, pulseRec(0))
 {
+  // lagMs — насколько тик опоздал против расписания: задержка цикла событий или сон машины (pcGap отличает второе)
   let due = Date.now() + PULSE_MS, last = Date.now()
   setInterval(() => {
     const now = Date.now(), lagMs = Math.max(0, now - due); due = now + PULSE_MS
     { const g = pcGap(lagMs); if (g) logEvent("pc.gap", g) }
     if (pulseWrite) saveJson(PULSE_FILE, pulseRec(lagMs))
     const sn = snapNow(), hangs = hangsSince(last); last = now
-    logEvent("server.pulse", { lagMs, git: gitLoad(), snapAgeS: sn ? Math.round((now - sn.at) / 1000) : null, jobs: jobList().filter((j) => j.status === "running").length, busy: [...agents.values()].filter((a) => !a.dead && a.busy).length, drain: !!drainState(), ...(hangs.length ? { hangs: hangs.map((h) => h.what) } : {}) })
+    logEvent("server.pulse", {
+        lagMs,
+        git: gitLoad(),
+        snapAgeS: sn ? Math.round((now - sn.at) / 1000) : null,
+        jobs: jobList().filter((j) => j.status === "running").length,
+        busy: [...agents.values()].filter((a) => !a.dead && a.busy).length,
+        drain: !!drainState(),
+        ...(hangs.length ? { hangs: hangs.map((h) => h.what) } : {}),
+    })
   }, PULSE_MS).unref()
 }
 
@@ -114,24 +212,54 @@ if (process.env.DASH_EXIT_AFTER) setTimeout(() => process.exit(0), Number(proces
   const { runs, cut } = markBootInterrupted(loadRuns()); loadJobs(runs)
   if (cut.length) logEvent("restart.interrupted", { n: cut.length, jobs: cut.slice(0, 40) })
 }
+// Снимок прогонов как они прочитаны с диска: после правок ниже записываются только изменённые (bootSeen → runsSeen).
 const bootLoaded = new Map(jobList().map((j) => [j.id, JSON.stringify(j)]))
+// Сверочные прогоны на staging, оставшиеся в очереди при выключенной сверке, снимаются — иначе встали бы навсегда.
 {
-  let n = 0
-  for (const j of jobList()) {
-    if ((j.baseline || (j.tree === "orchestrator-staging" && j.by === "сверка со staging")) && ["queued", "waiting"].includes(j.status) && !STAGING_BASELINE_RUNS) { j.status = "cancelled"; j.cancelled = true; j.endedAt = Date.now(); j.summary = "снята: сверочные прогоны на staging выключены"; n++; continue }
-    if (j.status !== "fail" || j.infra || !j.runOn || j.runOn === "local") continue
-    const sm = String(j.summary || ""); if (sm.length > 300 || !sm.startsWith("✗")) continue
-    const f = infraFailure(sm, { runOn: j.runOn }); if (!f) continue
-    j.status = "interrupted"; j.infra = f.kind; j.infraWhy = f.label; j.requeued = true; j.summary = "машина недоступна: " + f.label + " — не поломка кода"; n++
-  }
-  if (n) { logEvent("jobs.infra-migrated", { n }); console.log("прогоны, упавшие из-за связи с машиной, сняты с красного:", n) }
+    let n = 0
+    for (const j of jobList()) {
+        if (
+            (j.baseline || (j.tree === "orchestrator-staging" && j.by === "сверка со staging")) &&
+            ["queued", "waiting"].includes(j.status) &&
+            !STAGING_BASELINE_RUNS
+        ) {
+            j.status = "cancelled"
+            j.cancelled = true
+            j.endedAt = Date.now()
+            j.summary = "снята: сверочные прогоны на staging выключены"
+            n++
+            continue
+        }
+        if (j.status !== "fail" || j.infra || !j.runOn || j.runOn === "local") continue
+        const sm = String(j.summary || "")
+        if (sm.length > 300 || !sm.startsWith("✗")) continue
+        const f = infraFailure(sm, { runOn: j.runOn })
+        if (!f) continue
+        j.status = "interrupted"
+        j.infra = f.kind
+        j.infraWhy = f.label
+        j.requeued = true
+        j.summary = "машина недоступна: " + f.label + " — не поломка кода"
+        n++
+    }
+    if (n) {
+        logEvent("jobs.infra-migrated", { n })
+        console.log("прогоны, упавшие из-за связи с машиной, сняты с красного:", n)
+    }
 }
 for (const [id, line] of bootSeen(jobList(), bootLoaded)) runsSeen.set(id, line)
 if (jobList().some((j) => !runsSeen.has(j.id))) save()
 if (jobList().length > KEEP_JOBS) keepLastJobs(KEEP_JOBS)
 if (!DRY) { setTimeout(rotateLogs, 60000).unref(); setInterval(rotateLogs, 24 * 3600e3).unref() }
 // лишние папки слотов — считаем (страница предлагает убрать); сама уборка — только кнопкой
-if (!DRY) { const hy = () => hygieneRefresh(openEpics(), { keep: Array.isArray(settings.keepWorktrees) ? settings.keepWorktrees : KEEP_DEFAULT }).catch((e) => console.error("папки слотов:", e.message)); setTimeout(hy, 180000).unref(); setInterval(hy, 6 * 3600e3).unref() }
+if (!DRY) {
+    const hy = () =>
+        hygieneRefresh(openEpics(), {
+            keep: Array.isArray(settings.keepWorktrees) ? settings.keepWorktrees : KEEP_DEFAULT,
+        }).catch((e) => console.error("папки слотов:", e.message))
+    setTimeout(hy, 180000).unref()
+    setInterval(hy, 6 * 3600e3).unref()
+}
 
 // ── агенты ──
 // остановить процесс агента: у рантайма без постоянного процесса он есть только во время хода — снимает адаптер
@@ -142,7 +270,16 @@ setInterval(() => {
   const now = Date.now(), live = [...agents.values()].filter((a) => !a.dead)
   const idleOf = (a) => now - (a.lastReal || a.lastActive || now)
   const stopIdle = (a, why) => { push(a, { id: "idle-" + a.rev, t: "status", text: why }); a.stopping = true; killAgent(a) }
-  for (const a of live) if (!a.busy && a.pending.size === 0 && idleOf(a) > AGENT_IDLE_MIN * 60000) stopIdle(a, "Остановлен по простою (" + Math.round(AGENT_IDLE_MIN / 60) + " ч), чтобы вернуть память. Сессия сохранена — следующее сообщение продолжит её.")
+  for (const a of live)
+      if (!a.busy && a.pending.size === 0 && idleOf(a) > AGENT_IDLE_MIN * 60000)
+          stopIdle(
+              a,
+              "Остановлен по простою (" +
+                  Math.round(AGENT_IDLE_MIN / 60) +
+                  " ч), чтобы вернуть память. Сессия сохранена — следующее сообщение продолжит её.",
+          )
+  // мало памяти — за проход останавливается один агент, молчащий дольше всех (не меньше 30 мин): по одному, чтобы
+  // не снять всех разом из-за кратковременного всплеска
   const m = memState().v
   if (m && m.freeCommitGB < 3) {
     const cand = live.filter((a) => !a.dead && !a.busy && a.pending.size === 0 && idleOf(a) > 30 * 60000).sort((x, y) => idleOf(y) - idleOf(x))[0]
@@ -150,8 +287,17 @@ setInterval(() => {
   }
 }, 60000).unref()
 const epicAgentKeys = () => { const e = viewEpic(); return e ? TREES.filter((t) => t.epic === e.id && (t.kind === "orch" || t.kind === "slot") && !t.archived).map((t) => t.key) : [] }
-// после перезапуска агенты, которых он застал посреди хода, продолжают сами — оркестратор первым
-if (!DRY) setTimeout(() => { if (settings.autoResume === false || drainState()) return; resumeInterrupted(epicAgentKeys()).then((ks) => { if (ks.length) console.log("возобновлены после перезапуска:", ks.join(", ")) }).catch((e) => console.error("возобновление:", e.message)) }, 45000).unref()
+// после перезапуска агенты, которых он застал посреди хода, продолжают сами — оркестратор первым; через 45 с, когда
+// снимок и реестр уже прочитаны; при подготовке к следующему перезапуску (drain) — не будить
+if (!DRY)
+    setTimeout(() => {
+        if (settings.autoResume === false || drainState()) return
+        resumeInterrupted(epicAgentKeys())
+            .then((ks) => {
+                if (ks.length) console.log("возобновлены после перезапуска:", ks.join(", "))
+            })
+            .catch((e) => console.error("возобновление:", e.message))
+    }, 45000).unref()
 const BOOT_AT = Date.now()
 let idleNudgeAt = 0
 // сторож простоя: никто в эпике не работает, очередей нет, не все слоты ждут человека — одно сообщение оркестратору
@@ -161,8 +307,14 @@ setInterval(() => {
     const keys = epicAgentKeys(), orch = keys.find((k) => TREES.find((t) => t.key === k && t.kind === "orch")); if (!orch || !agentSession(orch)) return
     const as = keys.map((k) => agents.get(k)).filter(Boolean), slots = keys.filter((k) => k !== orch)
     const cards = inboxCards(), now = Date.now()
+    // передача оркестратору, которая висит больше 10 мин и сама не ушла, — сначала в очередь; толчок — не в этот проход
     let requeued = 0
-    for (const x of cards) if (x.kind === "relay" && x.to === orch && !x.queued && !x.sending && now - (x.at || now) > 10 * 60e3) { x.queued = now; x.note = "не ушла сама — сторож простоя поставил в очередь к оркестратору"; requeued++ }
+    for (const x of cards)
+        if (x.kind === "relay" && x.to === orch && !x.queued && !x.sending && now - (x.at || now) > 10 * 60e3) {
+            x.queued = now
+            x.note = "не ушла сама — сторож простоя поставил в очередь к оркестратору"
+            requeued++
+        }
     if (requeued) { saveInbox(); logEvent("idle.requeue", { key: orch, n: requeued }); return }
     const ep = viewEpic(), oa = agents.get(orch), slotAg = slots.map((k) => agents.get(k)).filter(Boolean)
     const ejobs = jobList().filter((j) => keys.includes(j.tree) || (ep && j.epic === ep.id))
@@ -172,8 +324,16 @@ setInterval(() => {
       slotsWithSession: slots.filter((k) => agentSession(k)).length, slotsWaitingOwner: new Set(cards.filter((x) => x.kind === "ownerq" && slots.includes(x.tree)).map((x) => x.tree)).size,
       idleMs: IDLE_NUDGE_MIN * 60e3, everyMs: IDLE_NUDGE_EVERY_MIN * 60e3 })
     if (!due.due) return
+    // время толчка ставится до доставки: следующий тик через минуту не толкнёт второй раз, пока агент поднимается
     idleNudgeAt = now
-    ensureAgent(orch).then((a) => { if (!a.busy) { deliver(a, IDLE_NUDGE_TEXT, "nudge"); logEvent("idle.nudge", { key: orch, why: due.why }) } }).catch((e) => console.error("сторож простоя:", e.message))
+    ensureAgent(orch)
+        .then((a) => {
+            if (!a.busy) {
+                deliver(a, IDLE_NUDGE_TEXT, "nudge")
+                logEvent("idle.nudge", { key: orch, why: due.why })
+            }
+        })
+        .catch((e) => console.error("сторож простоя:", e.message))
   } catch (e) { console.error("сторож простоя:", e.message) }
 }, 60000).unref()
 
@@ -182,6 +342,7 @@ loadInbox()
 loadOrchHeld()
 loadMergeWait()
 if (!DRY) setTimeout(() => setInterval(() => { if (!drainState()) mergeWaitTick().catch((e) => console.error("ожидание влива:", e.message)) }, 60000).unref(), 90000).unref()
+// старые карточки с общим адресом «orchestrator» — на ключ оркестратора их эпика (иначе передача не найдёт агента)
 for (const x of inboxCards()) { const ep = x.epic || (viewEpic() && viewEpic().id); if (x.to === "orchestrator" && ep) x.to = orchKey(ep); if (x.tree === "orchestrator" && ep) x.tree = orchKey(ep) }
 Object.assign(settings, readJson(SETTINGS_FILE, {}))
 for (const [k, v] of Object.entries(readJson(RELAY_FACTS_FILE, {}) || {})) lastRelay.set(k, v)
@@ -192,10 +353,34 @@ if (!DRY) setTimeout(() => orchAfterBoot().catch((e) => console.error("кома�
 
 // ── регресс ──
 loadStgRed()
-if (!DRY) setTimeout(() => { const since = Date.now() - 12 * 3600e3; for (const j of jobList()) if (j.status === "fail" && (j.endedAt || 0) > since) { try { foreignRedBaseline(j) } catch { /* следующий */ } } }, 120000).unref()
+// красные прогоны последних 12 ч — сверка с красным самого staging (чужое красное не вменяется слоту)
+if (!DRY)
+    setTimeout(() => {
+        const since = Date.now() - 12 * 3600e3
+        for (const j of jobList())
+            if (j.status === "fail" && (j.endedAt || 0) > since) {
+                try {
+                    foreignRedBaseline(j)
+                } catch {
+                    /* следующий */
+                }
+            }
+    }, 120000).unref()
 loadSpecHist()
 // первый запуск: история спек из уже сохранённых логов, иначе карантин стартовал бы пустым
-setTimeout(() => { if (Object.keys(specHistMap()).length) return; let n = 0; for (const j of jobList()) { try { recordSpecs(j); n++ } catch { /* лог мог не сохраниться */ } } if (n) console.log("история спек: из логов", n, "прогонов, спек", Object.keys(specHistMap()).length) }, 5000).unref()
+setTimeout(() => {
+    if (Object.keys(specHistMap()).length) return
+    let n = 0
+    for (const j of jobList()) {
+        try {
+            recordSpecs(j)
+            n++
+        } catch {
+            /* лог мог не сохраниться */
+        }
+    }
+    if (n) console.log("история спек: из логов", n, "прогонов, спек", Object.keys(specHistMap()).length)
+}, 5000).unref()
 
 // ── конвейер, ревью, поезда, ретро ──
 loadOrderDismissed()
@@ -218,6 +403,7 @@ setInterval(() => {
       const t = snapNow().trees.find((z) => z.key === x.slot), ap = agentPublic(x.slot)
       if (!t || !t.exists || t.unbuilt || ap.running || ap.hasLast || startOffered.has(x.slot)) continue
       if (jobList().some((j) => j.tree === x.slot && j.task === "slot-up" && !FINAL.includes(j.status))) continue
+      // без плана волны и стартового сообщения агенту нечего делать — карточку не предлагать
       if (!planExists(t) || !slotPromptText(x.slot)) continue
       if (inboxCards().some((z) => z.kind === "relay" && z.to === x.slot)) continue
       startOffered.add(x.slot)
@@ -231,6 +417,8 @@ setInterval(() => {
 setInterval(() => { for (const to of new Set(inboxCards().filter((x) => x.kind === "relay" && x.queued).map((x) => x.to))) drainQueued(to) }, 20000).unref()
 
 // ── автопоезд ──
+// Первый толчок — через 45 с; через 90 с — ещё раз, после свежей пересборки снимка (rebuildFresh), чтобы станции
+// судились по нынешнему коду. Правила сессий эпика (epicRulesCheck) — через 2 мин и раз в час.
 setTimeout(() => rebuildFresh().then(() => kickStalled("после запуска диспетчерской")).catch(() => { }), 90000).unref()
 { const rules = () => { try { epicRulesCheck() } catch (e) { console.error("правила сессий эпика:", e.message) } }; setTimeout(rules, 120000).unref(); setInterval(rules, 3600e3).unref() }
 setInterval(() => kickStalled("проверка простоя"), 180000).unref()
@@ -244,6 +432,8 @@ mergeExtraPresets()
 // ── подготовка слотов и слежение за реестром эпиков ──
 setTimeout(() => provisionMissing().catch(() => { }), 15000).unref()
 setInterval(() => provisionMissing().catch(() => { }), 60000).unref()
+// Реестр эпиков правят команды epic.mjs из другого процесса — сервер замечает это по времени изменения файла (опрос
+// раз в 4 с) и перечитывает реестр, наборы проверок и снимок, затем готовит новые папки слотов.
 // время реестра, который прочитал запуск; -1 — файла не было: его появление — тоже перемена
 S.epicMtime = (() => { try { return fs.statSync(EPIC_FILE).mtimeMs } catch { return -1 } })()
 setInterval(() => {
@@ -257,13 +447,32 @@ setInterval(() => {
   } catch { S.epicMtime = -1 /* реестра пока нет */ }
 }, 4000).unref()
 setTimeout(() => orchFollow("запуск диспетчерской").catch(() => { }), 20000).unref()
-setInterval(() => { autoSyncSlots().catch((e) => console.error("автоперемотка слотов:", e.message)).then(() => autoSyncConflicts()).catch((e) => console.error("автоподтягивание при конфликте:", e.message)) }, 30000).unref()
+// перемотка слотов вперёд по staging, затем — подтягивание staging в слоты с конфликтом (по порядку, не параллельно)
+setInterval(() => {
+    autoSyncSlots()
+        .catch((e) => console.error("автоперемотка слотов:", e.message))
+        .then(() => autoSyncConflicts())
+        .catch((e) => console.error("автоподтягивание при конфликте:", e.message))
+}, 30000).unref()
 
 // ── модули ──
 onModuleBoot("machines", () => {
   initMachines()
   // уборка папок прогонов слотов, которых больше нет, на удалённых машинах
-  if (!DRY) { const prune = async () => { const live = epicSlots().filter((x) => !x.archived).map((x) => x.slot).concat(["orchestrator-staging"]); await shardApi().slotPrune(live).then((r) => console.log("уборка папок прогонов на машинах:", r)).catch((e) => console.error("уборка папок прогонов:", e.message)) }; setTimeout(prune, 300000).unref(); setInterval(prune, 6 * 3600e3).unref() }
+  if (!DRY) {
+      const prune = async () => {
+          const live = epicSlots()
+              .filter((x) => !x.archived)
+              .map((x) => x.slot)
+              .concat(["orchestrator-staging"])
+          await shardApi()
+              .slotPrune(live)
+              .then((r) => console.log("уборка папок прогонов на машинах:", r))
+              .catch((e) => console.error("уборка папок прогонов:", e.message))
+      }
+      setTimeout(prune, 300000).unref()
+      setInterval(prune, 6 * 3600e3).unref()
+  }
 })
 onModuleBoot("retro", () => {
   if (!DRY) { const rt = () => retroAuto().catch((e) => console.error("ретро:", e.message)); setTimeout(rt, 240000).unref(); setInterval(rt, RETRO_AUTO_MS).unref() }
@@ -274,16 +483,35 @@ onModuleBoot("tg", () => {
   loadTg()
   const label = (t) => [t.tag, t.wave ? String(t.wave).toUpperCase() : "", t.title || ""].filter(Boolean).join(" · ")
   startTg({
-    cards: () => inboxCards(),
-    who: (k) => { const t = TREES.find((x) => x.key === k) || {}; let ep = null; try { ep = epicOfKey(k) } catch { /* реестр ещё не прочитан */ } return (t.kind === "orch" ? "Оркестратор" : label({ ...t, tag: t.tag || k })) + (ep ? " · эпик " + ep : "") },
-    readyMerges: () => ((snapNow() && snapNow().trees) || []).filter((t) => t.kind === "slot" && !t.archived).filter((t) => { try { return readyStg(t, stagesView(t, agentPublic(t.key))) } catch { return false } })
-      .map((t) => ({ mkey: mergeKey(t), slot: t.key, who: label(t) + (t.epic ? " · эпик " + t.epic : "") })),
-    ownerAnswer: (tree, text, id) => ownerAnswer(tree, text, id, { via: "tg" }),
-    merge: (slot) => pipelineStart({ action: "merge", slot }, { via: "tg" }),
+      cards: () => inboxCards(),
+      who: (k) => {
+          const t = TREES.find((x) => x.key === k) || {}
+          let ep = null
+          try {
+              ep = epicOfKey(k)
+          } catch {
+              /* реестр ещё не прочитан */
+          }
+          return (t.kind === "orch" ? "Оркестратор" : label({ ...t, tag: t.tag || k })) + (ep ? " · эпик " + ep : "")
+      },
+      readyMerges: () =>
+          ((snapNow() && snapNow().trees) || [])
+              .filter((t) => t.kind === "slot" && !t.archived)
+              .filter((t) => {
+                  try {
+                      return readyStg(t, stagesView(t, agentPublic(t.key)))
+                  } catch {
+                      return false
+                  }
+              })
+              .map((t) => ({ mkey: mergeKey(t), slot: t.key, who: label(t) + (t.epic ? " · эпик " + t.epic : "") })),
+      ownerAnswer: (tree, text, id) => ownerAnswer(tree, text, id, { via: "tg" }),
+      merge: (slot) => pipelineStart({ action: "merge", slot }, { via: "tg" }),
   })
   onOwnerAnswer(tgAnswered)
 })
-// машины ставят свою реализацию до первого возврата прерванных прогонов в очередь
+// машины ставят свою реализацию до первого возврата прерванных прогонов в очередь (через 7 с): иначе прогон,
+// прерванный связью с удалённой машиной, вернулся бы в очередь без знания о машинах
 { const r = startModules({ DRY }); if (r.started.length) console.log("модули:", r.started.join(", ")) }
 if (!DRY) setTimeout(() => requeueInterrupted().catch(() => { }), 7000).unref()
 if (!DRY) setInterval(() => requeueInterrupted().catch(() => { }), 30000).unref()
@@ -298,7 +526,25 @@ resetVer()
 startSnapshotLoop(); startHeartbeat(); startLoopWatch()
 
 // ── HTTP ──
-const uiStamp = () => { try { return Math.round(Math.max(...[...["index.html", ...fs.readdirSync(path.join(HERE, "ui")).map((f) => "ui/" + f)].map((f) => path.join(HERE, f)), ...Object.values(UI_SHARED)].map((f) => fs.statSync(f).mtimeMs))) } catch { return 0 } }
+// Сервер — последним: к первому запросу состояние уже загружено. Слушает только HOST (127.0.0.1); Host проверяется на
+// каждом запросе (okHost), токен страницы подставляется в index.html и нужен всем изменяющим запросам (http.mjs).
+// uiStamp — отметка версии в путях файлов страницы: новая версия файлов получает новый адрес и не берётся из кеша.
+const uiStamp = () => {
+    try {
+        return Math.round(
+            Math.max(
+                ...[
+                    ...["index.html", ...fs.readdirSync(path.join(HERE, "ui")).map((f) => "ui/" + f)].map((f) =>
+                        path.join(HERE, f),
+                    ),
+                    ...Object.values(UI_SHARED),
+                ].map((f) => fs.statSync(f).mtimeMs),
+            ),
+        )
+    } catch {
+        return 0
+    }
+}
 const UI_TYPES = { css: "text/css; charset=utf-8", svg: "image/svg+xml", png: "image/png" }
 S.server = http.createServer(async (req, res) => {
   try {
@@ -323,4 +569,5 @@ S.server = http.createServer(async (req, res) => {
 })
 S.server.listen(PORT, HOST, () => console.log(`Диспетчерская: http://${HOST}:${PORT}  (данные: ${fwd(DATA)})`))
 S.server.on("error", (e) => { console.error(e.code === "EADDRINUSE" ? `Порт ${PORT} занят — диспетчерская уже запущена? http://${HOST}:${PORT}` : e.message); process.exit(1) })
+// Ctrl+C: дети (прогоны, агенты) снимаются деревом, очередь прогонов и файлы состояния дописываются синхронно
 process.on("SIGINT", () => { for (const c of procs.values()) killTree(c); for (const a of agents.values()) if (!a.dead) killAgent(a); flushRuns(true); flushSync(); process.exit(0) })

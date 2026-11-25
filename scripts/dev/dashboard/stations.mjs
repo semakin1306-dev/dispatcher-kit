@@ -1,6 +1,22 @@
 // stations.mjs — станции волны: авто-отметки по git и истории прогонов, содержимое станции по клику, улики красного
 // теста. Набор тестов и гардов — из PROJECT.stations; гард нужен только при правке продуктового кода (пути областей
 // конфига).
+//
+// Станции волны по порядку — STATIONS: план → красный тест → код → сборка → гарды → тесты → ревью → регресс → коммит →
+// staging → стенд → приёмка → прод → сайт. Станции модулей (ревью, выкат, приёмка) есть, только когда модуль включён.
+//
+// Кто зовёт: снимок (snapshot.mjs) на каждое дерево — withStages: вердикт проверок t.verdict и отметки t.stages; страница —
+// stationInfo по клику на станцию; relay.mjs после хода агента — afterSlotTurn, строка «СВОДКА», «ПРИНЯТЬ РЕВЬЮ»;
+// http.mjs и annot.mjs — ручные отметки; pipeline.mjs — конфликт, найденный при вливе (noteConflict).
+// Файлы данных: stages.json — ручные отметки станций (S.manual), summaries.json — строка «СВОДКА» агента (S.summaries).
+//
+// Инварианты:
+// - проверка засчитывается только «на нынешнем коде»: прогон, чей отпечаток кода (fingerprint.mjs codeFp) совпадает с
+//   текущим; иначе вердикт «stale» и станция не пройдена. Исключения — сборка, если её входы не менялись, и ревью «ЗА»,
+//   если после него менялись только тесты и документы;
+// - ручная отметка сильнее авто-отметки: «отмечено» проходит станцию, «снято» снимает её даже при авто-отметке;
+// - влитая ветка без нового кода впереди staging несёт проверки, пройденные до влива; доделка после влива — проверки заново;
+// - у поезда ручные отметки — по вагону дерева (ветка одна на все вагоны), у слота — по ветке.
 import { MAIN, PROJECT, fwd } from "../slots.mjs";
 import fs from "node:fs";
 import { readJson, saveJson, writeJsonSync } from "./store.mjs";
@@ -23,7 +39,26 @@ import { addCard, ibId, inboxCards, keepCards } from "./inbox.mjs";
 import { late } from "./late.mjs";
 import { verdictJob } from "./loops.mjs";
 import { depsOf } from "./pipeline.mjs";
-import { BASE_TASKS, ENV_FAIL_RE, SUITE_FAM, changedBetween, curSnapOf, entrySuites, failingSpecs, inheritedRed, jobCovers, onlyStagingRed, regressPlan, specsPassedSince, stagingBase, stagingSpecSets, suiteLedger, suitesPublic, touchedFiles } from "./regress.mjs";
+import { prompt } from "../prompts.mjs";
+import {
+    BASE_TASKS,
+    ENV_FAIL_RE,
+    SUITE_FAM,
+    changedBetween,
+    curSnapOf,
+    entrySuites,
+    failingSpecs,
+    inheritedRed,
+    jobCovers,
+    onlyStagingRed,
+    regressPlan,
+    specsPassedSince,
+    stagingBase,
+    stagingSpecSets,
+    suiteLedger,
+    suitesPublic,
+    touchedFiles,
+} from "./regress.mjs";
 import { parseTaskLog } from "./parsers.mjs";
 import { PRESETS, TREES, isOrch, orchOfKey, trainWaveOf, treeByKey } from "./trees.mjs";
 import { TASKS, buildHow, buildNeed } from "./tasks.mjs";
@@ -32,6 +67,7 @@ import { applyTrain } from "./trains.mjs";
 import { enabled } from "./modules.mjs";
 import { planIsStub } from "./slot-rules.mjs";
 
+// Поздняя привязка: relay.mjs сам импортирует этот модуль (afterSlotTurn), прямой импорт замкнул бы круг.
 const { failureExcerpt, pruneDeadPresets, reqItemStatus, testReqsOf } = late("relay.mjs", ["failureExcerpt", "pruneDeadPresets", "reqItemStatus", "testReqsOf"]);
 
 /** Гарды и тесты станций — из конфига проекта. */
@@ -42,22 +78,50 @@ const STAND_URL = PROJECT.release.stand.url || PROJECT.accept.standUrl || "";
 
 export const STATIONS = [
     { id: "plan", label: "План", how: "есть файл .claude/plans/waves/WV-NNNN*.md (в слоте или в staging)" },
-    { id: "red", label: "Красный тест", how: "в ветке есть тесты и улики красного: тесты раньше кода в истории, или красный прогон был до зелёного" },
+    {
+        id: "red",
+        label: "Красный тест",
+        how: "в ветке есть тесты и улики красного: тесты раньше кода в истории, или красный прогон был до зелёного",
+    },
     { id: "impl", label: "Код", how: "в ветке есть коммиты или изменённые файлы" },
-    { id: "build", label: "Сборка", how: "сборка зелёная в дашборде; или не нужна — правка не касается областей со сборкой" },
-    { id: "guards", label: "Гарды", how: "гарды проекта (stations.guards) зелёные на нынешнем коде; нужны, только если тронут продуктовый код" },
+    {
+        id: "build",
+        label: "Сборка",
+        how: "сборка зелёная в дашборде; или не нужна — правка не касается областей со сборкой",
+    },
+    {
+        id: "guards",
+        label: "Гарды",
+        how: "гарды проекта (stations.guards) зелёные на нынешнем коде; нужны, только если тронут продуктовый код",
+    },
     { id: "tests", label: "Тесты", how: "все тесты волны из карточки зелёные в дашборде на нынешнем коде" },
-    { id: "review", label: "Ревью", how: "независимый ревьюер (отдельная сессия, только чтение) сказал «ЗА» на нынешнем коде; «ВОПРОСЫ» — замечания ушли агенту, после правок автопоезд ставит новое ревью; принять без него — кликом" },
-    { id: "regress", label: "Регресс", how: "соседи по тронутым путям зелёные на нынешнем коде: спеки тронутых областей, где упомянуты изменённые файлы, или задача области целиком" },
+    {
+        id: "review",
+        label: "Ревью",
+        how:
+            "независимый ревьюер (отдельная сессия, только чтение) сказал «ЗА» на нынешнем коде; «ВОПРОСЫ» — " +
+            "замечания ушли агенту, после правок автопоезд ставит новое ревью; принять без него — кликом",
+    },
+    {
+        id: "regress",
+        label: "Регресс",
+        how: "соседи по тронутым путям зелёные на нынешнем коде: спеки тронутых областей, где упомянуты изменённые файлы, или задача области целиком",
+    },
     { id: "commit", label: "Коммит", how: "все изменения слота закоммичены: коммиты впереди staging и чистое дерево" },
     { id: "staging", label: "В staging", how: "в staging есть merge-коммит этой ветки" },
     { id: "stand", label: "На стенде", how: "после вливания стенд выкачен из дашборда" },
-    { id: "accept", label: "Приёмка", how: "в панели «Приёмка» по этой волне вердикт «принято» (по коммиту влива: доделка вливается новым коммитом — и приёмка заново)" },
+    {
+        id: "accept",
+        label: "Приёмка",
+        how: "в панели «Приёмка» по этой волне вердикт «принято» (по коммиту влива: доделка вливается новым коммитом — и приёмка заново)",
+    },
     { id: "prod", label: "В проде", how: "merge-коммит ветки дошёл до main" },
     { id: "site", label: "На сайте", how: "только вручную: проверили результат на живом сайте" },
 ];
 
 export const STAGES_FILE = path.join(DATA, "stages.json");
+
+// ───────────────────────────── ручные отметки и сводки ─────────────────────────────
 
 export function loadStationMarks() {
     S.manual = readJson(STAGES_FILE, {}) || {};
@@ -67,11 +131,13 @@ export function loadSummaries() {
     S.summaries = readJson(SUMMARY_FILE, {}) || {};
 }
 
+/** Ключ ручных отметок «ключ|ветка»; у поезда — с номером вагона дерева: ветка поезда одна, а отметки у каждого вагона свои. */
 export const manualKeyOf = (k) => {
     const w = trainWaveOf(String(k).split("|")[0]);
     return w ? k + "#" + w : k;
 };
 
+/** Ручная отметка станции: true — пройдена, false — снята, null — вернуть авто; note — пояснение (видно в станции). */
 export function markStage(k0, stage, value, note) {
     const k = manualKeyOf(k0);
     S.manual[k] = { ...(S.manual[k] || {}) };
@@ -95,8 +161,14 @@ export function setSummary(key, v) {
     saveJson(SUMMARY_FILE, S.summaries);
 }
 
+/** Статус в заголовке доклада слота «(слот …): ГОТОВО|ЧАСТИЧНО|ЖДУ|СТОП|ВОПРОС». */
 export const SLOT_STATUS_RE = /\(слот [^)\n]*\):\s*\**\s*(ГОТОВО|ЧАСТИЧНО|ЖДУ|СТОП|ВОПРОС)/;
 
+/**
+ * Раздел «Вопросы владельцу:» из ответа агента → текст пунктов или null. Раздел кончается пустой строкой, блоком кода или
+ * следующим заголовком «Слово:». Пункты-«шум» (просьбы нажать кнопку, «решений нет», напоминания «когда …») выкидываются:
+ * карточка в «Ждут вашего действия» должна требовать решения, а не действия, которое диспетчерская делает сама.
+ */
 export function ownerQuestions(text) {
     const ls = String(text || "").split(/\r?\n/), strip = (l) => l.replace(/^[\s>#*_]+|[\s*_]+$/g, "");
     const i = ls.findIndex((l) => /^вопрос(?:ы)?\s+владельцу[^:\n]{0,40}:/i.test(strip(l)));
@@ -126,7 +198,10 @@ export function ownerQuestions(text) {
     }
     if (cur.length)
         items.push(cur.join("\n"));
-    const noise = (x) => /нажм(и|ите)|нажать|кнопк[ауеиой]/i.test(x) && !/\?/.test(x) || /^\s*(\d+[.)]\s*)?(решений нет|вопросов нет|нет вопросов|ничего не нужно)/i.test(x) || /^\s*(\d+[.)]\s*)?когда\b[^?]*$/i.test(x);
+    const noise = (x) =>
+        (/нажм(и|ите)|нажать|кнопк[ауеиой]/i.test(x) && !/\?/.test(x)) ||
+        /^\s*(\d+[.)]\s*)?(решений нет|вопросов нет|нет вопросов|ничего не нужно)/i.test(x) ||
+        /^\s*(\d+[.)]\s*)?когда\b[^?]*$/i.test(x);
     const q = items.filter((x) => !noise(x)).join("\n").trim();
     return q && !/^(нет|—|-)\.?$/i.test(q) ? q.slice(0, 2000) : null;
 }
@@ -142,6 +217,8 @@ export function afterSlotTurn(key, text) {
         if (hs && hs[1] === "ГОТОВО") {
             const tt = treeByKey(key);
             if (tt && tt.path)
+                // Отпечаток кода на момент доклада: «волна закончена» верно только для этого кода (ворота заморозки сверяют его).
+                // Толчок автопоезда — с паузой, чтобы снимок успел увидеть отметку.
                 codeFp(tt.path, true).then((fp) => {
                     markSlotDone(key, fp);
                     if (!DRY)
@@ -153,7 +230,10 @@ export function afterSlotTurn(key, text) {
     }
     else if (!q)
         return;
+    // Новый ответ заменяет прежнюю карточку вопросов этого дерева: старые вопросы либо повторены, либо уже не нужны.
     keepCards((x) => !(x.kind === "ownerq" && x.tree === key));
+    // Режим «без владельца»: на вопросы с рекомендуемым вариантом отвечает автоответ; вопросы без рекомендации и вопросы
+    // только для человека остаются карточкой.
     if (q && !DRY && (settings.autoOwnerUntil || 0) > Date.now()) {
         const ans = autoAnswer(q);
         if (ans) {
@@ -172,6 +252,12 @@ export function afterSlotTurn(key, text) {
     }
 }
 
+// ───────────────────────────── вливы и планы ─────────────────────────────
+
+/**
+ * Вливы в staging, новые первыми: merge-коммиты первой линии плюс вливы веток с боковой линии staging за 45 дней (их видно
+ * только без --first-parent). Боковые берутся лишь по STAGING_MERGE_RE, чтобы подтягивание staging в ветку не сошло за влив.
+ */
 export async function stagingMerges() {
     const rows = (out) => (out ? out.split("\n").filter(Boolean).map((l) => {
         const [sha, ct, subject] = l.split("\t");
@@ -191,6 +277,7 @@ export const orchDirOf = (t) => {
     return (o && o.path) || (TREES[0] && TREES[0].path) || null;
 };
 
+/** Файл плана волны: сначала в папке слота, потом в основной папке, потом в папке эпика оркестратора. */
 export function planFileOf(t) {
     const num = (t.wave || "").toUpperCase();
     if (!num)
@@ -206,6 +293,7 @@ export function planFileOf(t) {
     return null;
 }
 
+/** План вагона поезда: сначала папка эпика — планы вагонов пишет оркестратор, в ветку поезда они не попадают. */
 export function wagonPlanFile(t, wave) {
     const num = String(wave || "").toUpperCase();
     if (!/^WV-\d{4}$/.test(num))
@@ -231,6 +319,7 @@ export function planIsStubOf(t) {
     }
 }
 
+/** План есть: файл WV-NNNN в одной из папок или раздел «**WV-NNNN» в плане эпика (_EPIC/MASTER) — волна описана там. */
 export function planExists(t) {
     const num = (t.wave || "").toUpperCase();
     if (!num)
@@ -252,6 +341,14 @@ export function planExists(t) {
     }
 }
 
+// ───────────────────────────── вердикт проверок и станции дерева ─────────────────────────────
+
+/**
+ * Вердикт проверок и станции дерева для снимка: заполняет t.verdict, t.stages, t.regress, t.review, t.suites, t.conflict и др.
+ * Порядок важен: сначала отпечаток кода и вагон поезда (от них свежесть всех прогонов и ключ ручных отметок), потом проверки,
+ * потом быстрые пути (только спеки, разведка, вагон без тестов) переписывают вердикт, и в конце — перенос проверок влитой
+ * ветки и сами станции.
+ */
 export async function withStages(t, merges) {
     if (!t.exists)
         return t;
@@ -259,6 +356,7 @@ export async function withStages(t, merges) {
     if (t.train)
         await applyTrain(t);
     const auto = {};
+    // Влив этой ветки; у поезда — только влив с номером вагона дерева: прошлые вливы той же ветки — другие вагоны.
     const m = t.branch && !["staging", "main", "HEAD"].includes(t.branch) ? merges.find((x) => x.subject.includes(t.branch) && (!t.train || wavesOfMerge(x.subject).includes(t.wagon))) : null;
     if (planExists(t))
         auto.plan = "найден файл плана волны";
@@ -266,7 +364,15 @@ export async function withStages(t, merges) {
         const re = await redEvidence(t);
         t.redEvidence = re.applies ? { done: re.done, suspicious: re.suspicious, tests: re.testFiles.length } : null;
         if (re.applies && re.done)
-            auto.red = "красный тест: " + re.testFiles.length + " тест. файл(ов), " + (re.order === "tests-first" ? "тесты раньше кода" : re.seq === "red-green" ? "красный → зелёный" : "красный прогон был");
+            auto.red =
+                "красный тест: " +
+                re.testFiles.length +
+                " тест. файл(ов), " +
+                (re.order === "tests-first"
+                    ? "тесты раньше кода"
+                    : re.seq === "red-green"
+                      ? "красный → зелёный"
+                      : "красный прогон был");
     }
     if (t.ahead > 0)
         auto.impl = `коммитов впереди staging: ${t.ahead}`;
@@ -292,6 +398,7 @@ export async function withStages(t, merges) {
         auto.build = "сборка не нужна: правка не касается областей со сборкой";
     const bj = [...jobList()].reverse().find((j) => j.tree === t.key && j.task === "build" && ["ok", "fail"].includes(j.status));
     let bfresh = bj && bj.status === "ok" ? jobFresh(bj, t) : "no";
+    // Код менялся после сборки, но не в её входах (тесты, документы): сборка годна, отметка сборки переносится на новый код.
     if (bj && bj.status === "ok" && bfresh !== "ok" && bj.snap) {
         const cur = await curSnapOf(t).catch(() => null);
         if (cur && [...new Set([...Object.keys(bj.snap), ...Object.keys(cur)])].filter(buildInput).every((f) => (bj.snap[f] || "—") === (cur[f] || "—"))) {
@@ -300,6 +407,7 @@ export async function withStages(t, merges) {
                 setBuildStamp(t.key, { fp: t.fp, at: Date.now(), job: bj.id, carried: true });
         }
     }
+    // Прогон на удалённой машине собирает там сам: его зелёный итог на этом коде засчитывает и сборку.
     if (bn.needed && bfresh !== "ok") {
         const rj = [...jobList()].reverse().find((j) => j.tree === t.key && j.runOn && DIST_TASKS.has(j.task) && j.status === "ok");
         if (rj && jobFresh(rj, t) === "ok") {
@@ -309,21 +417,26 @@ export async function withStages(t, merges) {
     }
     if (bn.needed && bfresh === "ok" && !auto.build)
         auto.build = "сборка зелёная на текущем коде: " + bn.what;
+    // Пресеты задачи, которые не нашли ни одной спеки, снимаются до подсчёта: иначе станция «Тесты» ждала бы их вечно.
     try {
         await pruneDeadPresets(t);
     }
     catch (e) {
         console.error("пресеты без спек:", e.message);
     }
+    // Тесты волны: пресеты слота, иначе тесты по умолчанию из конфига (без ввода), иначе первый гард — чтобы станции было что ждать.
     const entries0 = (PRESETS[t.key] || []).length ? PRESETS[t.key] : TEST_DEFAULT.length ? TEST_DEFAULT : GUARDS.slice(0, 1).map((task) => ({ task, input: "" }));
     const taskIds = entries0.map((p) => p.task);
     const last = (id) => [...jobList()].reverse().find((j) => j.tree === t.key && j.task === id && ["ok", "fail"].includes(j.status));
+    // Прогон-ответ по задаче: падение по признакам сбоя окружения (ENV_FAIL_RE) не считается — это не ответ о коде.
     const answerOf = (id, input) => verdictJob({ jobs: [...jobList()].reverse().filter((j) => j.tree === t.key && !(j.status === "fail" && ENV_FAIL_RE.test(j.summary || ""))),
         task: id, input, fp: t.fp, fresh: (j) => jobFresh(j, t) === "ok" });
     const L = suiteLedger(t), cur = await curSnapOf(t), entries = entries0;
     t.suites = [];
     const states = entries.map((p) => {
         const j = answerOf(p.task, p.input || "");
+        // Красный прогон на коде, который потом менялся, — «stale», а не «fail»: агент мог уже починить. Красное только от staging
+        // (те же спеки красные на самом staging) ветке не вменяется.
         let st = !j ? "none" : j.status === "fail" ? (j.fpEnd && j.fpEnd !== t.fp ? "stale" : onlyStagingRed(j.id) ? "ok" : "fail") : jobFresh(j, t);
         const es = SUITE_FAM[p.task] ? entrySuites(t, p, L, cur) : null;
         if (es) {
@@ -334,14 +447,36 @@ export async function withStages(t, merges) {
         return st;
     });
     let tv = states.includes("fail") ? "fail" : states.every((x) => x === "ok") ? "green" : states.includes("none") ? "none" : states.includes("nobuild") ? "nobuild" : "stale";
+    // Зелёное при уже идущем прогоне той же задачи — ещё не итог: ждём новый результат.
     if (tv === "green" && jobList().some((j) => j.tree === t.key && ["running", "queued", "waiting"].includes(j.status) && entries.some((p) => p.task === j.task)))
         tv = "stale";
-    t.verdict = { tests: tv, build: !bn.needed ? "notneeded" : bfresh === "ok" ? "ok" : !bj ? "none" : bj.status === "fail" ? "fail" : "stale",
-        note: tv === "nobuild" ? "тесты зелёные, но без сборки на этом коде: dist мог быть от старого кода. Соберите и прогоните заново." : tv === "stale" ? "зелёные тесты шли на другом коде: файлы менялись после прогона. Прогоните заново." : "",
-        bnote: bn.needed && bj && bj.status === "ok" && bfresh !== "ok" ? "сборка была на другом коде: файлы менялись после неё. Соберите заново." : "" };
+    t.verdict = {
+        tests: tv,
+        build: !bn.needed
+            ? "notneeded"
+            : bfresh === "ok"
+              ? "ok"
+              : !bj
+                ? "none"
+                : bj.status === "fail"
+                  ? "fail"
+                  : "stale",
+        note:
+            tv === "nobuild"
+                ? "тесты зелёные, но без сборки на этом коде: dist мог быть от старого кода. Соберите и прогоните заново."
+                : tv === "stale"
+                  ? "зелёные тесты шли на другом коде: файлы менялись после прогона. Прогоните заново."
+                  : "",
+        bnote:
+            bn.needed && bj && bj.status === "ok" && bfresh !== "ok"
+                ? "сборка была на другом коде: файлы менялись после неё. Соберите заново."
+                : "",
+    };
     if (tv === "green")
         auto.tests = `зелёные на текущем коде: ${taskIds.join(", ")}`;
     {
+        // Просьбы перепрогнать (строки ПРОГНАТЬ): пока не выполнены, станция не пройдена. После коммита и доклада ГОТОВО волна
+        // заморожена — просьба уходит поезду влива, а отметка остаётся.
         const pend = (testReqsOf(t.key) || []).filter((r) => ["todo", "run", "stale"].includes(reqItemStatus(t.key, r, t).status));
         applyReqs(t, auto, pend, pend.length ? frozenAfterCommit(t.key, t.fp) : "");
     }
@@ -353,7 +488,16 @@ export async function withStages(t, merges) {
         // гард нужен только при правке продуктового кода (пути областей конфига) или спек приёмки
         const need = !!(t.prodTouched || t.accTouched);
         const gs = GUARDS.map((id) => answerOf(id)), gst = gs.map((j) => (!need ? "ok" : !j ? "none" : j.status === "fail" ? "fail" : jobFresh(j, t)));
-        t.verdict.guards = t.readOnly || !GUARDS.length || (!need && !gs.some(Boolean)) ? "notneeded" : gst.includes("fail") ? "fail" : gst.every((x) => x === "ok") ? "green" : gst.includes("none") ? "none" : "stale";
+        t.verdict.guards =
+            t.readOnly || !GUARDS.length || (!need && !gs.some(Boolean))
+                ? "notneeded"
+                : gst.includes("fail")
+                  ? "fail"
+                  : gst.every((x) => x === "ok")
+                    ? "green"
+                    : gst.includes("none")
+                      ? "none"
+                      : "stale";
         {
             const red = gs.find((j, i) => gst[i] === "fail");
             if (t.verdict.guards === "fail" && red) {
@@ -368,6 +512,8 @@ export async function withStages(t, merges) {
             auto.guards = t.readOnly ? "слоту разведки гарды не нужны" : !GUARDS.length ? "в конфиге проекта нет гардов" : "продуктовый код не тронут — гарды не нужны";
     }
     {
+        // Регресс — соседи по тронутым путям. Красное, которое есть и на самом staging (сверка прогоном staging), унаследовано и
+        // ветке не вменяется; упавшие спеки, прошедшие позже на этом же коде, — зелёные.
         const plan = t.readOnly ? [] : regressPlan(touched, t.path);
         const stgSets = plan.some((it) => BASE_TASKS.has(it.task)) ? await stagingSpecSets().catch(() => null) : null;
         const calc = (it) => {
@@ -427,7 +573,16 @@ export async function withStages(t, merges) {
         });
         const rs = t.regress.map((x) => (x.status === "inherited" ? "ok" : x.status));
         t.verdict.regress = !rs.length ? "notneeded" : rs.includes("fail") ? "fail" : rs.every((x) => x === "ok") ? "green" : rs.includes("run") ? "run" : rs.includes("none") ? "none" : "stale";
-        t.verdict.rnote = t.verdict.regress === "fail" ? "регресс красный: " + t.regress.filter((x) => x.status === "fail").map((x) => x.label + (x.input ? " " + x.input : "")).join(", ") : t.verdict.regress === "stale" || t.verdict.regress === "nobuild" ? "регресс шёл на другом коде: прогоните заново" : "";
+        t.verdict.rnote =
+            t.verdict.regress === "fail"
+                ? "регресс красный: " +
+                  t.regress
+                      .filter((x) => x.status === "fail")
+                      .map((x) => x.label + (x.input ? " " + x.input : ""))
+                      .join(", ")
+                : t.verdict.regress === "stale" || t.verdict.regress === "nobuild"
+                  ? "регресс шёл на другом коде: прогоните заново"
+                  : "";
         {
             const inh = t.regress.filter((x) => x.status === "inherited");
             if (inh.length)
@@ -439,12 +594,14 @@ export async function withStages(t, merges) {
             auto.regress = t.readOnly ? "слоту разведки регресс не нужен" : "тронутые пути не задевают соседей";
     }
     {
+        // Ревью: последний прогон ревьюера; если у него нет вердикта (оборвался), берётся последний с вердиктом на том же коде.
         const rAll = [...jobList()].reverse().filter((j) => j.tree === t.key && j.task === "review" && ["ok", "fail"].includes(j.status));
         const last = rAll[0], withVerdict = rAll.find((j) => j.review && j.review.verdict);
         const rj = last && !(last.review && last.review.verdict) && withVerdict && withVerdict.fpEnd === last.fpEnd ? withVerdict : last;
         const rv = rj && rj.review;
         let rf = !!rj && rj.fpStart === rj.fpEnd && rj.fpEnd === t.fp;
         let carried = [];
+        // «ЗА» переживает правки только тестов и документов: смысл кода, который смотрел ревьюер, не менялся.
         if (!rf && rv && rv.verdict === "ЗА" && rj.snap && cur) {
             const moved = changedBetween(rj.snap, cur);
             if (moved.every((f) => SPEC_RE.test(f) || DOC_RE.test(f))) {
@@ -452,12 +609,29 @@ export async function withStages(t, merges) {
                 carried = moved;
             }
         }
-        t.review = rj ? { verdict: (rv && rv.verdict) || null, fresh: rf, jobId: rj.id, reported: !!rj.reported, reportedAt: rj.reportedAt || null, text: rv ? String(rv.text || "").slice(0, 1500) : "" } : null;
+        t.review = rj
+            ? {
+                  verdict: (rv && rv.verdict) || null,
+                  fresh: rf,
+                  jobId: rj.id,
+                  reported: !!rj.reported,
+                  reportedAt: rj.reportedAt || null,
+                  text: rv ? String(rv.text || "").slice(0, 1500) : "",
+              }
+            : null;
         if (t.readOnly)
             auto.review = "разведке ревью не нужно";
         else if (rf && rv && rv.verdict === "ЗА")
-            auto.review = carried.length ? "независимый ревьюер «ЗА» (" + rj.id + "); после него менялись только тесты и документы: " + carried.slice(0, 4).join(", ") + (carried.length > 4 ? " …" : "") : "независимый ревьюер «ЗА» на нынешнем коде";
+            auto.review = carried.length
+                ? "независимый ревьюер «ЗА» (" +
+                  rj.id +
+                  "); после него менялись только тесты и документы: " +
+                  carried.slice(0, 4).join(", ") +
+                  (carried.length > 4 ? " …" : "")
+                : "независимый ревьюер «ЗА» на нынешнем коде";
     }
+    // Быстрый путь: правка только спек (и документов) не задевает соседей и не требует сборки и ревью; спеки приёмки идут на
+    // стенде, поэтому и станция «Тесты» не нужна.
     t.specOnly = specOnlyOf(touched, hasCode);
     if (t.specOnly && t.verdict) {
         t.verdict.regress = "notneeded";
@@ -476,7 +650,19 @@ export async function withStages(t, merges) {
             auto.tests = "быстрый путь: спеки приёмки идут на стенде, а не здесь";
         }
     }
-    t.summary = S.summaries[t.key] ? { ...S.summaries[t.key], src: "agent" } : t.ahead > 0 ? { text: (await git(t.path, ["log", "--format=%s", "-3", "staging..HEAD"])).out.split("\n").filter(Boolean).join(" · "), src: "commits" } : null;
+    t.summary = S.summaries[t.key]
+        ? { ...S.summaries[t.key], src: "agent" }
+        : t.ahead > 0
+          ? {
+                text: (await git(t.path, ["log", "--format=%s", "-3", "staging..HEAD"])).out
+                    .split("\n")
+                    .filter(Boolean)
+                    .join(" · "),
+                src: "commits",
+            }
+          : null;
+    // Конфликт со staging — пробным слиянием merge-tree в фоне: снимок не ждёт git, результат кешируется по ветке, последнему
+    // коммиту, коду и дереву staging, а готовый ответ перестраивает только это дерево.
     if (t.ahead > 0 && t.branch && !["staging", "main", "HEAD"].includes(t.branch)) {
         const ck = t.branch + "|" + ((t.last && t.last.sha) || "") + "|" + t.fp + "|" + stagingTreeSha();
         if (!stgConflict.has(ck)) {
@@ -500,6 +686,7 @@ export async function withStages(t, merges) {
         t.verdict.note = "";
         auto.tests = "слоту разведки тесты не нужны: кода он не пишет";
     }
+    // У вагона без своих тестов станция «Тесты» не нужна; гарды поезда — отдельная станция.
     if (t.train && !(PRESETS[t.key] || []).length && t.verdict) {
         t.verdict.tests = "notneeded";
         t.verdict.note = "";
@@ -510,6 +697,7 @@ export async function withStages(t, merges) {
     if (!t.train)
         t.firstCommitAt = await firstCommitAt(t.path, m ? m.sha + "^1.." + m.sha + "^2" : t.ahead > 0 ? "staging..HEAD" : "", m ? m.sha : t.path + "|" + ((t.last && t.last.sha) || ""));
     mergedCarry(t, auto, m);
+    // Влив есть, но впереди staging снова коммиты — волну открыли заново (reopened): станция «В staging» не пройдена.
     const landed = mergeLanded(t, m);
     if (m) {
         t.merge = { sha: m.sha, ct: m.ct, all: merges.filter((x) => x.subject.includes(t.branch)).map((x) => x.sha) };
@@ -521,6 +709,7 @@ export async function withStages(t, merges) {
     if (t.train) {
         t.trainMerges = merges.filter((x) => x.subject.includes(t.branch)).map((x) => x.sha);
         const lastDep = [...jobList()].reverse().find((j) => j.task === "deploy-staging" && j.status === "ok");
+        // Вагоны на стенде: все их вливы были до начала последнего удачного выката стенда.
         t.standWaves = lastDep ? (t.wagons || []).map((w) => w.wave).filter((wv) => {
             const mm = merges.filter((x) => x.subject.includes(t.branch) && x.subject.includes(wv));
             return mm.length && mm.every((x) => x.ct <= lastDep.startedAt);
@@ -548,8 +737,15 @@ export async function withStages(t, merges) {
     return t;
 }
 
+// ───────────────────────────── правила вердикта ─────────────────────────────
+
 const GUARD_REQ = new Set(GUARDS);
 
+/**
+ * Невыполненные просьбы перепрогнать (pend) снимают авто-отметки «Сборка» и «Тесты» и ставят вердикт «requested».
+ * frozen — волна закоммичена и доложена: отметки остаются, в пояснении — «проверит поезд влива». Просьбы про гарды
+ * «Тесты» не держат (у гардов своя станция); build — просьба пересобрать, а не перепрогнать.
+ */
 export function applyReqs(t, auto, pend, frozen) {
     const name = (r) => ((TASKS[r.task] || {}).label || r.task) + (r.input ? " " + r.input : "");
     const pb = pend.filter((r) => r.task === "build"), pt = pend.filter((r) => r.task !== "build" && !GUARD_REQ.has(r.task));
@@ -571,8 +767,13 @@ export function applyReqs(t, auto, pend, frozen) {
     }
 }
 
+/** Влив считается состоявшимся, только если своего кода впереди staging нет: доделка после влива — волна открыта. */
 export const mergeLanded = (t, m) => !!m && !(t.ahead > 0);
 
+/**
+ * Влитая ветка без доделки (ни коммитов впереди, ни правок): проверки шли до влива, вердикт — зелёный, пояснения сняты.
+ * Свои авто-отметки сильнее «влито»; «не нужна» остаётся «не нужна».
+ */
 export function mergedCarry(t, auto, m) {
     if (!(m && !(t.ahead > 0) && !t.dirtyTracked))
         return;
@@ -590,6 +791,10 @@ export function mergedCarry(t, auto, m) {
         auto[k] = auto[k] || "влито в staging: станция пройдена до влива";
 }
 
+/**
+ * Оптимистичная отметка влива сразу после него, до следующего снимка: страница не показывает влитую ветку «невлитой»
+ * несколько секунд. Снимок потом сверит по git. Ручные отметки не трогаются.
+ */
 export function markMergedTree(t, { sha = null, at = Date.now() } = {}) {
     if (!t || t.kind !== "slot" || !(t.ahead > 0))
         return t;
@@ -610,6 +815,10 @@ export function markMergedTree(t, { sha = null, at = Date.now() } = {}) {
     return { ...t, ahead: 0, verdict: v, stages, conflict: null, merge: { sha, ct: at, all: [sha, ...((t.merge && t.merge.all) || [])].filter(Boolean), optimistic: true } };
 }
 
+/**
+ * Пустая ветка (ни коммитов, ни правок, не влита) — авто-отметки проверок снимаются: зелёное staging — не «Гарды» и не
+ * «Тесты» этой волны. Закоммиченное, влитое и отмеченное вручную не трогается.
+ */
 export function dropEmptyChecks(t, auto, mk) {
     if (!t.hasCode && !t.readOnly && !auto.commit && !auto.staging && !mk.commit && !mk.staging)
         for (const k of ["build", "guards", "tests", "review", "regress"])
@@ -620,17 +829,37 @@ export function dropEmptyChecks(t, auto, mk) {
 export const STATION_MODULE = { review: "review", stand: "release", prod: "release", site: "release", accept: "accept" };
 export const stationOn = (id) => !STATION_MODULE[id] || enabled(STATION_MODULE[id]);
 
+/** Станции дерева по порядку STATIONS: ручная отметка сильнее авто; открытый вопрос владельцу — «?» на станции «План». */
 export function stagesOf(t, auto, mk) {
     return STATIONS.filter((s) => stationOn(s.id)).map((s) => {
         const man = mk[s.id], a = auto[s.id] || "";
         const done = man === true || (man !== false && !!a);
         const q = s.id === "plan" && !!t.ownerQ;
-        return { id: s.id, label: s.label, done, q, source: man === true || man === false ? "manual" : a ? "auto" : "none", hint: q ? "вопрос владельцу: " + t.ownerQ.slice(0, 600) : man === true ? "отмечено вручную" : man === false ? `снято вручную${a ? " (авто: " + a + ")" : ""}` : a || ((s.id === "tests" && t.verdict && t.verdict.note) || (s.id === "build" && t.verdict && t.verdict.bnote) || (s.id === "guards" && t.verdict && t.verdict.gnote) || (s.id === "regress" && t.verdict && t.verdict.rnote)) || `не пройдено · авто: ${s.how}` };
+        return {
+            id: s.id,
+            label: s.label,
+            done,
+            q,
+            source: man === true || man === false ? "manual" : a ? "auto" : "none",
+            hint: q
+                ? "вопрос владельцу: " + t.ownerQ.slice(0, 600)
+                : man === true
+                  ? "отмечено вручную"
+                  : man === false
+                    ? `снято вручную${a ? " (авто: " + a + ")" : ""}`
+                    : a ||
+                      (s.id === "tests" && t.verdict && t.verdict.note) ||
+                      (s.id === "build" && t.verdict && t.verdict.bnote) ||
+                      (s.id === "guards" && t.verdict && t.verdict.gnote) ||
+                      (s.id === "regress" && t.verdict && t.verdict.rnote) ||
+                      `не пройдено · авто: ${s.how}`,
+        };
     });
 }
 
 export const SUMMARY_FILE = path.join(DATA, "summaries.json");
 
+/** Конфликт со staging, найденный не здесь (например, при попытке влива), — сразу в кеш конфликтов и в снимок дерева. */
 export function noteConflict(key, files) {
     const t = snapNow() && snapNow().trees.find((x) => x.key === key);
     if (!t || !t.branch)
@@ -640,6 +869,8 @@ export function noteConflict(key, files) {
 }
 
 export const stgConflict = new Map();
+
+// ───────────────────────────── содержимое станции по клику ─────────────────────────────
 
 export async function commitFor(t) {
     const blocks = [];
@@ -677,7 +908,11 @@ export function guardsFor(t) {
     for (const id of GUARDS) {
         const j = lastOf(t.key, id), def = TASKS[id] || { label: id };
         if (t.prodTouched === 0 && !t.accTouched && !j) {
-            blocks.push({ kind: "job", job: { status: "none", label: def.label, input: "" }, text: "Не нужен: продуктовый код волны не тронут (только тесты, спеки, документы). Гарды проверит поезд влива." });
+            blocks.push({
+                kind: "job",
+                job: { status: "none", label: def.label, input: "" },
+                text: "Не нужен: продуктовый код волны не тронут (только тесты, спеки, документы). Гарды проверит поезд влива.",
+            });
             continue;
         }
         if (!j) {
@@ -694,6 +929,11 @@ export const TEST_FILE = SPEC_RE;
 export const DOC_ONLY = DOC_RE;
 export const redCache = new Map();
 
+/**
+ * Улики красного теста по истории ветки и прогонам тестов волны (с кешем по состоянию дерева и списку прогонов).
+ * order — что появилось раньше в коммитах: тесты или код; seq — был ли красный прогон до зелёного.
+ * done — улики есть; suspicious — тесты есть, но первый же прогон зелёный и порядка «тест → код» нет (ложная зелень?).
+ */
 export async function redEvidence(t) {
     if (!t.exists || isOrch(t.key) || t.readOnly)
         return { applies: false };
@@ -703,7 +943,11 @@ export async function redEvidence(t) {
     const hit = redCache.get(t.key);
     if (hit && hit.key === key)
         return hit.v;
-    const [diff, untr, log] = await Promise.all([git(t.path, ["diff", "--name-only", "staging"], 60000), untrackedShim(t.path), git(t.path, ["log", "--reverse", "--name-only", "--format=@@%h", "staging..HEAD"], 60000)]);
+    const [diff, untr, log] = await Promise.all([
+        git(t.path, ["diff", "--name-only", "staging"], 60000),
+        untrackedShim(t.path),
+        git(t.path, ["log", "--reverse", "--name-only", "--format=@@%h", "staging..HEAD"], 60000),
+    ]);
     const all = [...new Set((diff.out + "\n" + untr.out).split("\n").map((x) => x.trim()).filter(Boolean))];
     const testFiles = all.filter((f) => TEST_FILE.test(f)), srcFiles = all.filter((f) => !TEST_FILE.test(f) && !DOC_ONLY.test(f));
     let order = "unknown", firstTest = -1, firstSrc = -1;
@@ -737,29 +981,72 @@ export async function redEvidence(t) {
     }
     const done = testFiles.length > 0 && (order === "tests-first" || seq === "red-green" || seq === "red-only");
     const suspicious = testFiles.length > 0 && seq === "green-first" && order !== "tests-first" && order !== "tests-only";
-    const v = { applies: true, testFiles, srcCount: srcFiles.length, order, seq, runs: runs.map((j) => ({ id: j.id, status: j.status, label: j.label, at: j.endedAt || j.queuedAt })), done, suspicious };
+    const v = {
+        applies: true,
+        testFiles,
+        srcCount: srcFiles.length,
+        order,
+        seq,
+        runs: runs.map((j) => ({ id: j.id, status: j.status, label: j.label, at: j.endedAt || j.queuedAt })),
+        done,
+        suspicious,
+    };
     redCache.set(t.key, { key, v });
     return v;
 }
 
-export const RED_WORD = { "tests-first": "тесты появились раньше кода (по коммитам)", "tests-only": "пока в ветке только тесты, кода ещё нет — самое время прогнать их красными", "source-first": "код появился раньше тестов (или в том же коммите): порядок «тест, потом код» не соблюдён", unknown: "коммитов с тестами и кодом ещё нет — порядок по истории не определить" };
-export const SEQ_WORD = { "red-green": "был красный прогон, потом зелёный — как и должно быть", "red-only": "первый прогон красный (пока не починено) — это хороший знак", "green-first": "САМЫЙ ПЕРВЫЙ прогон сразу зелёный: тест мог не проверять ничего", none: "прогонов тестов этой ветки в дашборде ещё не было" };
+export const RED_WORD = {
+    "tests-first": "тесты появились раньше кода (по коммитам)",
+    "tests-only": "пока в ветке только тесты, кода ещё нет — самое время прогнать их красными",
+    "source-first": "код появился раньше тестов (или в том же коммите): порядок «тест, потом код» не соблюдён",
+    unknown: "коммитов с тестами и кодом ещё нет — порядок по истории не определить",
+};
+export const SEQ_WORD = {
+    "red-green": "был красный прогон, потом зелёный — как и должно быть",
+    "red-only": "первый прогон красный (пока не починено) — это хороший знак",
+    "green-first": "САМЫЙ ПЕРВЫЙ прогон сразу зелёный: тест мог не проверять ничего",
+    none: "прогонов тестов этой ветки в дашборде ещё не было",
+};
 
+/** Станция «Красный тест»: вердикт по уликам, файлы, прогоны и кнопка «докажи красный» — вопрос агенту из red-proof-ask. */
 export async function redFor(t) {
     const e = await redEvidence(t);
     if (!e.applies)
         return { blocks: [{ kind: "empty", text: "Для этого слота красный тест не применим (нет кода или это оркестратор)." }] };
-    const verdict = e.done ? "Улики есть: красный тест, судя по истории, был." : e.suspicious ? "ПОДОЗРЕНИЕ НА ЛОЖНУЮ ЗЕЛЕНЬ: тесты есть, но первый же прогон зелёный, и порядка «тест → код» в истории нет." : !e.testFiles.length ? "В ветке нет тестовых файлов — красному тесту не из чего родиться." : "Улик пока недостаточно: прогоните тесты волны и посмотрите, был ли красный.";
+    const verdict = e.done
+        ? "Улики есть: красный тест, судя по истории, был."
+        : e.suspicious
+          ? "ПОДОЗРЕНИЕ НА ЛОЖНУЮ ЗЕЛЕНЬ: тесты есть, но первый же прогон зелёный, и порядка «тест → код» в истории нет."
+          : !e.testFiles.length
+            ? "В ветке нет тестовых файлов — красному тесту не из чего родиться."
+            : "Улик пока недостаточно: прогоните тесты волны и посмотрите, был ли красный.";
     const blocks = [
         { kind: "pre", title: "Вердикт", text: verdict },
-        { kind: "kv", items: [["тестовых файлов в ветке", String(e.testFiles.length)], ["файлов кода (не тесты, не доки)", String(e.srcCount)], ["порядок по истории", RED_WORD[e.order]], ["история прогонов", SEQ_WORD[e.seq]]] },
+        {
+            kind: "kv",
+            items: [
+                ["тестовых файлов в ветке", String(e.testFiles.length)],
+                ["файлов кода (не тесты, не доки)", String(e.srcCount)],
+                ["порядок по истории", RED_WORD[e.order]],
+                ["история прогонов", SEQ_WORD[e.seq]],
+            ],
+        },
     ];
     if (e.testFiles.length)
         blocks.push({ kind: "files", title: "Тестовые файлы", files: e.testFiles.map((p) => ({ path: p, code: "T", status: "тест" })), scope: "work" });
     if (e.runs.length)
         blocks.push({ kind: "pre", title: "Прогоны волны по порядку", text: e.runs.map((r) => (r.status === "ok" ? "✓ зелёный  " : "✗ красный  ") + r.id + "  " + r.label).join("\n") });
-    blocks.push({ kind: "pre", title: "Как доказать красный честно", text: "1. Тест написан ДО кода и запущен: он обязан упасть, и упасть по смыслу (не из-за опечатки в импорте).\n2. После реализации тот же тест становится зелёным.\n3. Если тест зелёный с первого раза — он, скорее всего, ничего не проверяет. Проверка: временно сломать реализацию (убрать условие, поменять константу) — тест обязан покраснеть.\nАвтоматического прогона «на базе без реализации» дашборд не делает: зависимости и сборка слота смешались бы с базой, и красный вышел бы ложным." });
-    const ask = "Проверка на ложную зелень по тестам этой ветки. Для каждого нового или изменённого теста ответь коротко, без запуска тестов:\n1. Какое именно поведение он проверяет и какой assert должен упасть, если реализации нет?\n2. Какой файл и какая строка реализации делает его зелёным?\n3. Что нужно временно сломать в реализации, чтобы тест покраснел (мутация)?\nЕсли для какого-то теста ты не можешь назвать assert, который упал бы без реализации, — так и напиши: он под подозрением. Тесты и гарды запускает владелец.";
+    blocks.push({
+        kind: "pre",
+        title: "Как доказать красный честно",
+        text:
+            "1. Тест написан ДО кода и запущен: он обязан упасть, и упасть по смыслу (не из-за опечатки в " +
+            "импорте).\n2. После реализации тот же тест становится зелёным.\n3. Если тест зелёный с первого раза " +
+            "— он, скорее всего, ничего не проверяет. Проверка: временно сломать реализацию (убрать условие, " +
+            "поменять константу) — тест обязан покраснеть.\nАвтоматического прогона «на базе без реализации» " +
+            "дашборд не делает: зависимости и сборка слота смешались бы с базой, и красный вышел бы ложным.",
+    });
+    const ask = prompt("red-proof-ask");
     return { blocks, actions: [{ id: "ask-red", label: "→ Агенту: докажи красный" }, { id: "run-tests", label: "Запустить тесты волны" }], askText: ask };
 }
 
@@ -775,6 +1062,7 @@ export function readText(p, cap = READ_CAP) {
     }
 }
 
+/** Лог прогона без цветовых кодов; длинный — хвост: причина падения обычно в конце. */
 export function readLogFull(id, cap = 3000000) {
     try {
         const s = fs.readFileSync(logPath(id), "utf8");
@@ -791,7 +1079,17 @@ export const parseTestLog = (text, taskId) => parseTaskLog(text, taskId);
 export function jobBrief(j) {
     if (!j)
         return null;
-    return { id: j.id, status: j.status, label: j.label, input: j.input || "", sec: j.startedAt ? Math.round(((j.endedAt || Date.now()) - j.startedAt) / 1000) : null, at: j.endedAt || j.startedAt || j.queuedAt, summary: j.summary || "", code: j.code, peakMB: j.peakMB || null };
+    return {
+        id: j.id,
+        status: j.status,
+        label: j.label,
+        input: j.input || "",
+        sec: j.startedAt ? Math.round(((j.endedAt || Date.now()) - j.startedAt) / 1000) : null,
+        at: j.endedAt || j.startedAt || j.queuedAt,
+        summary: j.summary || "",
+        code: j.code,
+        peakMB: j.peakMB || null,
+    };
 }
 
 export const lastOf = (treeKey, taskId) => [...jobList()].reverse().find((j) => j.tree === treeKey && j.task === taskId && ["ok", "fail", "interrupted", "running"].includes(j.status));
@@ -832,10 +1130,27 @@ export function planFor(t) {
             const hits = src.split("\n").filter((l) => l.toUpperCase().includes(wave)).length;
             if (!hits)
                 continue;
-            blocks.push({ kind: "doc", title: (/^_EPIC/i.test(n) ? "Эпик" : "MASTER") + " · " + n + " · упоминаний " + wave + ": " + hits, path: fwd(path.join(d, n)), text: src, highlight: wave, open: !blocks.length });
+            blocks.push({
+                kind: "doc",
+                title: (/^_EPIC/i.test(n) ? "Эпик" : "MASTER") + " · " + n + " · упоминаний " + wave + ": " + hits,
+                path: fwd(path.join(d, n)),
+                text: src,
+                highlight: wave,
+                open: !blocks.length,
+            });
         }
     }
-    return { blocks: blocks.length ? blocks : [{ kind: "empty", text: "Плана волны " + wave + " не нашла ни в ветке, ни в основной папке, ни в эпике." }], actions: blocks.length ? [{ id: "annot-plan", label: "✎ Разметить план → агенту / одобрить" }] : [] };
+    return {
+        blocks: blocks.length
+            ? blocks
+            : [
+                  {
+                      kind: "empty",
+                      text: "Плана волны " + wave + " не нашла ни в ветке, ни в основной папке, ни в эпике.",
+                  },
+              ],
+        actions: blocks.length ? [{ id: "annot-plan", label: "✎ Разметить план → агенту / одобрить" }] : [],
+    };
 }
 
 export async function codeFor(t) {
@@ -843,7 +1158,24 @@ export async function codeFor(t) {
     const sum = (a) => a.reduce((x, f) => ({ add: x.add + (f.add || 0), del: x.del + (f.del || 0) }), { add: 0, del: 0 });
     const rows = (a) => a.map((f) => ({ path: f.path, code: f.code, status: f.status, add: f.add, del: f.del, untracked: !!f.untracked }));
     const w = sum(work), b = sum(br);
-    const blocks = [{ kind: "kv", items: [["не закоммичено", work.length + " файл(ов), +" + w.add + " / −" + w.del + (work.some((f) => f.untracked) ? " (в новых файлах строки не посчитаны)" : "")], ["в ветке против staging", br.length + " файл(ов), +" + b.add + " / −" + b.del], ["коммитов впереди staging", String(t.ahead)]] }];
+    const blocks = [
+        {
+            kind: "kv",
+            items: [
+                [
+                    "не закоммичено",
+                    work.length +
+                        " файл(ов), +" +
+                        w.add +
+                        " / −" +
+                        w.del +
+                        (work.some((f) => f.untracked) ? " (в новых файлах строки не посчитаны)" : ""),
+                ],
+                ["в ветке против staging", br.length + " файл(ов), +" + b.add + " / −" + b.del],
+                ["коммитов впереди staging", String(t.ahead)],
+            ],
+        },
+    ];
     if (work.length)
         blocks.push({ kind: "files", title: "Не закоммичено", files: rows(work), scope: "work" });
     if (br.length)
@@ -888,7 +1220,21 @@ export function testsFor(t) {
 export async function stagingFor(t) {
     const merges = await stagingMerges(), m = t.branch && !["staging", "main", "HEAD"].includes(t.branch) ? merges.find((x) => x.subject.includes(t.branch)) : null;
     if (!m)
-        return { blocks: [{ kind: "empty", text: "Ветка ещё не влита в staging." + (t.dirtyTracked ? " В слоте " + t.dirtyTracked + " незакоммиченных файлов — сначала коммит." : t.ahead ? " Готова к вливанию (коммитов впереди: " + t.ahead + ")." : " В ветке нет коммитов.") }], actions: t.ahead && !t.dirtyTracked ? [{ id: "merge", label: "Влить в staging…" }] : [] };
+        return {
+            blocks: [
+                {
+                    kind: "empty",
+                    text:
+                        "Ветка ещё не влита в staging." +
+                        (t.dirtyTracked
+                            ? " В слоте " + t.dirtyTracked + " незакоммиченных файлов — сначала коммит."
+                            : t.ahead
+                              ? " Готова к вливанию (коммитов впереди: " + t.ahead + ")."
+                              : " В ветке нет коммитов."),
+                },
+            ],
+            actions: t.ahead && !t.dirtyTracked ? [{ id: "merge", label: "Влить в staging…" }] : [],
+        };
     const st = await git(MAIN, ["show", "--stat", "--format=%h %s%n%an · %cr", m.sha], 60000);
     return { blocks: [{ kind: "kv", items: [["слияние", m.sha.slice(0, 10)], ["когда", new Date(m.ct).toLocaleString("ru-RU")]] }, { kind: "pre", title: "Что вошло", text: st.out.slice(0, 6000) }] };
 }
@@ -905,7 +1251,14 @@ export async function standFor(t) {
     else
         blocks.push({ kind: "empty", text: "Выкат на стенд из дашборда ещё не запускали." });
     blocks.unshift({ kind: "checklist", text: chk ? chk.text : "", at: chk ? chk.at : null, pending, tree: t.key });
-    return { blocks, actions: [{ id: "ask-checklist", label: chk ? "Обновить чек-лист у агента" : "Запросить чек-лист у агента" }, { id: "deploy-staging", label: "Выкатить staging на стенд…" }], links: STAND_URL ? [{ label: "Открыть стенд", url: STAND_URL }] : [] };
+    return {
+        blocks,
+        actions: [
+            { id: "ask-checklist", label: chk ? "Обновить чек-лист у агента" : "Запросить чек-лист у агента" },
+            { id: "deploy-staging", label: "Выкатить staging на стенд…" },
+        ],
+        links: STAND_URL ? [{ label: "Открыть стенд", url: STAND_URL }] : [],
+    };
 }
 
 export async function prodFor(t) {
@@ -915,7 +1268,13 @@ export async function prodFor(t) {
         inMain = (await git(MAIN, ["merge-base", "--is-ancestor", m.sha, "main"])).ok;
     const rel = [...jobList()].reverse().find((j) => j.task === "release" && ["ok", "fail", "running"].includes(j.status));
     const main = await git(MAIN, ["log", "main", "--first-parent", "--format=%h %s · %cr", "-3"]);
-    const blocks = [{ kind: "kv", items: [["ветка в main", !m ? "не влита даже в staging" : inMain ? "да, выкачена" : "нет, ждёт выката"]] }, { kind: "pre", title: "Последнее в проде", text: main.out }];
+    const blocks = [
+        {
+            kind: "kv",
+            items: [["ветка в main", !m ? "не влита даже в staging" : inMain ? "да, выкачена" : "нет, ждёт выката"]],
+        },
+        { kind: "pre", title: "Последнее в проде", text: main.out },
+    ];
     if (rel)
         blocks.push({ kind: "job", job: jobBrief(rel), text: rel.status === "ok" ? "" : failureExcerpt(readLogFull(rel.id)) });
     return { blocks, actions: inMain ? [] : m ? [{ id: "release", label: "Выкат в прод…" }] : [] };
@@ -923,13 +1282,37 @@ export async function prodFor(t) {
 
 export function siteFor(t) {
     const mk = S.manual[manualKeyOf(t.key + "|" + t.branch)] || {};
-    return { blocks: [{ kind: "kv", items: [["что это", "последняя станция: после выката вы своими глазами проверяете результат на живом сайте"], ["что проверить", "то, что меняла волна; главный сценарий; нет ли ошибок в журнале или консоли"], ["автоматика", "проверка после выката — команда release.prod.verify из конфига проекта"]] }, { kind: "note", text: mk.site_note || "" }], note: true };
+    return {
+        blocks: [
+            {
+                kind: "kv",
+                items: [
+                    [
+                        "что это",
+                        "последняя станция: после выката вы своими глазами проверяете результат на живом сайте",
+                    ],
+                    ["что проверить", "то, что меняла волна; главный сценарий; нет ли ошибок в журнале или консоли"],
+                    ["автоматика", "проверка после выката — команда release.prod.verify из конфига проекта"],
+                ],
+            },
+            { kind: "note", text: mk.site_note || "" },
+        ],
+        note: true,
+    };
 }
 
+/** Содержимое станции по клику: общая часть (отметка, источник, идущий прогон) и блоки станции. */
 export async function stationInfo(t, id) {
     const st = (t.stages || []).find((x) => x.id === id);
     const run = jobList().find((j) => j.tree === t.key && j.task === id && !FINAL.includes(j.status));
-    const base = { id, label: (STATIONS.find((x) => x.id === id) || {}).label || id, done: !!(st && st.done), source: st ? st.source : "none", hint: st ? st.hint : "", running: run ? { id: run.id, label: run.label, status: run.status } : null };
+    const base = {
+        id,
+        label: (STATIONS.find((x) => x.id === id) || {}).label || id,
+        done: !!(st && st.done),
+        source: st ? st.source : "none",
+        hint: st ? st.hint : "",
+        running: run ? { id: run.id, label: run.label, status: run.status } : null,
+    };
     let r;
     switch (id) {
         case "plan":

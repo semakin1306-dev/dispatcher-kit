@@ -128,7 +128,11 @@ function main(argv) {
   let extraRules = []
   if (fs.existsSync(denyFile)) extraRules = parseDenylist(fs.readFileSync(denyFile, "utf8"))
   else if (!ci) {
-    console.error(`✖ Нет списка частных слов ${DENYLIST_NAME} — без него проверены были бы только общие шаблоны.\n  Создайте файл в корне (он вне git): по строке на слово, имя, домен или хост, которые нельзя публиковать.\n  В CI запускайте с --ci.`)
+    console.error(
+      `✖ Нет списка частных слов ${DENYLIST_NAME} — без него проверены были бы только общие шаблоны.\n  ` +
+        `Создайте файл в корне (он вне git): по строке на слово, имя, домен или хост, которые нельзя ` +
+        `публиковать.\n  В CI запускайте с --ci.`,
+    )
     return 1
   }
   if (!ci && !extraRules.length) { console.error(`✖ Список частных слов ${DENYLIST_NAME} пуст.`); return 1 }
@@ -136,7 +140,12 @@ function main(argv) {
   if (!files) { console.error("✖ Не проверено ни одного файла — ворота, которые ничего не смотрят, не пропускают."); return 1 }
   for (const f of findings) console.error(`${f.file}:${f.line || 1}: [${f.rule}] ${f.what}: ${f.match.length > 60 ? f.match.slice(0, 57) + "…" : f.match}${f.line === 0 ? " (в имени файла)" : ""}`)
   const tail = `файлов ${files}${skipped.length ? ", пропущено " + skipped.length : ""}, частных слов ${extraRules.length}${ci ? " (режим CI: только общие шаблоны)" : ""}`
-  if (findings.length) { console.error(`\n✖ Находок: ${findings.length} — ${tail}.\n  Убрать из текста; если совпадение ложное и нужное — пометка \`${ALLOW_MARK}\` в той же строке с причиной.`); return 1 }
+  if (findings.length) {
+    console.error(
+      `\n✖ Находок: ${findings.length} — ${tail}.\n  Убрать из текста; если совпадение ложное и нужное — пометка \`${ALLOW_MARK}\` в той же строке с причиной.`,
+    )
+    return 1
+  }
   console.log(`✔ Ворота публикации: чисто — ${tail}.`)
   return 0
 }

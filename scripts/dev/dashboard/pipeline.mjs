@@ -1,5 +1,19 @@
 // pipeline.mjs — конвейер веток: влив слота в staging (ядро) и, под модулем release, влив staging → main с выкатом
 // стенда и прода командами из конфига проекта. Здесь же поезд staging → стенд → прод и порядок вливов.
+//
+// Кто зовёт: http.mjs (кнопки «Влить в staging», «Выкат», карточки порядка), autochain.mjs и auto-merge.mjs (автовлив),
+// stations.mjs (зависимости волн, станции), snapshot.mjs (подсказки порядка). Сами действия — задачи раннера (runner.mjs
+// enqueue): здесь только проверки перед действием (preflight) и рецепт шагов (recipe).
+//
+// Состояние: S.train — проверочный поезд влива (data/train.json), S.orderDismissed — пары веток, которые человек отметил
+// «не связаны» (data/order-dismissed.json). Порядок «ветка после ветки» пишется в реестр эпиков (slot.after).
+//
+// Инварианты:
+// - в staging попадает только ветка волны (не staging/main/HEAD), через merge --no-ff; упавший влив откатывается
+//   git merge --abort, чтобы основная папка не осталась посреди слияния;
+// - main — всегда предок staging: выкат вливает staging в main и пушит, только если деревья main и staging совпали;
+// - пуш main переживает обрыв связи: повторы, затем сверка ls-remote — пуш, который дошёл без ответа, не считается провалом;
+// - выкат стенда и прода есть только при модуле release; влив в staging — ядро и есть всегда.
 import { MAIN, PROJECT, REMOTE, UP_MAIN, UP_STAGING, WT, fwd, loadEpics, saveEpics } from "../slots.mjs";
 import { execFile, spawn } from "./spawner.mjs";
 import fs from "node:fs";
@@ -31,9 +45,12 @@ const guardIds = () => PROJECT.stations.guards.filter((id) => TASKS[id]);
 const upName = (up) => String(up || "").slice(REMOTE.length + 1);
 const { noteConflict } = late("stations.mjs", ["noteConflict"]);
 const procs = lateObject("runner.mjs", "procs");
+/** Задача taskId зелёная на дереве treeSha: прогон начинался на чистой папке (иначе дерево не то, что проверяли). */
 export const lastOk = (treeKey, taskId, treeSha) => jobList().some((j) => j.tree === treeKey && j.task === taskId && j.status === "ok" && j.cleanAtStart && j.treeSha === treeSha);
+/** Строка проверки перед действием: ok — true (пройдено), false (блокирует), null (предупреждение, не блокирует). */
 export const chk = (id, ok, text, detail = "") => ({ id, ok, text, detail });
 
+/** Номер волны из имени ветки → { wave, re } (re — шаблон для git log --grep по коммитам волны) или "". */
 export function depWave(branch) {
     const m = /wv-?0*(\d{1,4})/i.exec(String(branch || ""));
     if (!m)
@@ -41,8 +58,14 @@ export function depWave(branch) {
     return { wave: "WV-" + m[1].padStart(4, "0"), re: "WV-?0*" + m[1] + "([^0-9]|$)" };
 }
 
+/** Вся ветка уже в staging по содержимому: в выводе git cherry нет строк «+»; ошибка git — «нет». */
 export const cherryMerged = (r) => !!r && r.ok && !String(r.out || "").split("\n").some((l) => l.trim().startsWith("+"));
 
+/**
+ * Зависимости слота (slot.after) и влиты ли они: [{ key, tag, branch, merged }].
+ * Влитость меряется по общему предку двух веток, а не по голове зависимости: зависимость могла уйти вперёд после того,
+ * как эта волна от неё ответвилась, и новые коммиты зависимости этой волне не нужны.
+ */
 export async function depsOf(key) {
     const x = slotOf(key), EPIC = epicOfSlot(key);
     if (!x || !EPIC || !(x.after || []).length)
@@ -54,6 +77,8 @@ export async function depsOf(key) {
         const ref = mb.ok && mb.out ? mb.out.trim() : br;
         let merged = !!br && (await git(MAIN, ["merge-base", "--is-ancestor", ref, "staging"])).ok;
         const wave = depWave(br);
+        // Предок в staging, но в своей ветке нет коммитов волны-зависимости (её взяли не слиянием, а переносом правок):
+        // тогда «влита» решает git cherry — есть ли в staging всё содержимое ветки зависимости.
         if (merged && wave && own) {
             const stands = await git(MAIN, ["log", "-1", "--format=%h", "-i", "-E", "--grep=" + wave.re, own]);
             if (stands.ok && !stands.out.trim())
@@ -63,50 +88,85 @@ export async function depsOf(key) {
     }));
 }
 
+/**
+ * Асинхронные внешние команды конвейера (подменяются в тестах). run → { code, out, err }: 124 — снята по времени,
+ * 127 — не запустилась. archiveTo — выложить пути дерева git в папку (git archive | tar -x) без рабочей копии.
+ * Асинхронно, а не spawnSync: долгий merge-tree не должен останавливать цикл событий сервера.
+ */
 export const sh = {
-    run: (cmd, args, { cwd, timeout = 60000, env } = {}) => new Promise((res) => execFile(cmd, args, { cwd, timeout, ...(env ? { env } : {}), windowsHide: true, maxBuffer: 64e6, encoding: "utf8" }, (e, so, se) => {
-        const code = !e ? 0 : typeof e.code === "number" ? e.code : e.killed ? 124 : 127;
-        res({ code, out: String(so || ""), err: String(se || "") + (code === 124 ? `\n(снята по времени: ${Math.round(timeout / 1000)} с)` : code === 127 ? "\n" + e.message : "") });
-    })),
-    archiveTo: (cwd, tree, paths, dir, timeout = 60000, pre = []) => new Promise((res) => {
-        let err = "", code = 0, left = 2;
-        const ar = spawn("git", [...pre, "archive", tree, "--", ...paths], { cwd, windowsHide: true }), tx = spawn("tar", ["-x"], { cwd: dir, windowsHide: true });
-        const timer = setTimeout(() => {
-            err += "снято по времени: " + Math.round(timeout / 1000) + " с\n";
-            code = code || 124;
-            ar.kill();
-            tx.kill();
-        }, timeout);
-        const fin = (c) => {
-            code = code || c;
-            if (--left === 0) {
-                clearTimeout(timer);
-                res({ code, err });
-            }
-        };
-        for (const [p, name] of [[ar, "git archive"], [tx, "tar"]]) {
-            let done = false;
-            const end = (c) => {
-                if (!done) {
-                    done = true;
-                    fin(c);
+    run: (cmd, args, { cwd, timeout = 60000, env } = {}) =>
+        new Promise((res) =>
+            execFile(
+                cmd,
+                args,
+                { cwd, timeout, ...(env ? { env } : {}), windowsHide: true, maxBuffer: 64e6, encoding: "utf8" },
+                (e, so, se) => {
+                    const code = !e ? 0 : typeof e.code === "number" ? e.code : e.killed ? 124 : 127;
+                    res({
+                        code,
+                        out: String(so || ""),
+                        err:
+                            String(se || "") +
+                            (code === 124
+                                ? `\n(снята по времени: ${Math.round(timeout / 1000)} с)`
+                                : code === 127
+                                  ? "\n" + e.message
+                                  : ""),
+                    });
+                },
+            ),
+        ),
+    archiveTo: (cwd, tree, paths, dir, timeout = 60000, pre = []) =>
+        new Promise((res) => {
+            let err = "",
+                code = 0,
+                left = 2;
+            const ar = spawn("git", [...pre, "archive", tree, "--", ...paths], { cwd, windowsHide: true }),
+                tx = spawn("tar", ["-x"], { cwd: dir, windowsHide: true });
+            const timer = setTimeout(() => {
+                err += "снято по времени: " + Math.round(timeout / 1000) + " с\n";
+                code = code || 124;
+                ar.kill();
+                tx.kill();
+            }, timeout);
+            const fin = (c) => {
+                code = code || c;
+                if (--left === 0) {
+                    clearTimeout(timer);
+                    res({ code, err });
                 }
             };
-            p.stderr.on("data", (d) => {
-                err += String(d);
-            });
-            p.on("error", (e) => {
-                err += name + ": " + e.message + "\n";
-                end(127);
-            });
-            p.on("close", (c) => end(c === null ? 124 : c));
-        }
-        tx.stdin.on("error", () => { });
-        ar.stdout.pipe(tx.stdin);
-    }),
+            for (const [p, name] of [
+                [ar, "git archive"],
+                [tx, "tar"],
+            ]) {
+                let done = false;
+                const end = (c) => {
+                    if (!done) {
+                        done = true;
+                        fin(c);
+                    }
+                };
+                p.stderr.on("data", (d) => {
+                    err += String(d);
+                });
+                p.on("error", (e) => {
+                    err += name + ": " + e.message + "\n";
+                    end(127);
+                });
+                p.on("close", (c) => end(c === null ? 124 : c));
+            }
+            // tar может закрыться раньше (ошибка, снятие по времени): запись в закрытый вход не должна ронять сервер.
+            tx.stdin.on("error", () => {});
+            ar.stdout.pipe(tx.stdin);
+        }),
     git: (cwd, args, timeout) => git(cwd, args, timeout),
 };
 
+/**
+ * Файлы конфликта из вывода git merge-tree --name-only: первая строка — sha дерева, дальше имена до пустой строки;
+ * после пустой строки идут сообщения слияния (Auto-merging, CONFLICT) — в перечень они не входят.
+ */
 export const mergeTreeFiles = (stdout) => {
     const files = [];
     for (const l of String(stdout || "").split(/\r?\n/).slice(1)) {
@@ -119,6 +179,10 @@ export const mergeTreeFiles = (stdout) => {
 
 const mtcBusy = new Map();
 
+/**
+ * Проверка «ветка вливается в staging без конфликтов» без рабочей копии (git merge-tree). Одновременные запросы по
+ * одной ветке получают одно обещание: два нажатия кнопки — одна проверка, а не два merge-tree подряд.
+ */
 export function mergedTreeChecks(t) {
     const k = t.key + "|" + t.branch;
     if (!mtcBusy.has(k))
@@ -134,8 +198,20 @@ async function mergedTreeChecksRun(t) {
     else if (mt.code === 1) {
         const files = mergeTreeFiles(mt.out);
         noteConflict(t.key, files);
-        out.push(chk("conflict", false, "ветка вливается в staging без конфликтов", "конфликтуют со staging" + (files.length ? " (" + files.length + "): " + files.slice(0, 8).join(", ") + (files.length > 8 ? " …" : "") : "") + " — влейте staging в ветку и разрешите в слоте («⤓ Подтянуть staging»)"));
+        out.push(
+            chk(
+                "conflict",
+                false,
+                "ветка вливается в staging без конфликтов",
+                "конфликтуют со staging" +
+                    (files.length
+                        ? " (" + files.length + "): " + files.slice(0, 8).join(", ") + (files.length > 8 ? " …" : "")
+                        : "") +
+                    " — влейте staging в ветку и разрешите в слоте («⤓ Подтянуть staging»)",
+            ),
+        );
     }
+    // Код 128 и прочие — git сам не отработал: тоже отказ, но с причиной, а не пустым «конфликтуют».
     else
         out.push(chk("conflict", false, "ветка вливается в staging без конфликтов", "git merge-tree не отработал (код " + mt.code + "): " + mt.err.trim().slice(0, 200)));
     return out;
@@ -145,9 +221,17 @@ async function mergedTreeChecksRun(t) {
 export const PIPELINE_ACTIONS = ["merge", "deploy-staging", "release"];
 export const releaseAction = (action) => action === "deploy-staging" || action === "release";
 
+/**
+ * Проверки перед действием конвейера → { checks, ok, trees, pl }: ok — ни одна проверка не false (null — предупреждение).
+ * Идёт с приоритетом git: человек ждёт ответа на нажатие, фоновые git-команды снимка подождут.
+ */
 export const preflight = (action, slotKey, opt = {}) => withGitPriority(() => preflightRun(action, slotKey, opt));
 
-/** Гарды зелёные на коде с отпечатком fp: каждый гард проекта прошёл на этом коде (или на дереве поезда). */
+/**
+ * Гарды зелёные на коде с отпечатком fp: каждый гард проекта прошёл на этом коде (или на дереве поезда).
+ * Три способа узнать «на этом коде»: свежий прогон по снимку, прогон на том же дереве git с чистой папки, прогон, во время
+ * которого отпечаток кода не менялся и равен нынешнему. Продуктовый код не тронут — гарды не нужны.
+ */
 function guardsGreen(t, fp, { noProd, trainOk }) {
     const ids = guardIds();
     if (!ids.length || noProd || trainOk)
@@ -155,7 +239,19 @@ function guardsGreen(t, fp, { noProd, trainOk }) {
     const sn = snapNow() && snapNow().trees.find((x) => x.key === t.key);
     return ids.every((g) => {
         const last = [...jobList()].reverse().find((j) => j.tree === t.key && j.task === g && j.status === "ok");
-        return (!!last && !!sn && sn.fp === fp && jobFresh(last, sn) === "ok") || lastOk(t.key, g, t.tree) || jobList().some((j) => j.tree === t.key && j.task === g && j.status === "ok" && j.fpStart && j.fpStart === j.fpEnd && j.fpEnd === fp);
+        return (
+            (!!last && !!sn && sn.fp === fp && jobFresh(last, sn) === "ok") ||
+            lastOk(t.key, g, t.tree) ||
+            jobList().some(
+                (j) =>
+                    j.tree === t.key &&
+                    j.task === g &&
+                    j.status === "ok" &&
+                    j.fpStart &&
+                    j.fpStart === j.fpEnd &&
+                    j.fpEnd === fp,
+            )
+        );
     });
 }
 
@@ -174,16 +270,43 @@ async function preflightRun(action, slotKey, opt = {}) {
             c.push(chk("branch", t.branch && t.branch !== "staging" && t.branch !== "main" && t.branch !== "HEAD", `ветка слота — ${t.branch}`, "вливать можно только ветку волны"));
             c.push(chk("clean", t.dirtyTracked === 0, "в слоте нет незакоммиченных изменений", t.dirtyTracked ? `изменённых файлов: ${t.dirtyTracked} — сначала коммит` : ""));
             c.push(chk("ahead", t.ahead > 0, `в ветке есть что вливать (впереди staging: ${t.ahead})`));
+            // Отпечаток кода берётся заново, а не из снимка: снимок мог отстать от последней правки агента.
             const fp = await codeFp(t.path, true), sn = snapNow() && snapNow().trees.find((x) => x.key === t.key);
-            const noProd = !!sn && sn.fp === fp && sn.prodTouched === 0, trainOk = !!(S.train && S.train.status === "green" && (S.train.runs.find((r) => r.id === S.train.green) || { fps: {} }).fps[t.key] === fp);
+            const noProd = !!sn && sn.fp === fp && sn.prodTouched === 0,
+                trainOk = !!(
+                    S.train &&
+                    S.train.status === "green" &&
+                    (S.train.runs.find((r) => r.id === S.train.green) || { fps: {} }).fps[t.key] === fp
+                );
             const gids = guardIds();
             if (gids.length) {
                 const secOk = guardsGreen(t, fp, { noProd, trainOk }), names = gids.map((g) => TASKS[g].label).join(", ");
-                c.push(chk("sec", secOk, noProd ? "гарды не нужны: продуктовый код не тронут" : trainOk ? "гарды зелёные на дереве поезда с этим кодом" : "гарды (" + names + ") зелёные на этом коде", "код менялся после последнего зелёного прогона гардов (или его не было): запустите гарды в слоте или проверьте поездом"));
+                c.push(
+                    chk(
+                        "sec",
+                        secOk,
+                        noProd
+                            ? "гарды не нужны: продуктовый код не тронут"
+                            : trainOk
+                              ? "гарды зелёные на дереве поезда с этим кодом"
+                              : "гарды (" + names + ") зелёные на этом коде",
+                        "код менялся после последнего зелёного прогона гардов (или его не было): запустите гарды в слоте или проверьте поездом",
+                    ),
+                );
             }
+            // У поезда ветка общая для всех вагонов: зелёные проверки не значат, что агент закончил текущий вагон.
             if (sn && sn.train && sn.wagon) {
                 const un = wagonUnfinished(sn, waveFinalOf({ ...sn, fp }));
-                c.push(chk("done", !un, "агент доложил «ГОТОВО» по вагону " + sn.wagon, un ? "вагон не закончен: доклада «ГОТОВО» на этом коде нет (диспетчерская спросит агента сама; влить без доклада — «Влить всё равно»)" : ""));
+                c.push(
+                    chk(
+                        "done",
+                        !un,
+                        "агент доложил «ГОТОВО» по вагону " + sn.wagon,
+                        un
+                            ? "вагон не закончен: доклада «ГОТОВО» на этом коде нет (диспетчерская спросит агента сама; влить без доклада — «Влить всё равно»)"
+                            : "",
+                    ),
+                );
             }
         }
         {
@@ -191,7 +314,18 @@ async function preflightRun(action, slotKey, opt = {}) {
             c.push(chk("regress", !!rg && rg.done, "регресс по тронутым путям пройден (или снят вручную)", rg && !rg.done ? rg.hint : ""));
             const rw = st && (st.stages || []).find((x) => x.id === "review");
             if (enabled("review"))
-                c.push(chk("review", !!rw && rw.done,"независимое ревью «ЗА» на нынешнем коде (или принято вручную)", rw && !rw.done ? ((st.review && st.review.verdict) ? "ревьюер: " + st.review.verdict + (st.review.fresh ? "" : ", код с тех пор менялся") : "ревью ещё не было: «▶ Ревью» на линии слота") : ""));
+                c.push(
+                    chk(
+                        "review",
+                        !!rw && rw.done,
+                        "независимое ревью «ЗА» на нынешнем коде (или принято вручную)",
+                        rw && !rw.done
+                            ? st.review && st.review.verdict
+                                ? "ревьюер: " + st.review.verdict + (st.review.fresh ? "" : ", код с тех пор менялся")
+                                : "ревью ещё не было: «▶ Ревью» на линии слота"
+                            : "",
+                    ),
+                );
         }
         if (t && t.exists && t.branch) {
             for (const d of await depsOf(slotKey))
@@ -199,6 +333,7 @@ async function preflightRun(action, slotKey, opt = {}) {
             for (const x of await mergedTreeChecks(t))
                 c.push(x);
         }
+        // Влив идёт в основной папке: на другой ветке или с правками он смешал бы их с вливом.
         c.push(chk("stg", sf.branch === "staging", `основная папка стоит на staging (сейчас ${sf.branch})`));
         c.push(chk("stgclean", sf.dirtyTracked === 0, "в основной папке нет изменений отслеживаемых файлов", sf.dirtyTracked ? `изменённых: ${sf.dirtyTracked}` : ""));
     }
@@ -209,11 +344,33 @@ async function preflightRun(action, slotKey, opt = {}) {
         c.push(chk("cmd", !!run, run ? "команда выката стенда: " + run : "команда выката стенда не задана", run ? "" : "ключ `release.stand.run` в dispatcher.project.json"));
         const gids = guardIds();
         if (gids.length)
-            c.push(chk("sec", gids.every((g) => lastOk("orchestrator-staging", g, pl.stagingTree)) ? true : null, "гарды зелёные на дереве staging", "рекомендуется до выката: «Гарды на staging» на линии staging"));
+            c.push(
+                chk(
+                    "sec",
+                    gids.every((g) => lastOk("orchestrator-staging", g, pl.stagingTree)) ? true : null,
+                    "гарды зелёные на дереве staging",
+                    "рекомендуется до выката: «Гарды на staging» на линии staging",
+                ),
+            );
         if (enabled("machines") && typeof shardApi().summary === "function") {
             const sm = shardApi().summary(), head = (await git(MAIN, ["rev-parse", "staging"])).out, same = sm && sm.sha === head;
             const green = same && sm.status === "done" && !sm.fail && !sm.notrun && sm.ok >= sm.total;
-            c.push(chk("shard", green ? true : null, green ? "полный прогон по машинам зелёный на этом коммите" : "полный прогон по машинам на этом коммите: " + (!sm ? "не запускали" : !same ? "был на другом коммите" : sm.status === "done" ? `красных частей ${sm.fail}` : "ещё не закончен")));
+            c.push(
+                chk(
+                    "shard",
+                    green ? true : null,
+                    green
+                        ? "полный прогон по машинам зелёный на этом коммите"
+                        : "полный прогон по машинам на этом коммите: " +
+                              (!sm
+                                  ? "не запускали"
+                                  : !same
+                                    ? "был на другом коммите"
+                                    : sm.status === "done"
+                                      ? `красных частей ${sm.fail}`
+                                      : "ещё не закончен"),
+                ),
+            );
         }
         c.push(chk("info", null, "сначала staging пушится в " + UP_STAGING + ", затем идёт команда выката стенда"));
     }
@@ -222,22 +379,57 @@ async function preflightRun(action, slotKey, opt = {}) {
         c.push(chk("mf", mf.exists, "папка выката " + fwd(MAIN_WT) + " существует", "её создаёт подготовка выката: git worktree add " + fwd(MAIN_WT) + " main"));
         c.push(chk("mfb", mf.branch === "main", `она стоит на main (сейчас ${mf.branch || "—"})`));
         c.push(chk("mfclean", mf.dirtyTracked === 0, "в ней нет изменений отслеживаемых файлов"));
+        // Если main не предок staging, влив staging → main принёс бы в прод не то дерево, что проверяли на стенде.
         c.push(chk("inv", pl.invariantOk, "main — предок staging", "иначе в прод-ветку попало что-то мимо staging: сначала влейте main в staging"));
         c.push(chk("unrel", pl.unreleased > 0, `в staging есть что выкатывать (коммитов впереди main: ${pl.unreleased})`));
         const gids = guardIds();
         if (gids.length)
             c.push(chk("sec", gids.every((g) => lastOk("orchestrator-staging", g, pl.stagingTree)), "гарды зелёные на дереве staging", "запустите «Гарды на staging» на линии staging"));
-        c.push(chk("fresh", pl.mainVsOrigin[0] === 0, UP_MAIN + " не ушла вперёд локального main", pl.mainVsOrigin[0] ? `${UP_MAIN} впереди на ${pl.mainVsOrigin[0]} — нажмите «git fetch» и разберитесь` : "проверено по последнему fetch; в начале выката fetch повторяется"));
+        c.push(
+            chk(
+                "fresh",
+                pl.mainVsOrigin[0] === 0,
+                UP_MAIN + " не ушла вперёд локального main",
+                pl.mainVsOrigin[0]
+                    ? `${UP_MAIN} впереди на ${pl.mainVsOrigin[0]} — нажмите «git fetch» и разберитесь`
+                    : "проверено по последнему fetch; в начале выката fetch повторяется",
+            ),
+        );
         if (enabled("accept")) {
-            const ws = accWaves(), okN = ws.filter((t) => (accEntry(accKey(t)) || {}).verdict === "accepted").length, bad = ws.filter((t) => (accEntry(accKey(t)) || {}).verdict === "rejected").map((t) => t.tag);
-            c.push(chk("accept", ws.length && okN === ws.length ? true : null, ws.length ? `приёмка на стенде: принято ${okN} из ${ws.length} волн` + (bad.length ? `; НЕ приняты: ${bad.join(", ")}` : "") + (okN < ws.length ? " — выкат без полной приёмки на ваше решение" : "") : "волн, ждущих приёмки, нет"));
+            const ws = accWaves(),
+                okN = ws.filter((t) => (accEntry(accKey(t)) || {}).verdict === "accepted").length,
+                bad = ws.filter((t) => (accEntry(accKey(t)) || {}).verdict === "rejected").map((t) => t.tag);
+            c.push(
+                chk(
+                    "accept",
+                    ws.length && okN === ws.length ? true : null,
+                    ws.length
+                        ? `приёмка на стенде: принято ${okN} из ${ws.length} волн` +
+                              (bad.length ? `; НЕ приняты: ${bad.join(", ")}` : "") +
+                              (okN < ws.length ? " — выкат без полной приёмки на ваше решение" : "")
+                        : "волн, ждущих приёмки, нет",
+                ),
+            );
         }
         const p = PROJECT.release.prod;
-        c.push(chk("info", null, p.pushDeploys ? "пуш main в " + UP_MAIN + " САМ запускает выкат прода (так сказано в конфиге: release.prod.pushDeploys)" : p.run ? "после пуша main в " + UP_MAIN + " — команда выката прода: " + p.run : "после пуша main в " + UP_MAIN + " команды выката нет — только пуш"));
+        c.push(
+            chk(
+                "info",
+                null,
+                p.pushDeploys
+                    ? "пуш main в " +
+                          UP_MAIN +
+                          " САМ запускает выкат прода (так сказано в конфиге: release.prod.pushDeploys)"
+                    : p.run
+                      ? "после пуша main в " + UP_MAIN + " — команда выката прода: " + p.run
+                      : "после пуша main в " + UP_MAIN + " команды выката нет — только пуш",
+            ),
+        );
     }
     return { checks: c, ok: c.every((x) => x.ok !== false), trees, pl };
 }
 
+/** Шаг после влива: записать sha merge-коммита в задачу (job.mergeSha[branch]) — по нему приёмка и выкат узнают волну. */
 export const mergeShaStep = (branch, cwd = MAIN) => ({ show: "merge-коммит " + branch, cwd, js: async (w, job) => {
         const r = await git(cwd, ["rev-parse", "HEAD"]), sha = r.ok ? String(r.out || "").trim() : "";
         if (/^[0-9a-f]{40}$/.test(sha)) {
@@ -247,23 +439,47 @@ export const mergeShaStep = (branch, cwd = MAIN) => ({ show: "merge-коммит
     } });
 
 export const mergeAbortStep = (cwd) => ({ cmd: "git", args: ["merge", "--abort"], show: "git merge --abort", cwd });
+/**
+ * Что вливать: проверенный sha, если он есть, иначе имя ветки. Автовлив передаёт sha, на котором станции зелёные:
+ * коммит агента, пришедший между проверкой и вливом, в staging без проверок не попадёт.
+ */
 export const mergeTarget = (branch, sha = "") => (/^[0-9a-f]{40}$/.test(String(sha)) ? String(sha) : branch);
 
+/**
+ * Рецепт задачи раннера для действия конвейера → { cwd, label, lane, treeKey, steps } или null (действия нет: модуль
+ * release выключен, команда не задана, нет прод-ветки). Влив и выкат — дорожка ops, по одному за раз.
+ */
 export function recipe(action, { slotKey, branch, sha = "" }) {
     if (releaseAction(action) && !enabled("release"))
         return null;
     if (action === "merge") {
         const msg = trainMergeNote(slotKey, branch) || `merge: ${branch}`;
         const what = mergeTarget(branch, sha);
-        return { cwd: MAIN, label: `Влить ${branch} в staging`, lane: "ops", treeKey: "orchestrator-staging", steps: [
-                { cmd: "git", args: ["merge", "--no-ff", what, "-m", msg], branch, show: `git merge --no-ff ${what === branch ? branch : branch + "@" + what.slice(0, 10)} -m "${msg}"`, cwd: MAIN, env: { GIT_TRACE2_PERF: path.join(DATA, "logs", "git-merge-perf-" + Date.now() + ".txt") }, onFail: mergeAbortStep(MAIN) },
+        return {
+            cwd: MAIN,
+            label: `Влить ${branch} в staging`,
+            lane: "ops",
+            treeKey: "orchestrator-staging",
+            steps: [
+                {
+                    cmd: "git",
+                    args: ["merge", "--no-ff", what, "-m", msg],
+                    branch,
+                    show: `git merge --no-ff ${what === branch ? branch : branch + "@" + what.slice(0, 10)} -m "${msg}"`,
+                    cwd: MAIN,
+                    // Трасса времени git — разобрать медленный влив по шагам git, если он случится.
+                    env: { GIT_TRACE2_PERF: path.join(DATA, "logs", "git-merge-perf-" + Date.now() + ".txt") },
+                    onFail: mergeAbortStep(MAIN),
+                },
                 mergeShaStep(branch),
-            ] };
+            ],
+        };
     }
     if (action === "deploy-staging") {
         const run = PROJECT.release.stand.run;
         if (!run)
             return null;
+        // Сначала пуш staging в интеграционную ветку проекта: команда выката стенда берёт код оттуда.
         return { cwd: MAIN, label: "Выкат staging на стенд", lane: "ops", treeKey: "orchestrator-staging", steps: [
                 { cmd: "git", args: ["push", REMOTE, "staging:" + upName(UP_STAGING)], show: "git push " + REMOTE + " staging:" + upName(UP_STAGING), cwd: MAIN },
                 { text: run, show: run, cwd: MAIN },
@@ -284,51 +500,118 @@ export function recipe(action, { slotKey, branch, sha = "" }) {
             after.push({ text: prod.run, show: prod.run + "   ← выкат прода", cwd: MAIN_WT });
         if (prod.verify)
             after.push({ text: prod.verify, show: prod.verify + "   ← проверка после выката", cwd: MAIN_WT });
-        return { cwd: MAIN_WT, label: "Выкат в прод: staging → main", lane: "ops", treeKey: "orchestrator-main", steps: [
+        // Порядок шагов: fetch → обе проверки предков → влив → сверка деревьев → пуш → команды прода. Любой красный шаг
+        // до пуша оставляет прод-ветку нетронутой; сверка деревьев ловит влив, который принёс не то, что было в staging.
+        return {
+            cwd: MAIN_WT,
+            label: "Выкат в прод: staging → main",
+            lane: "ops",
+            treeKey: "orchestrator-main",
+            steps: [
                 { cmd: "git", args: ["fetch", REMOTE], show: "git fetch " + REMOTE, cwd: MAIN_WT },
-                { show: "проверка: " + UP_MAIN + " — предок staging", cwd: MAIN_WT, js: async (w) => {
-                        await mustBe(MAIN_WT, ["merge-base", "--is-ancestor", UP_MAIN, "staging"], (r) => r.ok, UP_MAIN + " ушла вперёд staging (правка мимо staging?). Сначала влейте main в staging и заново проверка.");
+                {
+                    show: "проверка: " + UP_MAIN + " — предок staging",
+                    cwd: MAIN_WT,
+                    js: async (w) => {
+                        await mustBe(
+                            MAIN_WT,
+                            ["merge-base", "--is-ancestor", UP_MAIN, "staging"],
+                            (r) => r.ok,
+                            UP_MAIN +
+                                " ушла вперёд staging (правка мимо staging?). Сначала влейте main в staging и заново проверка.",
+                        );
                         w("ok\n");
-                    } },
-                { show: "проверка: main — предок staging", cwd: MAIN_WT, js: async (w) => {
-                        await mustBe(MAIN_WT, ["merge-base", "--is-ancestor", "main", "staging"], (r) => r.ok, "main не предок staging.");
+                    },
+                },
+                {
+                    show: "проверка: main — предок staging",
+                    cwd: MAIN_WT,
+                    js: async (w) => {
+                        await mustBe(
+                            MAIN_WT,
+                            ["merge-base", "--is-ancestor", "main", "staging"],
+                            (r) => r.ok,
+                            "main не предок staging.",
+                        );
                         w("ok\n");
-                    } },
-                { cmd: "git", args: ["merge", "--no-ff", "staging", "-m", "release: staging -> main"], show: 'git merge --no-ff staging -m "release: staging -> main"', cwd: MAIN_WT },
-                { show: "проверка: дерево main = дерево staging", cwd: MAIN_WT, js: async (w) => {
-                        const [a, b] = await Promise.all([git(MAIN_WT, ["rev-parse", "HEAD^{tree}"]), git(MAIN_WT, ["rev-parse", "staging^{tree}"])]);
+                    },
+                },
+                {
+                    cmd: "git",
+                    args: ["merge", "--no-ff", "staging", "-m", "release: staging -> main"],
+                    show: 'git merge --no-ff staging -m "release: staging -> main"',
+                    cwd: MAIN_WT,
+                },
+                {
+                    show: "проверка: дерево main = дерево staging",
+                    cwd: MAIN_WT,
+                    js: async (w) => {
+                        const [a, b] = await Promise.all([
+                            git(MAIN_WT, ["rev-parse", "HEAD^{tree}"]),
+                            git(MAIN_WT, ["rev-parse", "staging^{tree}"]),
+                        ]);
                         if (!a.ok || a.out !== b.out)
-                            throw new Error(`деревья РАЗНЫЕ (${a.out.slice(0, 8)} ≠ ${b.out.slice(0, 8)}). Пуш НЕ сделан. Локальный main в ${fwd(MAIN_WT)} теперь впереди ${UP_MAIN} — разберитесь руками до следующего выката.`);
+                            throw new Error(
+                                `деревья РАЗНЫЕ (${a.out.slice(0, 8)} ≠ ${b.out.slice(0, 8)}). Пуш НЕ сделан. Локальный main ` +
+                                    `в ${fwd(MAIN_WT)} теперь впереди ${UP_MAIN} — разберитесь руками до следующего выката.`,
+                            );
                         w(`дерево ${a.out.slice(0, 10)} совпало\n`);
-                    } },
-                { show: "git push " + REMOTE + " main:" + upMain + (prod.pushDeploys ? "   ← ЗАПУСКАЕТ ВЫКАТ ПРОДА" : "") + " (обрыв связи — до " + PUSH_TRIES + " попыток, затем сверка ls-remote)", cwd: MAIN_WT, js: (w, job) => pushMainRetry(w, {
-                        push: async () => {
-                            let out = "";
-                            const code = await spawnStep(job, { cmd: "git", args: ["push", REMOTE, "main:" + upMain], cwd: MAIN_WT }, (s) => {
-                                out += s;
-                                w(s);
-                            });
-                            return { code, out };
-                        },
-                        localSha: async () => (await git(MAIN_WT, ["rev-parse", "main"])).out,
-                        remoteSha: async () => {
-                            const r = await git(MAIN_WT, ["ls-remote", REMOTE, "refs/heads/" + upMain], 60000);
-                            return r.ok ? r.out.split(/\s+/)[0] || "" : null;
-                        },
-                        cancelled: () => !!job.cancelled,
-                    }).then(async (r) => {
-                        job.mainSha = (await git(MAIN_WT, ["rev-parse", "main"])).out.trim() || null;
-                        return r;
-                    }) },
+                    },
+                },
+                {
+                    show:
+                        "git push " +
+                        REMOTE +
+                        " main:" +
+                        upMain +
+                        (prod.pushDeploys ? "   ← ЗАПУСКАЕТ ВЫКАТ ПРОДА" : "") +
+                        " (обрыв связи — до " +
+                        PUSH_TRIES +
+                        " попыток, затем сверка ls-remote)",
+                    cwd: MAIN_WT,
+                    js: (w, job) =>
+                        pushMainRetry(w, {
+                            push: async () => {
+                                let out = "";
+                                const code = await spawnStep(
+                                    job,
+                                    { cmd: "git", args: ["push", REMOTE, "main:" + upMain], cwd: MAIN_WT },
+                                    (s) => {
+                                        out += s;
+                                        w(s);
+                                    },
+                                );
+                                return { code, out };
+                            },
+                            localSha: async () => (await git(MAIN_WT, ["rev-parse", "main"])).out,
+                            remoteSha: async () => {
+                                const r = await git(MAIN_WT, ["ls-remote", REMOTE, "refs/heads/" + upMain], 60000);
+                                return r.ok ? r.out.split(/\s+/)[0] || "" : null;
+                            },
+                            cancelled: () => !!job.cancelled,
+                        }).then(async (r) => {
+                            job.mainSha = (await git(MAIN_WT, ["rev-parse", "main"])).out.trim() || null;
+                            return r;
+                        }),
+                },
                 ...after,
-            ] };
+            ],
+        };
     }
     return null;
 }
 
+// Пуш main: сколько попыток при обрыве связи и пауза между ними. PUSH_DROP_RE — признаки обрыва в выводе git push;
+// всё остальное (отказ сервера, rejected) — отказ по существу, повтор не поможет.
 export const PUSH_TRIES = 4, PUSH_PAUSE_MS = 15000;
-export const PUSH_DROP_RE = /Connection (closed|reset|timed out)|port 22|kex_exchange_identification|Broken pipe|early EOF|remote end hung up unexpectedly|Could not resolve hostname|Operation timed out/i;
+export const PUSH_DROP_RE =
+    /Connection (closed|reset|timed out)|port 22|kex_exchange_identification|Broken pipe|early EOF|remote end hung up unexpectedly|Could not resolve hostname|Operation timed out/i;
 
+/**
+ * Пуш main с повтором при обрыве и сверкой итога по ls-remote → { ok, sha } или исключение с подсказкой, что делать руками.
+ * Итог решает сверка, а не код пуша: пуш мог дойти, а оборваться только ответ — тогда удалённая ветка уже равна
+ * локальному main, и выкат зелёный. Локальный sha читается до первой попытки, чтобы сверять с тем, что пушили.
+ */
 export async function pushMainRetry(w, { push, localSha, remoteSha, cancelled = () => false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), tries = PUSH_TRIES, pauseMs = PUSH_PAUSE_MS }) {
     const local = await localSha();
     if (!local)
@@ -349,6 +632,7 @@ export async function pushMainRetry(w, { push, localSha, remoteSha, cancelled = 
             await sleep(pauseMs);
         }
     }
+    // remoteSha → null значит «ls-remote не ответил» (не «ветки нет»): повторяем тем же числом попыток.
     let remote = null;
     for (let i = 1; i <= tries && remote === null; i++) {
         remote = await remoteSha();
@@ -361,9 +645,18 @@ export async function pushMainRetry(w, { push, localSha, remoteSha, cancelled = 
         w(`\nсверка: ${UP_MAIN || REMOTE} = локальный main (${local.slice(0, 10)})` + (last && last.code !== 0 ? " — пуш дошёл, оборвался только ответ" : "") + "\n");
         return { ok: true, sha: local };
     }
-    throw new Error(remote === null ? `${REMOTE} не ответил на ls-remote после ${tries} попыток: дошёл ли пуш — неизвестно. Локальный main ${local.slice(0, 10)}; проверьте git ls-remote ${REMOTE} и повторите пуш main из ${fwd(MAIN_WT)} руками.`
-        : `после ${tries} попыток ${UP_MAIN || REMOTE} = ${remote.slice(0, 10) || "(нет)"}, локальный main = ${local.slice(0, 10)}: пуш не дошёл. Влив staging → main уже сделан локально — повторите пуш main из ${fwd(MAIN_WT)}, когда связь вернётся.`);
+    throw new Error(
+        remote === null
+            ? `${REMOTE} не ответил на ls-remote после ${tries} попыток: дошёл ли пуш — неизвестно. Локальный ` +
+                  `main ${local.slice(0, 10)}; проверьте git ls-remote ${REMOTE} и повторите пуш main ` +
+                  `из ${fwd(MAIN_WT)} руками.`
+            : `после ${tries} попыток ${UP_MAIN || REMOTE} = ${remote.slice(0, 10) || "(нет)"}, локальный main ` +
+                  `= ${local.slice(0, 10)}: пуш не дошёл. Влив staging → main уже сделан локально — повторите пуш main ` +
+                  `из ${fwd(MAIN_WT)}, когда связь вернётся.`,
+    );
 }
+
+// ───────────────────────────── порядок вливов: подсказки по парам веток ─────────────────────────────
 
 export const ORDER_DISMISS_FILE = path.join(DATA, "order-dismissed.json");
 export const pairConflict = new Map();
@@ -379,6 +672,12 @@ export function zoneOf(f) {
 /** Общие файлы, совпадение которых о зависимости не говорит: замки пакетов и снимки. */
 export const ORDER_NOISE_RE = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|go\.sum|Cargo\.lock|poetry\.lock|uv\.lock)$|\.snap$|__snapshots__\//;
 
+/**
+ * Подсказки порядка для карточек «Порядок: ПN и ПM»: пары невлитых веток одного эпика с общими файлами или зонами,
+ * у которых порядок ещё не записан и не отмечен «не связаны». Карточка появляется, только если разбор пары нашёл
+ * конфликт слияния или зависимость по коду. Разбор (pairAnalyze) асинхронный и кешируется по отпечаткам кода обеих
+ * веток: первый вызов его только запускает, карточка появится в одном из следующих снимков.
+ */
 export async function orderHints(trees) {
     if (!openEpics().length)
         return [];
@@ -401,6 +700,8 @@ export async function orderHints(trees) {
                 continue;
             const ck = a.key + "|" + b.key + "|" + (a.fp || a.tree) + "|" + (b.fp || b.tree);
             if (!pairInfo.has(ck)) {
+                // null — «разбор идёт»: следующий снимок не запустит второй такой же; ошибка разбора снимает запись,
+                // и разбор повторится.
                 pairInfo.set(ck, null);
                 pairAnalyze(a, b).then((r) => pairInfo.set(ck, r), () => pairInfo.delete(ck));
             }
@@ -409,13 +710,28 @@ export async function orderHints(trees) {
                 continue;
             if (!info.conflict && !info.dep)
                 continue;
-            out.push({ a: a.key, b: b.key, at: a.tag, bt: b.tag, files: (info.conflictFiles || files).slice(0, 6), nfiles: (info.conflictFiles || files).length, zones, conflict: info.conflict, dep: info.dep });
+            out.push({
+                a: a.key,
+                b: b.key,
+                at: a.tag,
+                bt: b.tag,
+                files: (info.conflictFiles || files).slice(0, 6),
+                nfiles: (info.conflictFiles || files).length,
+                zones,
+                conflict: info.conflict,
+                dep: info.dep,
+            });
         }
     return out;
 }
 
 export const pairInfo = new Map();
 
+/**
+ * Разбор пары веток → { conflict, conflictFiles, dep }. conflict — merge-tree двух веток не сливается чисто.
+ * dep — одна ветка добавила файл кода, а добавленные строки другой его импортируют: { first, then, file }; обе стороны
+ * используют файлы друг друга — { both: true }. Тесты в расчёт не идут: тест, импортирующий чужой файл, порядка не задаёт.
+ */
 export async function pairAnalyze(a, b) {
     const res = { conflict: false, conflictFiles: null, dep: null };
     if (a.branch && b.branch) {
@@ -425,6 +741,7 @@ export async function pairAnalyze(a, b) {
             res.conflictFiles = r.out.split("\n").slice(1).filter((l) => l && !/^(Auto-merging|CONFLICT)/.test(l));
         }
     }
+    // Файлы с общими именами (index, utils, …) есть в каждой папке: по одному имени импорт не узнать — ищем «папка/имя».
     const GENERIC = /^(index|types?|utils?|route|helpers?|constants?|config)$/;
     const side = async (t) => {
         const mb = (await git(t.path, ["merge-base", "staging", "HEAD"])).out;
@@ -454,6 +771,10 @@ export async function pairAnalyze(a, b) {
     return res;
 }
 
+/**
+ * Записать порядок пары: op "none" — пара не связана (карточка больше не показывается); иначе a вливается после b
+ * (a.after += b) в реестре эпиков и в живом слоте. Обратный порядок уже записан — отказ: получился бы цикл.
+ */
 export function setOrder(a, b, op) {
     const pk = [a, b].sort().join("|");
     if (op === "none") {
@@ -477,6 +798,13 @@ export function setOrder(a, b, op) {
         live.after = s.after;
 }
 
+// ───────────────────────────── проверочный поезд влива ─────────────────────────────
+//
+// Поезд проверяет несколько готовых веток вместе: сливает их в отдельной папке поверх нынешнего staging и гоняет гарды
+// и регресс тронутых спек. Красный состав делится пополам (с зависимостями), пока не найдутся виновники; зелёный
+// состав без виновников разрешает влив (preflight: «гарды зелёные на дереве поезда»), пока не сдвинулись staging и код.
+// S.train: { id, keys, status: run|green|fail|stopped, culprits, runs: [{ id, keys, why, fps, staging, status }], green }.
+
 export const TRAIN_FILE = path.join(DATA, "train.json");
 export const saveTrain = () => saveJson(TRAIN_FILE, S.train, 1);
 export const trainNow = () => S.train;
@@ -499,6 +827,7 @@ export function loadOrderDismissed() {
 
 export const REG_TRAIN_DIR = path.join(WT, "regress-train"), REG_TRAIN_BRANCH = "dev/regress-train";
 
+/** Цена ветки в составе: конфликт со staging дороже всего, конфликт с другими ветками состава — меньше. */
 export function conflictCost(k, keys) {
     const t = snapNow() && snapNow().trees.find((x) => x.key === k);
     let c = t && t.conflict && t.conflict.length ? 100 + t.conflict.length : 0;
@@ -508,6 +837,10 @@ export function conflictCost(k, keys) {
     return c;
 }
 
+/**
+ * Порядок слияния в поезде: сначала дешёвые по конфликтам, при равенстве — по номеру метки; зависимость (slot.after)
+ * всегда раньше зависящей. Цикл зависимостей не вешает: берётся первая оставшаяся.
+ */
 export function trainOrder(keys) {
     const num = (k) => Number((/\d+/.exec((treeByKey(k) || {}).tag || "") || [99])[0]), left = [...keys].sort((a, b) => conflictCost(a, keys) - conflictCost(b, keys) || num(a) - num(b)), out = [];
     while (left.length) {
@@ -517,10 +850,26 @@ export function trainOrder(keys) {
     return out;
 }
 
+/**
+ * Ветки, готовые в поезд: есть что вливать, чисто, без конфликта со staging, станции сборки, тестов, гардов, регресса
+ * и ревью пройдены. Ветка с невлитой зависимостью вне состава выбывает — и так до неподвижной точки (выбывание одной
+ * может лишить зависимости другую).
+ */
 export function trainCandidates(epic) {
     if (!snapNow())
         return [];
-    const ok = (t) => inEpic(t, epic) && t.exists && t.kind === "slot" && !t.readOnly && t.ahead > 0 && !t.dirtyTracked && !(t.verdict && t.verdict.merged) && !(Array.isArray(t.conflict) && t.conflict.length) && (t.stages || []).filter((s) => ["build", "tests", "guards", "regress", "review"].includes(s.id)).every((s) => s.done);
+    const ok = (t) =>
+        inEpic(t, epic) &&
+        t.exists &&
+        t.kind === "slot" &&
+        !t.readOnly &&
+        t.ahead > 0 &&
+        !t.dirtyTracked &&
+        !(t.verdict && t.verdict.merged) &&
+        !(Array.isArray(t.conflict) && t.conflict.length) &&
+        (t.stages || [])
+            .filter((s) => ["build", "tests", "guards", "regress", "review"].includes(s.id))
+            .every((s) => s.done);
     let c = snapNow().trees.filter(ok).map((t) => t.key);
     for (let changed = true; changed;) {
         changed = false;
@@ -535,6 +884,10 @@ export function trainCandidates(epic) {
     return trainOrder(c);
 }
 
+/**
+ * Регресс состава: задачи регресса всех веток, наборы одной задачи объединены. Разделитель набора зависит от раннера:
+ * у jest — «|» (шаблон пути), у остальных — запятая.
+ */
 export function trainTasks(keys) {
     const acc = new Map();
     for (const k of keys)
@@ -558,6 +911,10 @@ export function trainRemoteCmd(keys) {
     return L.join("\n");
 }
 
+/**
+ * Прогон состава keys: задача раннера, которая готовит папку поезда (нынешний staging + ветки состава по порядку) и
+ * гоняет проверки. Отпечатки кода веток и дерево staging запоминаются: по ним trainValid решает, годен ли зелёный итог.
+ */
 export async function startTrainRun(keys, why) {
     const t0 = keys.map((k) => treeByKey(k)), fps = {};
     for (const t of t0)
@@ -568,8 +925,23 @@ export async function startTrainRun(keys, why) {
     steps.push({ cmd: "git", args: [...SAFE_GIT, "merge", "--abort"], show: "git merge --abort (если прошлая проба оборвалась посреди слияния)", cwd: REG_TRAIN_DIR, ignore: true });
     steps.push({ cmd: "git", args: [...SAFE_GIT, "checkout", "-q", "--detach", "-f", "staging"], show: "git checkout --detach staging (папка поезда = нынешний staging)", cwd: REG_TRAIN_DIR });
     steps.push({ cmd: "git", args: [...SAFE_GIT, "clean", "-fdq"], show: "git clean -fdq (следы прошлого состава)", cwd: REG_TRAIN_DIR, ignore: true });
+    // Слияние веток агентов — с выключенными хуками и rerere (SAFE_GIT) и --end-of-options: имя ветки не станет флагом.
     for (const t of t0)
-        steps.push({ cmd: "git", args: [...SAFE_GIT, "merge", "--no-ff", "--no-edit", "-m", "train: " + t.branch, "--end-of-options", t.branch], show: "git merge --no-ff " + t.branch + " (" + t.tag + "; хуки и rerere выключены)", cwd: REG_TRAIN_DIR });
+        steps.push({
+            cmd: "git",
+            args: [
+                ...SAFE_GIT,
+                "merge",
+                "--no-ff",
+                "--no-edit",
+                "-m",
+                "train: " + t.branch,
+                "--end-of-options",
+                t.branch,
+            ],
+            show: "git merge --no-ff " + t.branch + " (" + t.tag + "; хуки и rerere выключены)",
+            cwd: REG_TRAIN_DIR,
+        });
     const checks = trainChecks(keys), what = checks.map((x) => x.task + (x.input ? " " + x.input.slice(0, 40) : "")).join("; ") || "проверок нет";
     // Есть удалённые машины — поезд встаёт в дорожку своей первой проверки и берёт место той же очередью, что задачи
     // проекта (runner.pumpRemote): ждёт место, бронирует, снимает бронь в любом исходе. Какое место дали, видно только
@@ -579,7 +951,19 @@ export async function startTrainRun(keys, why) {
     if (placed)
         steps.push({ on: "remote", show: "на удалённой машине: гарды и регресс состава (" + what + ")", cwd: REG_TRAIN_DIR,
             js: async (write, job) => {
-                const code = await shardApi().slotRun({ jobId: job.id, key: "regress-train", cwd: REG_TRAIN_DIR, cmd: trainRemoteCmd(keys), lane: job.lane, heavy: true }, write, (c) => procs.set(job.id, c), job.runOn);
+                const code = await shardApi().slotRun(
+                    {
+                        jobId: job.id,
+                        key: "regress-train",
+                        cwd: REG_TRAIN_DIR,
+                        cmd: trainRemoteCmd(keys),
+                        lane: job.lane,
+                        heavy: true,
+                    },
+                    write,
+                    (c) => procs.set(job.id, c),
+                    job.runOn,
+                );
                 procs.delete(job.id);
                 if (code)
                     throw new Error("на дереве поезда красное (код " + code + "): падения выше");
@@ -592,7 +976,16 @@ export async function startTrainRun(keys, why) {
         const st = stepOfTask(TASKS[x.task], REG_TRAIN_DIR, x.input);
         steps.push({ ...st, on: "here", show: st.show + " (" + TASKS[x.task].label + ")" });
     }
-    const job = await enqueue({ treeKey: "orchestrator-staging", cwd: MAIN, label: "Поезд: " + t0.map((t) => t.tag).join(" + ") + " на staging", taskId: "train", input: keys.join(","), lane: placed ? TASKS[checks[0].task].lane : "ops", steps, extra: { train: true, auto: true, by: "поезд влива", services: true } });
+    const job = await enqueue({
+        treeKey: "orchestrator-staging",
+        cwd: MAIN,
+        label: "Поезд: " + t0.map((t) => t.tag).join(" + ") + " на staging",
+        taskId: "train",
+        input: keys.join(","),
+        lane: placed ? TASKS[checks[0].task].lane : "ops",
+        steps,
+        extra: { train: true, auto: true, by: "поезд влива", services: true },
+    });
     S.train.runs.push({ id: job.id, keys, why, fps, staging: stagingTreeSha(), at: Date.now() });
     S.train.status = "run";
     saveTrain();
@@ -600,6 +993,7 @@ export async function startTrainRun(keys, why) {
     return job;
 }
 
+/** Собрать поезд из готовых веток эпика и запустить прогон всего состава. */
 export async function trainStart(epic) {
     const keys = trainCandidates(epic);
     if (keys.length < 1)
@@ -608,12 +1002,19 @@ export async function trainStart(epic) {
     return startTrainRun(keys, "весь состав");
 }
 
+/**
+ * Итог прогона поезда (раннер зовёт по окончании задачи). Красный состав из одной ветки — виновник; из нескольких —
+ * делится пополам, каждая половина с нужными ей зависимостями. Когда все прогоны кончились: зелёный прогон ровно на
+ * выживших — поезд зелёный; выжившие уже были красными вместе — ломают друг друга; иначе прогон состава без виновников.
+ */
 export function trainFinished(job) {
     if (!S.train)
         return;
     const run = S.train.runs.find((r) => r.id === job.id);
     if (!run)
         return;
+    // Падение только известных красных спек staging (knownRed) — не вина состава. Красный без упавших спек — состав
+    // не слился или не собрался.
     const fails = failingSpecs(job.id).filter((f) => !knownRed(f)), mergeFail = job.status === "fail" && !failingSpecs(job.id).length;
     run.status = job.status === "ok" || (job.status === "fail" && !mergeFail && !fails.length) ? "ok" : job.cancelled ? "cancelled" : "fail";
     run.fails = fails;
@@ -629,6 +1030,7 @@ export function trainFinished(job) {
             const ord = trainOrder(run.keys), h = Math.ceil(ord.length / 2), A = ord.slice(0, h), B = ord.slice(h);
             const withDeps = (part) => trainOrder([...new Set([...part.flatMap((k) => ((slotOf(k) || {}).after || []).filter((d) => run.keys.includes(d))), ...part])]);
             const hA = withDeps(A), hB = withDeps(B);
+            // Половина с зависимостями равна всему составу — деление не сужает поиск и зациклилось бы.
             if (hA.length === run.keys.length || hB.length === run.keys.length) {
                 S.train.status = "fail";
                 S.train.note = "состав не делится: вагоны связаны зависимостями (" + run.keys.map((k) => treeByKey(k).tag).join(" + ") + "); смотрите лог " + job.id;
@@ -660,6 +1062,7 @@ export function trainFinished(job) {
     saveTrain();
 }
 
+/** Зелёный поезд ещё годен для влива: staging не сдвинулся, код веток состава не менялся с проверки. */
 export async function trainValid() {
     if (!S.train || S.train.status !== "green")
         return { ok: false, why: "поезд не зелёный" };

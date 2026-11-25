@@ -106,7 +106,20 @@ function main() {
         for (const j of jobsAll) {
             if (OWNER.has(j.by) || NO_GATE.has(j.task) || j.envRetryOf || j.requeuedFrom || j.baseline || j.pipeline || /^orchestrator/.test(j.tree) || !j.fpStart)
                 continue;
-            const known = jobsAll.filter((k) => k !== j && k.tree === j.tree && k.task === j.task && at(k) < at(j)).map((k) => (k.endedAt && k.endedAt <= at(j) ? k : { ...k, status: ["ok", "fail", "skipped", "interrupted", "cancelled"].includes(k.status) && k.endedAt > at(j) ? "running" : k.status }));
+            const known = jobsAll
+                .filter((k) => k !== j && k.tree === j.tree && k.task === j.task && at(k) < at(j))
+                .map((k) =>
+                    k.endedAt && k.endedAt <= at(j)
+                        ? k
+                        : {
+                              ...k,
+                              status:
+                                  ["ok", "fail", "skipped", "interrupted", "cancelled"].includes(k.status) &&
+                                  k.endedAt > at(j)
+                                      ? "running"
+                                      : k.status,
+                          },
+                );
             const g = runGate({ jobs: known, tree: j.tree, task: j.task, input: j.input || "", fp: j.fpStart, dist: DIST.has(j.task), covers: null, realFail });
             if (!g.run) {
                 blocked.push({ j, why: g.why });
@@ -124,9 +137,25 @@ function main() {
         for (const [k, v] of Object.entries(why))
             say("  ·", k + ":", v.n, "запусков,", Math.round(v.min), "мин");
         const wouldBlockGreenAfterChange = blocked.filter((b) => b.j.status === "fail" && /зелёный на этом же коде/.test(b.why));
-        say("проверка от обратного — заблокированный «зелёный на этом же коде» сам оказался красным:", wouldBlockGreenAfterChange.length, wouldBlockGreenAfterChange.map((b) => b.j.id + " " + b.j.task).join(", "));
+        say(
+            "проверка от обратного — заблокированный «зелёный на этом же коде» сам оказался красным:",
+            wouldBlockGreenAfterChange.length,
+            wouldBlockGreenAfterChange.map((b) => b.j.id + " " + b.j.task).join(", "),
+        );
         for (const b of blocked.slice(0, 40))
-            say("    ", b.j.id, String(b.j.tree).padEnd(26), String(b.j.task).padEnd(14), String(b.j.input || "").slice(0, 40).padEnd(40), (b.j.by || "-").padEnd(24), String(b.j.status).padEnd(11), "←", b.why);
+            say(
+                "    ",
+                b.j.id,
+                String(b.j.tree).padEnd(26),
+                String(b.j.task).padEnd(14),
+                String(b.j.input || "")
+                    .slice(0, 40)
+                    .padEnd(40),
+                (b.j.by || "-").padEnd(24),
+                String(b.j.status).padEnd(11),
+                "←",
+                b.why,
+            );
     }
     {
         say("\n═══ Автоповтор только чужих и ещё не падавших на этом коде спек ═══");
@@ -146,7 +175,18 @@ function main() {
                 dropped++;
                 droppedMin += min(r);
             }
-            say("  ", r.id, "повтор", o.id, String(o.tree).padEnd(26), "→", String(r.status).padEnd(11), keep.length ? "остался бы: " + keep.map((x) => path.basename(x)).join(", ") : "НЕ ставился бы (" + f.map((x) => path.basename(x)).join(", ") + ")");
+            say(
+                "  ",
+                r.id,
+                "повтор",
+                o.id,
+                String(o.tree).padEnd(26),
+                "→",
+                String(r.status).padEnd(11),
+                keep.length
+                    ? "остался бы: " + keep.map((x) => path.basename(x)).join(", ")
+                    : "НЕ ставился бы (" + f.map((x) => path.basename(x)).join(", ") + ")",
+            );
         }
         sum.kept = kept;
         sum.dropped = dropped;
@@ -241,7 +281,9 @@ function main() {
                 continue;
             full += f.length;
             const p = lastF.get(r.key);
-            const plan = sec(f, "ТЗ волны", "Правки ветки"), diff = sec(f, "Правки ветки", "Причина красного") || sec(f, "Правки ветки", "Прежде чем отвечать"), tail = sec(f, "Прежде чем отвечать", null);
+            const plan = sec(f, "ТЗ волны", "Правки ветки"),
+                diff = sec(f, "Правки ветки", "Причина красного") || sec(f, "Правки ветки", "Прежде чем отвечать"),
+                tail = sec(f, "Прежде чем отвечать", null);
             const reds = f.split("Причина красного").slice(1).map((x) => x.split("Прежде чем отвечать")[0]);
             let cut = 0;
             if (p) {
@@ -257,7 +299,15 @@ function main() {
             delta += f.length - cut;
             lastF.set(r.key, { plan, diff, reds });
         }
-        say("справки:", Math.round(full / 1000), "тыс. знаков целиком →", Math.round(delta / 1000), "тыс. разностью (−" + Math.round(100 - (delta / Math.max(1, full)) * 100) + " %); это оседало бы в контексте оркестратора на каждом следующем ходе");
+        say(
+            "справки:",
+            Math.round(full / 1000),
+            "тыс. знаков целиком →",
+            Math.round(delta / 1000),
+            "тыс. разностью (−" +
+                Math.round(100 - (delta / Math.max(1, full)) * 100) +
+                " %); это оседало бы в контексте оркестратора на каждом следующем ходе",
+        );
         let merged = 0, mergedTok = 0;
         for (let i = 1; i < turns.length; i++) {
             const a = turns[i - 1], b = turns[i];
@@ -304,7 +354,17 @@ function main() {
             prevC = c;
         }
         const real = calls.reduce((s, c) => s + c, 0);
-        say("контекст на вызов: было", M(real), "за", calls.length, "вызовов (макс", Math.round(Math.max(0, ...calls) / 1000) + " тыс.); с новой сессией на 300 тыс. —", M(sim), "(−" + Math.round(100 - sim / Math.max(1, real) * 100) + " %), новых сессий:", rot);
+        say(
+            "контекст на вызов: было",
+            M(real),
+            "за",
+            calls.length,
+            "вызовов (макс",
+            Math.round(Math.max(0, ...calls) / 1000) + " тыс.); с новой сессией на 300 тыс. —",
+            M(sim),
+            "(−" + Math.round(100 - (sim / Math.max(1, real)) * 100) + " %), новых сессий:",
+            rot,
+        );
     }
     {
         const f = path.join(DATA, "events.jsonl");

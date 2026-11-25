@@ -87,8 +87,14 @@ export async function stagedInfo(cwd) {
     return v;
 }
 
-const timesOf = (r, w, x, mk) => ({ issuedAt: ((r.times || {})[w] || {}).issuedAt || 0, firstCommitAt: x.firstAt || (mk && mk.firstAt) || 0,
-    doneAt: ((r.times || {})[w] || {}).doneAt || 0, doneSha: ((r.times || {})[w] || {}).doneSha || "", mergedAt: x.state === "staging" && mk ? mk.mergedAt || 0 : 0, mergeSha: x.state === "staging" && mk ? mk.mergeSha || "" : "" });
+const timesOf = (r, w, x, mk) => ({
+    issuedAt: ((r.times || {})[w] || {}).issuedAt || 0,
+    firstCommitAt: x.firstAt || (mk && mk.firstAt) || 0,
+    doneAt: ((r.times || {})[w] || {}).doneAt || 0,
+    doneSha: ((r.times || {})[w] || {}).doneSha || "",
+    mergedAt: x.state === "staging" && mk ? mk.mergedAt || 0 : 0,
+    mergeSha: x.state === "staging" && mk ? mk.mergeSha || "" : "",
+});
 
 const stagedBySubject = new Map();
 
@@ -136,9 +142,31 @@ export async function applyTrain(t) {
 }
 
 export function nextWagonText({ tag, prev = "", wave, title = "", plan = "", presets = [] }) {
-    return ["[Диспетчерская, поезд " + tag + "] " + (prev ? "Вагон " + prev + " влит в staging, ветка поезда подтянула staging. " : "") + "Следующий вагон очереди — " + wave + (title ? " «" + title + "»" : "") + ".",
-        plan ? "План вагона: " + plan + " — прочитай его целиком и работай по станциям плана так же, как с прошлым вагоном (разведка, красный тест, код, спека приёмки, доклад)." : "Плана вагона в папке оркестратора не нашлось — спроси оркестратора, прежде чем писать код.",
-        "Код прошлых вагонов уже в staging — его не переделывай. Коммиты этого вагона — тема «тип(область): " + wave + " — суть» и строка «Wave: " + wave + "» в последнем абзаце (навык slot-commit)." + (presets.length ? " Тесты вагона: " + presets.map((p) => p.task + (p.input ? " " + p.input : "")).join(", ") + " — их запустит диспетчерская." : "")].join("\n\n");
+    return [
+        "[Диспетчерская, поезд " +
+            tag +
+            "] " +
+            (prev ? "Вагон " + prev + " влит в staging, ветка поезда подтянула staging. " : "") +
+            "Следующий вагон очереди — " +
+            wave +
+            (title ? " «" + title + "»" : "") +
+            ".",
+        plan
+            ? "План вагона: " +
+              plan +
+              " — прочитай его целиком и работай по станциям плана так же, как с прошлым вагоном (разведка, красный тест, код, спека приёмки, доклад)."
+            : "Плана вагона в папке оркестратора не нашлось — спроси оркестратора, прежде чем писать код.",
+        "Код прошлых вагонов уже в staging — его не переделывай. Коммиты этого вагона — тема «тип(область): " +
+            wave +
+            " — суть» и строка «Wave: " +
+            wave +
+            "» в последнем абзаце (навык slot-commit)." +
+            (presets.length
+                ? " Тесты вагона: " +
+                  presets.map((p) => p.task + (p.input ? " " + p.input : "")).join(", ") +
+                  " — их запустит диспетчерская."
+                : ""),
+    ].join("\n\n");
 }
 
 const issuing = new Set();

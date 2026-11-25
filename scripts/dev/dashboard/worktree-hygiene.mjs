@@ -4,16 +4,31 @@
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { MAIN, WT } from "../slots.mjs";
+import { canonPath } from "../paths.mjs";
 
 // Служебные папки диспетчерской (выкат, снимки, база регресса) — не слоты и не убираются.
 export const SPECIAL_RE = /[\\/](_main|_shard|_stg|regress-base)$/i;
 // Папки, которые оставить всегда; человек дополняет список настройкой keepWorktrees.
 export const KEEP_DEFAULT = [];
-const norm = (p) => path.normalize(String(p || "")).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-const git = (args, cwd = MAIN, timeout = 120000) => new Promise((res) => execFile("git", args, { cwd, timeout, windowsHide: true, maxBuffer: 16e6 }, (e, so, se) => res({ ok: !e, out: String(so || "").trim(), err: String(se || "").trim() })));
+// Пути реестра (как в конфиге) и git (раскрытые) сравниваются по файловой системе: при строковом сравнении слот
+// с короткими именами или ссылкой в пути выглядел бы «лишним» и ушёл бы в уборку.
+const norm = (p) => canonPath(String(p || ""));
+const git = (args, cwd = MAIN, timeout = 120000) =>
+    new Promise((res) =>
+        execFile("git", args, { cwd, timeout, windowsHide: true, maxBuffer: 16e6 }, (e, so, se) =>
+            res({ ok: !e, out: String(so || "").trim(), err: String(se || "").trim() }),
+        ),
+    );
 
 export function parseWorktrees(text) {
-    return String(text || "").split(/\r?\n\r?\n/).filter(Boolean).map((b) => ({ p: (/^worktree (.*)$/m.exec(b) || [])[1], br: (/^branch refs\/heads\/(.*)$/m.exec(b) || [])[1] || null })).filter((w) => w.p);
+    return String(text || "")
+        .split(/\r?\n\r?\n/)
+        .filter(Boolean)
+        .map((b) => ({
+            p: (/^worktree (.*)$/m.exec(b) || [])[1],
+            br: (/^branch refs\/heads\/(.*)$/m.exec(b) || [])[1] || null,
+        }))
+        .filter((w) => w.p);
 }
 
 export function extraWorktrees(list, epics, { wtRoot = WT, keep = KEEP_DEFAULT, main = MAIN } = {}) {

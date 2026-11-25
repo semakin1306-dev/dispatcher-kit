@@ -1,4 +1,4 @@
-// Документы сверены с кодом: два входных файла агента одинаковы, SETUP.md называет существующие вопросы и команды,
+// Документы сверены с кодом: CLAUDE.md импортирует AGENTS.md, SETUP.md называет существующие вопросы и команды,
 // README и рецепты называют существующие модули, переключатели, ключи конфига и функции надстройки.
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -22,8 +22,11 @@ const section = (text, head) => {
 }
 const firstColumn = (md) => [...md.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1])
 
-test("AGENTS.md и CLAUDE.md одинаковы: агент любого рантайма читает одно и то же", () => {
-  assert.equal(read("AGENTS.md"), read("CLAUDE.md"))
+test("CLAUDE.md импортирует AGENTS.md: указания агенту — одна копия для любого рантайма", () => {
+  // Codex читает AGENTS.md, Claude Code — CLAUDE.md, где строка `@AGENTS.md` подставляет файл целиком.
+  // Символьная ссылка не годится: на Windows без прав администратора git выписывает её строкой текста.
+  assert.equal(read("CLAUDE.md").trim(), "@AGENTS.md")
+  assert.ok(!fs.lstatSync(path.join(HOME, "CLAUDE.md")).isSymbolicLink(), "CLAUDE.md — обычный файл, не ссылка")
   assert.match(read("AGENTS.md"), /SETUP\.md/)
   assert.match(read("AGENTS.md"), /dispatcher\.project\.json/)
 })

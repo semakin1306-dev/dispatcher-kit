@@ -63,10 +63,27 @@ export async function autoMerge(key, why = "автопоезд") {
             return { ok: false, why: pin.why };
         }
         const r = recipe("merge", { slotKey: key, branch: br, sha: pin.sha });
-        const job = await enqueue({ treeKey: r.treeKey, cwd: r.cwd, label: r.label, taskId: "merge", lane: r.lane, steps: r.steps, extra: { pipeline: true, by: "автовлив (слово владельца 20.11)", auto: true, slot: key } });
+        const job = await enqueue({
+            treeKey: r.treeKey,
+            cwd: r.cwd,
+            label: r.label,
+            taskId: "merge",
+            lane: r.lane,
+            steps: r.steps,
+            extra: { pipeline: true, by: "автовлив (слово владельца 20.11)", auto: true, slot: key },
+        });
         refused.delete(key);
         logEvent("merge.auto", { tree: key, why, job: job && job.id, branch: br, sha: pin.sha });
-        say(key, "Автовлив: ветка " + br + " @" + pin.sha.slice(0, 10) + " — в staging (" + (job ? job.id : "") + "). Коммиты после него в этот влив не войдут. После влива ветка подтянет staging, и следующий вагон очереди придёт сам.");
+        say(
+            key,
+            "Автовлив: ветка " +
+                br +
+                " @" +
+                pin.sha.slice(0, 10) +
+                " — в staging (" +
+                (job ? job.id : "") +
+                "). Коммиты после него в этот влив не войдут. После влива ветка подтянет staging, и следующий вагон очереди придёт сам.",
+        );
         return { ok: true, why: "вливаю (" + (job ? job.id : "") + ")" };
     }
     finally {
@@ -135,7 +152,11 @@ export async function autoSyncConflicts() {
             const tt = { ...x, ...t0 };
             const r = await syncSlot(tt, { ffOnly: false, why: "авто: конфликт со staging" }).catch((e) => ({ fail: e.message }));
             syncReport(tt, r);
-            logEvent("slot.sync.auto", { tree: t0.key, result: r.ok ? "ok" : r.conflict ? "conflict" : r.skip ? "skip" : "fail", detail: String(r.text || r.skip || r.fail || (r.conflict || []).join(", ")).slice(0, 200) });
+            logEvent("slot.sync.auto", {
+                tree: t0.key,
+                result: r.ok ? "ok" : r.conflict ? "conflict" : r.skip ? "skip" : "fail",
+                detail: String(r.text || r.skip || r.fail || (r.conflict || []).join(", ")).slice(0, 200),
+            });
             if (r.skip)
                 syncTried.delete(t0.key);
             if (r.ok)

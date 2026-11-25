@@ -5,7 +5,10 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import * as R from "./accept-rules.mjs";
 
-const CHK = "WV-0001\n```checklist\n- i1 | /orders | открыть список заказов | видна таблица из 3 строк | авто\n- i2 | /orders/new | отправить пустую форму | ошибка «Заполните имя» | руками\n- i2b | /orders/new | имя из 300 знаков | ошибка длины | auto\n```\nПрочее — руками.";
+const CHK =
+    "WV-0001\n```checklist\n- i1 | /orders | открыть список заказов | видна таблица из 3 строк | авто\n- " +
+    "i2 | /orders/new | отправить пустую форму | ошибка «Заполните имя» | руками\n- i2b | /orders/new | " +
+    "имя из 300 знаков | ошибка длины | auto\n```\nПрочее — руками.";
 
 describe("чек-лист: строгий формат", () => {
     test("пять полей, id, «авто»/«руками»; текст вне блока не берётся", () => {
@@ -20,7 +23,10 @@ describe("чек-лист: строгий формат", () => {
         assert.match(r.errors[0], /нет блока/);
     });
     test("кривые строки — в ошибки, годные — в пункты; повтор id не берётся; «|» внутри ожидаемого сохраняется", () => {
-        const r = R.parseChecklist("```checklist\n- i1 | / | x | y | авто\n- шаг без id | a | b | c | авто\n- i2 | / | x | авто\n- i3 | / | x | y | может быть\n- i1 | / | снова | z | руками\n- i4 | / | x | a | b | руками\n```");
+        const r = R.parseChecklist(
+            "```checklist\n- i1 | / | x | y | авто\n- шаг без id | a | b | c | авто\n- i2 | / | x | авто\n- i3 | " +
+                "/ | x | y | может быть\n- i1 | / | снова | z | руками\n- i4 | / | x | a | b | руками\n```",
+        );
         assert.deepEqual(r.items.map((x) => x.id), ["i1", "i4"]);
         assert.equal(r.items[1].expect, "a | b");
         assert.equal(r.errors.length, 4);
@@ -106,7 +112,18 @@ describe("вывод прогона: метки [iN] → пункты", () => {
     test("метки для перепрогона части пунктов и спеки волны по номеру в пути", () => {
         assert.equal(R.itemsGrep(["i1", "i3", "i1"]), "\\[i1\\]|\\[i3\\]");
         assert.ok(new RegExp(R.itemsGrep(["i1", "i3"])).test("[i3] форма"));
-        assert.deepEqual(R.specsForWave(["e2e/wv-0001.accept.spec.ts", "e2e/wv0001-extra.accept.spec.ts", "e2e/wv-0010.accept.spec.ts", "e2e/common.accept.spec.ts"], "WV-0001"), ["e2e/wv-0001.accept.spec.ts", "e2e/wv0001-extra.accept.spec.ts"]);
+        assert.deepEqual(
+            R.specsForWave(
+                [
+                    "e2e/wv-0001.accept.spec.ts",
+                    "e2e/wv0001-extra.accept.spec.ts",
+                    "e2e/wv-0010.accept.spec.ts",
+                    "e2e/common.accept.spec.ts",
+                ],
+                "WV-0001",
+            ),
+            ["e2e/wv-0001.accept.spec.ts", "e2e/wv0001-extra.accept.spec.ts"],
+        );
         assert.deepEqual(R.specsForWave(["a"], ""), []);
     });
 });

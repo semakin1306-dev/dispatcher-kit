@@ -20,7 +20,16 @@ describe("окно эпика и очередь ретро", () => {
     });
     test("ретро ждут закрытые после включения автоматики; неудача — повтор через час, не больше двух попыток", () => {
         const at = (h) => new Date(T0 + h * H).toISOString();
-        const reg = { epics: [{ id: "a", status: "closed", closedAt: at(1) }, { id: "b", status: "closed", closedAt: at(5) }, { id: "c", status: "open" }, { id: "d", status: "closed", closedAt: at(6) }, { id: "e", status: "closed", closedAt: at(6) }, { id: "f", status: "closed", closedAt: at(6) }] };
+        const reg = {
+            epics: [
+                { id: "a", status: "closed", closedAt: at(1) },
+                { id: "b", status: "closed", closedAt: at(5) },
+                { id: "c", status: "open" },
+                { id: "d", status: "closed", closedAt: at(6) },
+                { id: "e", status: "closed", closedAt: at(6) },
+                { id: "f", status: "closed", closedAt: at(6) },
+            ],
+        };
         const done = { d: { status: "ok" }, e: { status: "fail", tries: 1, at: T0 + 6 * H }, f: { status: "fail", tries: 2, at: T0 } };
         assert.deepEqual(retroDue(reg, done, T0 + 2 * H, T0 + 6.5 * H), ["b"]);
         assert.deepEqual(retroDue(reg, done, T0 + 2 * H, T0 + 8 * H), ["b", "e"]);
@@ -31,7 +40,22 @@ describe("окно эпика и очередь ретро", () => {
 
 describe("промпт", () => {
     test("постоянные правила — первыми (общий префикс кеша); эпик, волны, сводка и пути — после", () => {
-        const p = retroPrompt({ epic: EPIC, from: T0, to: T0 + H, waves: [{ tag: "П1", wave: "WV-1010", title: "Первая" }], brief: "- прогонов: 3", counts: { "job.end": 5 }, files: { progress: "D/progress.json", failures: "D/failures.md", journal: "D/journal.txt", logs: "L", plans: ["P/_EPIC-ep.md"], plansDir: "P" } });
+        const p = retroPrompt({
+            epic: EPIC,
+            from: T0,
+            to: T0 + H,
+            waves: [{ tag: "П1", wave: "WV-1010", title: "Первая" }],
+            brief: "- прогонов: 3",
+            counts: { "job.end": 5 },
+            files: {
+                progress: "D/progress.json",
+                failures: "D/failures.md",
+                journal: "D/journal.txt",
+                logs: "L",
+                plans: ["P/_EPIC-ep.md"],
+                plansDir: "P",
+            },
+        });
         assert.ok(p.startsWith(RETRO_RULES));
         for (const s of ["ЭПИК: ep — Эпик", "ещё открыт", "П1 WV-1010 Первая", "- прогонов: 3", "job.end 5", "D/journal.txt", "L/jNNN.log", "P/_EPIC-ep.md"])
             assert.ok(p.includes(s), s);
@@ -42,7 +66,16 @@ describe("промпт", () => {
         assert.match(RETRO_RULES, /^ПРЕДЛОЖЕНИЯ:$/m);
     });
     test("сводка «Ход эпика» коротко: метрики в ней есть", () => {
-        const b = progressBrief({ readyWaveH: 2.5, counters: { runs: 10, runMin: 125, lost: { runs: 2, min: 30 }, repeats: { runs: 3, min: 12, top: [{ tree: "s1", task: "review", n: 3 }] }, questions: { n: 4, waitMin: 95, open: 1 } } });
+        const b = progressBrief({
+            readyWaveH: 2.5,
+            counters: {
+                runs: 10,
+                runMin: 125,
+                lost: { runs: 2, min: 30 },
+                repeats: { runs: 3, min: 12, top: [{ tree: "s1", task: "review", n: 3 }] },
+                questions: { n: 4, waitMin: 95, open: 1 },
+            },
+        });
         assert.match(b, /прогонов слотов: 10 \(2 ч 05 мин/);
         assert.match(b, /потеряно на сбоях.*2, 30 мин/);
         assert.match(b, /повторы на том же коде: 3, 12 мин — s1 review ×3/);
@@ -66,7 +99,12 @@ describe("ответ агента → карточки бэклога", () => {
         ]);
         assert.deepEqual(parseProposals("## Итог\nничего\n\nПРЕДЛОЖЕНИЯ:\n- нет"), []);
         assert.deepEqual(parseProposals("без раздела\n- гард: x"), []);
-        assert.deepEqual(parseProposals("ПРЕДЛОЖЕНИЯ:\n- гард: «весь текст»\n- гард: помечать «перезапущены», а не «прерваны» | эпизоды: j1").map((p) => p.title), ["весь текст", "помечать «перезапущены», а не «прерваны»"]);
+        assert.deepEqual(
+            parseProposals(
+                "ПРЕДЛОЖЕНИЯ:\n- гард: «весь текст»\n- гард: помечать «перезапущены», а не «прерваны» | эпизоды: j1",
+            ).map((p) => p.title),
+            ["весь текст", "помечать «перезапущены», а не «прерваны»"],
+        );
     });
     test("не больше восьми", () => {
         const t = "ПРЕДЛОЖЕНИЯ:\n" + Array.from({ length: 12 }, (_, i) => "- гард: гард номер " + "абвгдежзиклм"[i]).join("\n");
@@ -84,7 +122,10 @@ describe("ответ агента → карточки бэклога", () => {
     });
     test("повторное ретро не заводит то же второй раз (по заголовку без вида, только карточки этого эпика)", () => {
         const props = parseProposals(ANSWER);
-        const items = [{ source: "ретро ep", title: "Гард: каждый getByTestId спеки приёмки есть в коде staging" }, { source: "ретро другой", title: "Правка навыка: slot-commit — напоминать строку Wave:" }];
+        const items = [
+            { source: "ретро ep", title: "Гард: каждый getByTestId спеки приёмки есть в коде staging" },
+            { source: "ретро другой", title: "Правка навыка: slot-commit — напоминать строку Wave:" },
+        ];
         assert.deepEqual(freshProposals(props, items, "ep").map((p) => p.kind), ["правка навыка", "правило диспетчерской"]);
     });
     test("файл ретро: шапка с окном, ответ агента, список карточек", () => {
@@ -111,7 +152,13 @@ test("failuresBrief — все группы и разные причины гр�
 });
 
 test("progressBrief — переспросы отдельно от ожиданий, сбережённые воротами повторы — не блоки", () => {
-    const b = progressBrief({ counters: { questions: { n: 31, waits: 9, waitMin: 846, open: 1 } }, commands: { total: 80, failed: 4, deadlocks: 0, gateBlocked: 1, gateSaved: 36 }, idle: {}, restarts: {}, owner: {} });
+    const b = progressBrief({
+        counters: { questions: { n: 31, waits: 9, waitMin: 846, open: 1 } },
+        commands: { total: 80, failed: 4, deadlocks: 0, gateBlocked: 1, gateSaved: 36 },
+        idle: {},
+        restarts: {},
+        owner: {},
+    });
     assert.match(b, /вопросов владельцу: 31 \(ожиданий ответа 9, остальное — переспросы неотвеченного\), простой на них 14 ч 06 мин, открыто 1/);
     assert.match(b, /блоков ворот 1 \(и лишних повторов сбережено воротами 36\)/);
 });

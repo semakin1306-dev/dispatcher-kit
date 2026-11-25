@@ -149,7 +149,21 @@ function playwrightFails(L) {
         out.push({ what: "[" + m[1] + "] " + m[3], why: [why, loc].filter(Boolean).join(" · "), where: pwPath(m[2]), ctx });
     }
     const dirs = [...new Set(out.map((f) => f.ctx).filter(Boolean).map((c) => c.replace(/\/[^/]+\/error-context\.md$/, "")))];
-    return { fails: out, files: [...new Set(out.map((f) => f.where.split(":")[0]))], note: dirs.length === 1 ? "Снимок страницы упавшего теста: " + dirs[0] + "/<папка теста>/error-context.md" : dirs.length ? "Снимки страниц: " + out.filter((f) => f.ctx).map((f) => f.ctx).slice(0, 3).join(", ") : "" };
+    return {
+        fails: out,
+        files: [...new Set(out.map((f) => f.where.split(":")[0]))],
+        note:
+            dirs.length === 1
+                ? "Снимок страницы упавшего теста: " + dirs[0] + "/<папка теста>/error-context.md"
+                : dirs.length
+                  ? "Снимки страниц: " +
+                    out
+                        .filter((f) => f.ctx)
+                        .map((f) => f.ctx)
+                        .slice(0, 3)
+                        .join(", ")
+                  : "",
+    };
 }
 
 function goFails(L) {
@@ -293,14 +307,25 @@ export function collapse(lines) {
     return out.map((x) => x.n > 1 ? x.l + "  (×" + x.n + ")" : x.l);
 }
 
-const TOTAL_RE = /^\s*(сьюты|тесты|проверки):\s|^\s*Test Files\s+\d|^\s*Tests:?\s+\d|^\s*\d+ (failed|passed|flaky|skipped|did not run)\b|^итог:|^ИТОГ:|^=+ .*\b(?:passed|failed)\b.* in [\d.]+s|^(?:ok|FAIL)\s+\S+\s+[\d.]+s$|^── [a-zа-яё]+ \(код/i;
+const TOTAL_RE =
+    /^\s*(сьюты|тесты|проверки):\s|^\s*Test Files\s+\d|^\s*Tests:?\s+\d|^\s*\d+ (failed|passed|flaky|skipped|did not run)\b|^итог:|^ИТОГ:|^=+ .*\b(?:passed|failed)\b.* in [\d.]+s|^(?:ok|FAIL)\s+\S+\s+[\d.]+s$|^── [a-zа-яё]+ \(код/i;
 
 export function totalsOf(lines) {
     const hits = lines.filter((l) => TOTAL_RE.test(l)).map((l) => clip(l.replace(/^[─\s]+|[─\s]+$/g, ""), 160));
     return [...new Set(hits)].slice(-8);
 }
 
-const GREP_HINT = { jest: "●|^FAIL", vitest: "FAIL|Error", playwright: "Error|\\) \\[", "go-test": "--- FAIL|^FAIL", pytest: "^FAILED|^ERROR|^E ", tsc: "error TS", "slot-up": "✖|ИТОГ", review: "^- |ВЕРДИКТ", generic: "FAIL|Error|✗|✖" };
+const GREP_HINT = {
+    jest: "●|^FAIL",
+    vitest: "FAIL|Error",
+    playwright: "Error|\\) \\[",
+    "go-test": "--- FAIL|^FAIL",
+    pytest: "^FAILED|^ERROR|^E ",
+    tsc: "error TS",
+    "slot-up": "✖|ИТОГ",
+    review: "^- |ВЕРДИКТ",
+    generic: "FAIL|Error|✗|✖",
+};
 
 export function handleLine({ id, lines = 0, kind = "generic", logFile = "", cli = "" }) {
     const g = GREP_HINT[kind] || GREP_HINT.generic;
@@ -346,7 +371,9 @@ export function digestLog(text, { budget = DIGEST_BUDGET, handle = "" } = {}) {
         add("Упало (" + fails.length + ")" + (suite ? " в «" + clip(suite, 160) + "»" : "") + (file ? ", " + clip(file, 160) : "") + ":");
         let shown = 0;
         for (const f of fails) {
-            const what = suite ? f.what.slice(suite.length).replace(/^\s*[›>]\s*/, "") : f.what, where = file && f.where.startsWith(file) ? f.where.slice(file.length).replace(/^:/, "строка ") : f.where;
+            const what = suite ? f.what.slice(suite.length).replace(/^\s*[›>]\s*/, "") : f.what,
+                where =
+                    file && f.where.startsWith(file) ? f.where.slice(file.length).replace(/^:/, "строка ") : f.where;
             if (!add("- " + clip(what, 200) + (f.why ? " — " + clip(f.why, 260) : "") + (where ? " @ " + clip(where, 200) : "")))
                 break;
             shown++;

@@ -168,7 +168,11 @@ export function validateProject(raw) {
         if (!isObj(t.input) || !isStr(t.input.label)) E(p + ".input", "ожидается { label, placeholder? }")
         else if (isStr(t.run) && !wantsInput) E(p + ".run", "у задачи есть ввод, но в команде нет `{input}`")
       } else if (wantsInput) E(p + ".input", "в команде есть `{input}`, но ввод не описан: добавьте `input: { label }`")
-      if (t.cwd !== undefined && !(isStr(t.cwd) && !path.isAbsolute(t.cwd) && !/^[A-Za-z]:/.test(t.cwd) && !fwd(t.cwd).split("/").includes(".."))) E(p + ".cwd", "папка запуска — относительный путь внутри репозитория, без `..`")
+      if (
+        t.cwd !== undefined &&
+        !(isStr(t.cwd) && !path.isAbsolute(t.cwd) && !/^[A-Za-z]:/.test(t.cwd) && !fwd(t.cwd).split("/").includes(".."))
+      )
+        E(p + ".cwd", "папка запуска — относительный путь внутри репозитория, без `..`")
       if (t.lane !== undefined && !(isStr(t.lane) && ID_RE.test(t.lane))) E(p + ".lane", "дорожка — строчная латиница, цифры и дефис")
       optBool(t, p, "gate")
       if (t.timeoutMin !== undefined && !(typeof t.timeoutMin === "number" && t.timeoutMin > 0)) E(p + ".timeoutMin", "предел времени — положительное число минут")
@@ -368,14 +372,21 @@ export function loadProject({ file = projectFile(), fresh = false } = {}) {
   if (!fresh && cache.has(abs)) return cache.get(abs)
   let text
   try { text = fs.readFileSync(abs, "utf8") } catch {
-    throw new ProjectConfigError(`Проект не настроен: нет файла ${fwd(abs)}.\nОткройте папку диспетчерской в агенте — он проведёт настройку по SETUP.md, — или запустите \`node setup.mjs detect --repo <путь к проекту>\`.`, { code: "missing", file: abs })
+    throw new ProjectConfigError(
+      `Проект не настроен: нет файла ${fwd(abs)}.\nОткройте папку диспетчерской в агенте — он проведёт настройку по SETUP.md, — или запустите \`node setup.mjs detect --repo <путь к проекту>\`.`,
+      { code: "missing", file: abs },
+    )
   }
   let raw
   try { raw = JSON.parse(text.replace(/^\uFEFF/, "")) } catch (e) {
     throw new ProjectConfigError(`Конфиг проекта ${fwd(abs)} не читается как JSON: ${e.message}`, { code: "json", file: abs })
   }
   const { errors, warnings } = validateProject(raw)
-  if (errors.length) throw new ProjectConfigError(`В конфиге проекта ${fwd(abs)} ошибки:\n${formatIssues(errors)}\nПроверка целиком — \`node setup.mjs doctor\`.`, { code: "invalid", issues: errors, file: abs })
+  if (errors.length)
+    throw new ProjectConfigError(
+      `В конфиге проекта ${fwd(abs)} ошибки:\n${formatIssues(errors)}\nПроверка целиком — \`node setup.mjs doctor\`.`,
+      { code: "invalid", issues: errors, file: abs },
+    )
   const project = normalizeProject(raw, { baseDir: path.dirname(abs), file: abs })
   project.warnings = warnings
   cache.set(abs, project)

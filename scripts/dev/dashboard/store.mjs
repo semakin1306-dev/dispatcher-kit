@@ -224,7 +224,15 @@ export function readJson(file, fallback) {
                 rec.movedTo = path.basename(to);
         }
         corrupt.push(rec);
-        console.error("‼ битый файл состояния " + rec.file + " (" + rec.error + "): " + (rec.held ? "оставлен как есть, запись в него отключена" : "перенесён в " + rec.movedTo) + ", состояние этого файла — с нуля");
+        console.error(
+            "‼ битый файл состояния " +
+                rec.file +
+                " (" +
+                rec.error +
+                "): " +
+                (rec.held ? "оставлен как есть, запись в него отключена" : "перенесён в " + rec.movedTo) +
+                ", состояние этого файла — с нуля",
+        );
         if (onCorrupt) {
             try {
                 onCorrupt(rec);

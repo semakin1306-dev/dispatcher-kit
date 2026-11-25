@@ -37,6 +37,16 @@ fs.writeFileSync(STATE, JSON.stringify({ ...st, lastAct: v.act, lastRestartAt: n
 log("ПЕРЕЗАПУСК: " + v.why)
 try { fs.appendFileSync(path.join(DATA, "events.jsonl"), JSON.stringify({ at: now, type: "sentry.restart", why: v.why }) + "\n") } catch { /* журнал не обязателен */ }
 let code = 0, out = ""
-try { out = execFileSync(process.execPath, [path.join(HERE, "restart-dashboard.mjs"), "--force", "--reason=" + v.why], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 15 * 60000 }) } catch (e) { code = e.status ?? 1; out = String(e.stdout || "") + String(e.stderr || "") }
+try {
+  out = execFileSync(process.execPath, [path.join(HERE, "restart-dashboard.mjs"), "--force", "--reason=" + v.why], {
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15 * 60000,
+  })
+} catch (e) {
+  code = e.status ?? 1
+  out = String(e.stdout || "") + String(e.stderr || "")
+}
 log("restart-dashboard: код " + code + " — " + out.trim().split(/\r?\n/).slice(-3).join(" | "))
 process.exitCode = code

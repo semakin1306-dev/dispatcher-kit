@@ -18,8 +18,25 @@ describe("подпись коммита: строка Wave в последнем
 
 describe("форма команды коммита", () => {
   test("файлы явно; -A, «.», -u, -a, --no-verify — нет; прочее — не коммит", () => {
-    for (const c of ["git add -A", "git add --all", "git add . && git commit -m x", "git add -u", 'git commit -am "x"', "git commit --all -m x", "git commit --no-verify -m x", "git commit -n -m x"]) assert.equal(R.commitCmdShape(c).ok, false, c)
-    for (const c of ["git add a.ts ./b.ts", 'git commit -q -m "fix: --all в тексте не флаг"', 'git commit --trailer "Wave: WV-0001" -m x', "git commit --amend --no-edit", "git status"]) assert.equal(R.commitCmdShape(c).ok, true, c)
+    for (const c of [
+        "git add -A",
+        "git add --all",
+        "git add . && git commit -m x",
+        "git add -u",
+        'git commit -am "x"',
+        "git commit --all -m x",
+        "git commit --no-verify -m x",
+        "git commit -n -m x",
+    ])
+        assert.equal(R.commitCmdShape(c).ok, false, c)
+    for (const c of [
+        "git add a.ts ./b.ts",
+        'git commit -q -m "fix: --all в тексте не флаг"',
+        'git commit --trailer "Wave: WV-0001" -m x',
+        "git commit --amend --no-edit",
+        "git status",
+    ])
+        assert.equal(R.commitCmdShape(c).ok, true, c)
     assert.match(R.commitCmdShape("git commit --no-verify -m x").why, /хук/)
   })
 })

@@ -38,7 +38,18 @@ function journal() {
         { at: T0 + 3 * H, type: "agent.turn", key: "чужой" },
         { at: T0 + 3 * H, type: "chain.kick", tree: "s1", epic: "ep-retro" },
     ];
-    const r = (id, task, status, h, min, extra = {}) => ({ id, epic: "ep-retro", tree: "s1", task, status, input: "", queuedAt: T0 + h * H, startedAt: T0 + h * H, endedAt: T0 + h * H + min * 60e3, ...extra });
+    const r = (id, task, status, h, min, extra = {}) => ({
+        id,
+        epic: "ep-retro",
+        tree: "s1",
+        task,
+        status,
+        input: "",
+        queuedAt: T0 + h * H,
+        startedAt: T0 + h * H,
+        endedAt: T0 + h * H + min * 60e3,
+        ...extra,
+    });
     const runs = [r("j1", "review", "fail", 1, 5, { fpStart: "f" }), r("j2", "review", "fail", 1.2, 5, { fpStart: "f" }), r("j3", "api-test", "interrupted", 2, 20), r("j4", "commit", "ok", 2.5, 1),
         { id: "j9", tree: "чужой", task: "api-test", status: "fail", queuedAt: T0 }];
     return { events, runs };

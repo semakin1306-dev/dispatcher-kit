@@ -17,18 +17,71 @@ after(() => fs.rmSync(TMP, { recursive: true, force: true }))
 // Поток одного хода: начало сессии, печать ответа кусками, ответ с вызовом команды, запрос разрешения на правку,
 // итог команды, лимиты, итог хода, служебный ответ на рукопожатие.
 const STREAM = [
-  { type: "system", subtype: "init", session_id: "sess-1", model: "model-a" },
-  { type: "stream_event", event: { type: "message_start", message: { id: "msg1" } } },
-  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "При" } } },
-  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "вет" } } },
-  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{" } } },
-  { type: "assistant", message: { id: "msg1", content: [{ type: "text", text: "Привет" }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "git status", description: "статус" } }], usage: { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000 } } },
-  { type: "control_request", request_id: "r1", request: { subtype: "can_use_tool", tool_name: "Edit", input: { file_path: "/w/a.ts", old_string: "a", new_string: "b" } } },
-  { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", is_error: false, content: [{ type: "text", text: "чисто" }] }] } },
-  { type: "assistant", message: { id: "msg2", content: [{ type: "tool_use", id: "t2", name: "TodoWrite", input: { todos: [{ content: "шаг", status: "in_progress" }] } }, { type: "tool_use", id: "t3", name: "Grep", input: { pattern: "x", path: "src" } }], usage: { input_tokens: 5, cache_read_input_tokens: 2000 } } },
-  { type: "rate_limit_event", rate_limit_info: { rateLimitType: "five_hour", utilization: 0.5, status: "allowed", resetsAt: 1700000000 } },
-  { type: "result", subtype: "success", is_error: false, duration_ms: 4200, total_cost_usd: 0.0123, usage: { input_tokens: 15, output_tokens: 20, cache_read_input_tokens: 3000, cache_creation_input_tokens: 100 } },
-  { type: "control_response", response: { subtype: "success", request_id: "init_x" } },
+    { type: "system", subtype: "init", session_id: "sess-1", model: "model-a" },
+    { type: "stream_event", event: { type: "message_start", message: { id: "msg1" } } },
+    { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "При" } } },
+    { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "вет" } } },
+    {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{" } },
+    },
+    {
+        type: "assistant",
+        message: {
+            id: "msg1",
+            content: [
+                { type: "text", text: "Привет" },
+                { type: "tool_use", id: "t1", name: "Bash", input: { command: "git status", description: "статус" } },
+            ],
+            usage: { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000 },
+        },
+    },
+    {
+        type: "control_request",
+        request_id: "r1",
+        request: {
+            subtype: "can_use_tool",
+            tool_name: "Edit",
+            input: { file_path: "/w/a.ts", old_string: "a", new_string: "b" },
+        },
+    },
+    {
+        type: "user",
+        message: {
+            content: [
+                { type: "tool_result", tool_use_id: "t1", is_error: false, content: [{ type: "text", text: "чисто" }] },
+            ],
+        },
+    },
+    {
+        type: "assistant",
+        message: {
+            id: "msg2",
+            content: [
+                {
+                    type: "tool_use",
+                    id: "t2",
+                    name: "TodoWrite",
+                    input: { todos: [{ content: "шаг", status: "in_progress" }] },
+                },
+                { type: "tool_use", id: "t3", name: "Grep", input: { pattern: "x", path: "src" } },
+            ],
+            usage: { input_tokens: 5, cache_read_input_tokens: 2000 },
+        },
+    },
+    {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 0.5, status: "allowed", resetsAt: 1700000000 },
+    },
+    {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 4200,
+        total_cost_usd: 0.0123,
+        usage: { input_tokens: 15, output_tokens: 20, cache_read_input_tokens: 3000, cache_creation_input_tokens: 100 },
+    },
+    { type: "control_response", response: { subtype: "success", request_id: "init_x" } },
 ]
 const WANT = [
   { type: "session", id: "sess-1", model: "model-a" },
@@ -57,12 +110,35 @@ describe("разбор потока stream-json", () => {
     for (const e of got) if (e.kind) assert.ok(KINDS.includes(e.kind), e.kind)
   })
   test("ход с ошибкой и ход, прерванный человеком", () => {
-    assert.deepEqual(C.parseLine({ type: "result", subtype: "error_max_turns", is_error: true }), [{ type: "turn.end", ok: false, why: "error_max_turns", ms: 0, cost: 0, usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }, ctxTokens: 0 }])
+    assert.deepEqual(C.parseLine({ type: "result", subtype: "error_max_turns", is_error: true }), [
+        {
+            type: "turn.end",
+            ok: false,
+            why: "error_max_turns",
+            ms: 0,
+            cost: 0,
+            usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 },
+            ctxTokens: 0,
+        },
+    ])
     assert.equal(C.parseLine({ type: "result", subtype: "success", is_error: true })[0].why, "ошибка")
     assert.deepEqual(C.parseLine({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t9", is_error: true, content: "x".repeat(800) }] } })[0].result.length, 701)
   })
   test("виды инструментов", () => {
-    for (const [t, k] of [["Bash", "bash"], ["Read", "read"], ["Write", "write"], ["Edit", "edit"], ["MultiEdit", "edit"], ["NotebookEdit", "edit"], ["Glob", "search"], ["Grep", "search"], ["WebFetch", "other"], ["Task", "other"], ["mcp__x__y", "other"]]) assert.equal(C.toolKind(t), k, t)
+    for (const [t, k] of [
+        ["Bash", "bash"],
+        ["Read", "read"],
+        ["Write", "write"],
+        ["Edit", "edit"],
+        ["MultiEdit", "edit"],
+        ["NotebookEdit", "edit"],
+        ["Glob", "search"],
+        ["Grep", "search"],
+        ["WebFetch", "other"],
+        ["Task", "other"],
+        ["mcp__x__y", "other"],
+    ])
+        assert.equal(C.toolKind(t), k, t)
     assert.deepEqual(C.neutralInput("MultiEdit", { file_path: "a", edits: [{ old_string: "1", new_string: "2" }] }).neu, "2")
     assert.equal(C.neutralInput("NotebookEdit", { notebook_path: "n.ipynb", new_source: "x" }).path, "n.ipynb")
   })
@@ -82,13 +158,33 @@ describe("процесс агента", () => {
     const h = C.start({ cwd: TMP, model: "model-b", resume: "sess-0", systemPrompt: "роль", addDirs: [TMP], env: { HTTPS_PROXY: "http://127.0.0.1:9" }, bin: { cmd: "claude-bin", pre: [] } },
       { spawn: (cmd, args, opts) => { call = { cmd, args, opts }; return proc }, kill: () => { proc.killed = true }, onEvent: (e) => events.push(e) })
     assert.equal(call.cmd, "claude-bin"); assert.equal(call.opts.cwd, TMP); assert.equal(call.opts.env.HTTPS_PROXY, "http://127.0.0.1:9")
-    for (const f of ["--output-format", "stream-json", "--input-format", "--permission-prompt-tool=stdio", "--permission-mode=acceptEdits", "--setting-sources=user,project,local", "--resume=sess-0", "--strict-mcp-config", "--include-partial-messages"]) assert.ok(call.args.includes(f), f)
+    for (const f of [
+        "--output-format",
+        "stream-json",
+        "--input-format",
+        "--permission-prompt-tool=stdio",
+        "--permission-mode=acceptEdits",
+        "--setting-sources=user,project,local",
+        "--resume=sess-0",
+        "--strict-mcp-config",
+        "--include-partial-messages",
+    ])
+        assert.ok(call.args.includes(f), f)
     assert.equal(call.args[call.args.indexOf("--model") + 1], "model-b"); assert.equal(call.args[call.args.indexOf("--append-system-prompt") + 1], "роль")
     assert.deepEqual(proc.lines[0].request, { subtype: "initialize", hooks: null }, "рукопожатие — первой строкой")
     h.send("сделай"); h.interrupt(); h.setModel("model-c")
     assert.deepEqual(proc.lines[1], { type: "user", message: { role: "user", content: "сделай" }, parent_tool_use_id: null, session_id: "" })
     assert.equal(proc.lines[2].request.subtype, "interrupt"); assert.deepEqual(proc.lines[3].request, { subtype: "set_model", model: "model-c" })
-    proc.stdout.write(JSON.stringify(STREAM[6]) + "\n" + JSON.stringify({ type: "control_request", request_id: "r2", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git push" } } }) + "\n")
+    proc.stdout.write(
+        JSON.stringify(STREAM[6]) +
+            "\n" +
+            JSON.stringify({
+                type: "control_request",
+                request_id: "r2",
+                request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git push" } },
+            }) +
+            "\n",
+    )
     await new Promise((r) => setImmediate(r))
     assert.deepEqual(events.filter((e) => e.type === "permission").map((e) => [e.id, e.kind]), [["r1", "edit"], ["r2", "bash"]])
     h.answerPermission("r1", { allow: true }); h.answerPermission("r2", { allow: false, message: "нельзя" })
@@ -100,7 +196,9 @@ describe("процесс агента", () => {
   })
   test("агент с узкими правами: без автоприёма правок и без пользовательских настроек", () => {
     const a = C.argv({ acceptEdits: false, userSettings: false, keepMcp: true })
-    assert.ok(a.includes("--permission-mode=default") && a.includes("--setting-sources=project,local")); assert.ok(!a.includes("--strict-mcp-config")); assert.ok(!a.some((x) => x.startsWith("--resume")))
+    assert.ok(a.includes("--permission-mode=default") && a.includes("--setting-sources=project,local"))
+    assert.ok(!a.includes("--strict-mcp-config"))
+    assert.ok(!a.some((x) => x.startsWith("--resume")))
   })
 })
 
@@ -136,18 +234,45 @@ describe("сессии на диске", () => {
   test("последняя сессия папки, история, хвост и последний законченный ответ", async () => {
     process.env.CLAUDE_CONFIG_DIR = cfg
     const dir = path.join(cfg, "projects", path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-")); fs.mkdirSync(dir, { recursive: true })
-    const lines = [
-      { type: "user", message: { content: "сделай" } },
-      { type: "user", isMeta: true, message: { content: "служебное" } },
-      { type: "user", message: { content: "<command-name>x</command-name>" } },
-      { type: "assistant", timestamp: "2026-01-02T03:04:05Z", message: { id: "m1", content: [{ type: "text", text: "делаю" }, { type: "tool_use", id: "t", name: "Write", input: { file_path: "a.ts", content: "x" } }] } },
-      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] } },
-      { type: "assistant", timestamp: "2026-01-02T03:05:00Z", message: { id: "m2", content: [{ type: "text", text: "готово" }] } },
-    ].map((m) => JSON.stringify(m)).join("\n") + "\n"
+    const lines =
+        [
+            { type: "user", message: { content: "сделай" } },
+            { type: "user", isMeta: true, message: { content: "служебное" } },
+            { type: "user", message: { content: "<command-name>x</command-name>" } },
+            {
+                type: "assistant",
+                timestamp: "2026-01-02T03:04:05Z",
+                message: {
+                    id: "m1",
+                    content: [
+                        { type: "text", text: "делаю" },
+                        { type: "tool_use", id: "t", name: "Write", input: { file_path: "a.ts", content: "x" } },
+                    ],
+                },
+            },
+            { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] } },
+            {
+                type: "assistant",
+                timestamp: "2026-01-02T03:05:00Z",
+                message: { id: "m2", content: [{ type: "text", text: "готово" }] },
+            },
+        ]
+            .map((m) => JSON.stringify(m))
+            .join("\n") + "\n"
     fs.writeFileSync(path.join(dir, "old.jsonl"), ""); fs.utimesSync(path.join(dir, "old.jsonl"), new Date(1e12), new Date(1e12))
     fs.writeFileSync(path.join(dir, "new.jsonl"), lines)
     assert.equal(C.latestSession(cwd).id, "new")
-    assert.deepEqual(await C.readHistory(cwd, "new"), [{ t: "user", text: "сделай" }, { t: "assistant", text: "делаю" }, { t: "tool", name: "Write", kind: "write", input: { path: "a.ts", content: "x", raw: { file_path: "a.ts", content: "x" } } }, { t: "assistant", text: "готово" }])
+    assert.deepEqual(await C.readHistory(cwd, "new"), [
+        { t: "user", text: "сделай" },
+        { t: "assistant", text: "делаю" },
+        {
+            t: "tool",
+            name: "Write",
+            kind: "write",
+            input: { path: "a.ts", content: "x", raw: { file_path: "a.ts", content: "x" } },
+        },
+        { t: "assistant", text: "готово" },
+    ])
     const tail = await C.readTail(cwd, "new", 400)
     assert.ok(tail.length <= 400 * 2 && tail.endsWith("\n"))
     assert.deepEqual(C.lastAnswer(lines), { text: "готово", at: Date.parse("2026-01-02T03:05:00Z"), id: "m2" })
@@ -169,7 +294,11 @@ describe("разовый запуск и запреты слота", () => {
   test("запреты слота дописываются к существующим настройкам, разрешения человека не теряются", () => {
     const dir = path.join(TMP, "slot"); fs.mkdirSync(path.join(dir, ".claude"), { recursive: true })
     fs.writeFileSync(path.join(dir, ".claude", "settings.local.json"), JSON.stringify({ model: "x", permissions: { allow: ["Bash(ls:*)"], deny: ["Edit(/old/**)", "Bash(git commit:*)"] } }))
-    const r = C.writeSlotPolicy(dir, { deny: { commands: ["git push", "=git add ."], edit: ["/package.json"], read: ["**/.env"], ask: ["git commit"] }, editDeny: ["apps/web/**"], allowEdit: ["/package.json"] })
+    const r = C.writeSlotPolicy(dir, {
+        deny: { commands: ["git push", "=git add ."], edit: ["/package.json"], read: ["**/.env"], ask: ["git commit"] },
+        editDeny: ["apps/web/**"],
+        allowEdit: ["/package.json"],
+    })
     const j = JSON.parse(fs.readFileSync(path.join(dir, ".claude", "settings.local.json"), "utf8"))
     assert.equal(j.model, "x"); assert.deepEqual(j.permissions.allow, ["Bash(ls:*)"])
     assert.deepEqual(j.permissions.deny, ["Edit(/old/**)", "Bash(git push:*)", "Bash(git add .)", "Read(**/.env)", "Edit(apps/web/**)"])
@@ -187,7 +316,16 @@ describe("интерфейс рантайма", () => {
   })
   test("runOnce: ответ из stdout, код возврата, снятие по времени", async () => {
     const rt = { onceCommand: (o) => ({ cmd: "x", args: [o.prompt], env: { A: "1" }, input: o.prompt }), onceText: (t) => t.trim() }
-    const spawnOk = (cmd, args, opts) => { const p = fakeProc(); p.stdin = new PassThrough(); p.stdin.on("data", (d) => { p.stdout.end("ответ на " + d); setImmediate(() => p.emit("close", 0)) }); assert.equal(opts.env.A, "1"); return p }
+    const spawnOk = (cmd, args, opts) => {
+        const p = fakeProc()
+        p.stdin = new PassThrough()
+        p.stdin.on("data", (d) => {
+            p.stdout.end("ответ на " + d)
+            setImmediate(() => p.emit("close", 0))
+        })
+        assert.equal(opts.env.A, "1")
+        return p
+    }
     assert.deepEqual(await runOnce({ prompt: "вопрос", cwd: TMP, rt, spawnFn: spawnOk }), { ok: true, text: "ответ на вопрос", code: 0, err: "" })
     const spawnHang = () => { const p = fakeProc(); p.stdin = new PassThrough(); p.pid = 0; p.kill = () => setImmediate(() => p.emit("close", null)); return p }
     const r = await runOnce({ prompt: "x", cwd: TMP, rt, spawnFn: spawnHang, killFn: (p) => p.kill(), timeoutMs: 20 })

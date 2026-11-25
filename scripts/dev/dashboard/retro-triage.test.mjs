@@ -19,7 +19,11 @@ after(() => {
     catch { }
 });
 
-const EPICS = [{ id: "old", title: "Старый", status: "closed", closedAt: "2026-11-10T10:00:00Z", slots: [] }, { id: "ep-a", title: "Эпик А: что-то", status: "closed", closedAt: "2026-11-16T10:00:00Z", slots: [] }, { id: "open1", title: "Открытый", status: "open", slots: [] }];
+const EPICS = [
+    { id: "old", title: "Старый", status: "closed", closedAt: "2026-11-10T10:00:00Z", slots: [] },
+    { id: "ep-a", title: "Эпик А: что-то", status: "closed", closedAt: "2026-11-16T10:00:00Z", slots: [] },
+    { id: "open1", title: "Открытый", status: "open", slots: [] },
+];
 
 test("статус rejected (отказ) — только с причиной одной строкой; dropped остаётся для старых элементов", () => {
     assert.ok(STATUSES.includes("rejected") && STATUSES.includes("dropped"));
@@ -48,7 +52,14 @@ test("разбор: последний закрытый эпик, карточк
     assert.equal(lastClosedEpic(EPICS).id, "ep-a");
     assert.equal(lastClosedEpic([{ id: "o", status: "open" }]), null);
     const it = (id, status, retro) => ({ id, status, retro, title: id + " заголовок" });
-    const items = [it("BL-0010", "new", "ep-a"), it("BL-0011", "researched", "ep-a"), it("BL-0012", "planned", "ep-a"), it("BL-0013", "rejected", "ep-a"), it("BL-0014", "new", "old"), it("BL-0015", "new", "")];
+    const items = [
+        it("BL-0010", "new", "ep-a"),
+        it("BL-0011", "researched", "ep-a"),
+        it("BL-0012", "planned", "ep-a"),
+        it("BL-0013", "rejected", "ep-a"),
+        it("BL-0014", "new", "old"),
+        it("BL-0015", "new", ""),
+    ];
     const tr = retroTriage(items, EPICS);
     assert.deepEqual({ epic: tr.epic, total: tr.total, open: tr.open.map((x) => x.id) }, { epic: "ep-a", total: 4, open: ["BL-0010", "BL-0011"] });
     const why = retroGateWhy(tr, "/x/backlog.mjs");
@@ -72,7 +83,8 @@ const cli = (...a) => spawnSync(process.execPath, [CLI, ...a], { env, encoding: 
 const epic = (...a) => spawnSync(process.execPath, [EPIC, ...a], { env, encoding: "utf8", cwd: TMP });
 
 test("store и CLI: отказ без причины не сохраняется; set --status rejected --reason; triage — список и код 1, разобрано — код 0", () => {
-    const a = createItem(dir, { text: "Гард: проверять порт до прогона", source: "ретро ep-a", retro: "ep-a" }).item, b = createItem(dir, { text: "Правило: X", source: "ретро ep-a", retro: "ep-a" }).item;
+    const a = createItem(dir, { text: "Гард: проверять порт до прогона", source: "ретро ep-a", retro: "ep-a" }).item,
+        b = createItem(dir, { text: "Правило: X", source: "ретро ep-a", retro: "ep-a" }).item;
     assert.equal(a.retro, "ep-a");
     assert.throws(() => updateItem(dir, a.id, { set: { status: "rejected" } }), /с причиной/);
     let r = cli("triage");
@@ -107,7 +119,19 @@ test("store и CLI: отказ без причины не сохраняется
 
 test("--skip-retro по слову владельца — эпик заводится, событие retro.skip с эпиком-источником и карточками", () => {
     const c = createItem(dir, { text: "Правка навыка: Y", source: "ретро ep-a", retro: "ep-a" }).item;
-    const main = path.join(TMP, "main"), g = (...a) => execFileSync("git", a, { cwd: main, env: { ...env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }, encoding: "utf8" });
+    const main = path.join(TMP, "main"),
+        g = (...a) =>
+            execFileSync("git", a, {
+                cwd: main,
+                env: {
+                    ...env,
+                    GIT_AUTHOR_NAME: "t",
+                    GIT_AUTHOR_EMAIL: "t@t",
+                    GIT_COMMITTER_NAME: "t",
+                    GIT_COMMITTER_EMAIL: "t@t",
+                },
+                encoding: "utf8",
+            });
     g("init", "-q", "-b", "staging");
     fs.writeFileSync(path.join(main, "a"), "a");
     g("add", "a");

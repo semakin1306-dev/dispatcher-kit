@@ -109,10 +109,31 @@ function toolStart(item, id) {
 function toolEnd(item, id) {
   const failed = item.status === "failed" || item.status === "declined"
   switch (item.type) {
-    case "command_execution": return { type: "tool.end", id, ok: !failed && (item.exit_code == null || item.exit_code === 0), result: clip(item.aggregated_output, 700) }
-    case "file_change": return { type: "tool.end", id, ok: !failed, result: clip(changesText(item.changes), 700) }
-    case "mcp_tool_call": return { type: "tool.end", id, ok: !failed && !item.error, result: clip(item.error ? (item.error.message || JSON.stringify(item.error)) : typeof item.result === "string" ? item.result : JSON.stringify(item.result ?? ""), 700) }
-    default: return { type: "tool.end", id, ok: !failed, result: "" }
+    case "command_execution":
+      return {
+        type: "tool.end",
+        id,
+        ok: !failed && (item.exit_code == null || item.exit_code === 0),
+        result: clip(item.aggregated_output, 700),
+      }
+    case "file_change":
+      return { type: "tool.end", id, ok: !failed, result: clip(changesText(item.changes), 700) }
+    case "mcp_tool_call":
+      return {
+        type: "tool.end",
+        id,
+        ok: !failed && !item.error,
+        result: clip(
+          item.error
+            ? item.error.message || JSON.stringify(item.error)
+            : typeof item.result === "string"
+              ? item.result
+              : JSON.stringify(item.result ?? ""),
+          700,
+        ),
+      }
+    default:
+      return { type: "tool.end", id, ok: !failed, result: "" }
   }
 }
 
@@ -130,7 +151,22 @@ export function parseEvent(m, st = newParseState()) {
       st.turnSeen = true; st.ended = true
       const u = m.usage || {}
       // usage Codex — сумма за ход (несколько вызовов модели), а не размер контекста; поэтому ctxTokens не заполняется.
-      return [{ type: "turn.end", ok: true, why: "", ms: 0, cost: 0, usage: { in: u.input_tokens || 0, out: (u.output_tokens || 0) + (u.reasoning_output_tokens || 0), cacheRead: u.cached_input_tokens || 0, cacheWrite: u.cache_write_input_tokens || 0 }, ctxTokens: 0 }]
+      return [
+        {
+          type: "turn.end",
+          ok: true,
+          why: "",
+          ms: 0,
+          cost: 0,
+          usage: {
+            in: u.input_tokens || 0,
+            out: (u.output_tokens || 0) + (u.reasoning_output_tokens || 0),
+            cacheRead: u.cached_input_tokens || 0,
+            cacheWrite: u.cache_write_input_tokens || 0,
+          },
+          ctxTokens: 0,
+        },
+      ]
     }
     case "turn.failed":
       st.turnSeen = true; st.ended = true
@@ -288,7 +324,20 @@ export function start(opts, { spawn, kill = killTree, onEvent, platform = proces
         sessionId = null; primed = false; hist.drop(); hist = historyWriter(opts.cwd, opts.histRoot || historyRoot())
         runTurn(text, { retried: true }); return
       }
-      if (!st.ended) onEv({ type: "turn.end", ok: false, why: turn.interrupted ? "прерван" : err ? "не запустился: " + err.message : `codex завершился с кодом ${code}`, ms: 0, cost: 0, usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }, ctxTokens: 0 })
+      if (!st.ended)
+        onEv({
+          type: "turn.end",
+          ok: false,
+          why: turn.interrupted
+            ? "прерван"
+            : err
+              ? "не запустился: " + err.message
+              : `codex завершился с кодом ${code}`,
+          ms: 0,
+          cost: 0,
+          usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 },
+          ctxTokens: 0,
+        })
       if (err) { dead = true; emit({ type: "error", message: err.message }); return }
       if (dead) { sendExit(code); return }
       if (queue.length && !turn.interrupted) { const q = queue.splice(0); emit({ type: "turn.start", queued: q.length }); runTurn(q.join("\n\n")) }
@@ -297,7 +346,19 @@ export function start(opts, { spawn, kill = killTree, onEvent, platform = proces
     proc.on("close", (code) => finish(code, null))
   }
 
-  function fail(e) { dead = true; emit({ type: "turn.end", ok: false, why: "не запустился: " + e.message, ms: 0, cost: 0, usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }, ctxTokens: 0 }); emit({ type: "error", message: e.message }) }
+  function fail(e) {
+    dead = true
+    emit({
+      type: "turn.end",
+      ok: false,
+      why: "не запустился: " + e.message,
+      ms: 0,
+      cost: 0,
+      usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 },
+      ctxTokens: 0,
+    })
+    emit({ type: "error", message: e.message })
+  }
 
   function stopTurn(t, hard) {
     if (!t || t.done) return
@@ -360,9 +421,16 @@ export function policyText({ deny = PROJECT.deny, editDeny = [], allowEdit = [] 
   const allowed = new Set(allowEdit.map(fwd))
   const edit = [...new Set([...(deny.edit || []), ...editDeny].map(fwd))].filter((p) => !allowed.has(p))
   const list = (xs, f = (x) => "`" + x + "`") => xs.map((x) => "- " + f(x)).join("\n")
-  const parts = [MARK, "# Правила слота (диспетчерская)", "",
-    "Файл создан диспетчерской для этой рабочей копии и перезаписывается при подготовке слота; в git он не попадает.", "",
-    "Песочница Codex сама не даёт писать вне папки слота" + (network ? "." : " и выходить в сеть.") + " Всё остальное ниже машина НЕ проверяет — соблюдай сам. Если задача требует запретного, остановись и спроси человека."]
+  const parts = [
+    MARK,
+    "# Правила слота (диспетчерская)",
+    "",
+    "Файл создан диспетчерской для этой рабочей копии и перезаписывается при подготовке слота; в git он не попадает.",
+    "",
+    "Песочница Codex сама не даёт писать вне папки слота" +
+      (network ? "." : " и выходить в сеть.") +
+      " Всё остальное ниже машина НЕ проверяет — соблюдай сам. Если задача требует запретного, остановись и спроси человека.",
+  ]
   if ((deny.commands || []).length) parts.push("", "## Нельзя запускать", list(deny.commands, cmdLine))
   if ((deny.ask || []).length) parts.push("", "## Только по слову человека", list(deny.ask, cmdLine))
   if (edit.length) parts.push("", "## Нельзя править (шаблоны путей как в .gitignore)", list(edit))

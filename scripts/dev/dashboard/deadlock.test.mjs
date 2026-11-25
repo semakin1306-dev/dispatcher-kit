@@ -13,7 +13,21 @@ process.env.DASH_ORCH_STEP_MS = "200";
 fs.mkdirSync(process.env.DASH_DATA, { recursive: true });
 fs.mkdirSync(path.join(TMP, "orch", ".git"), { recursive: true });
 fs.mkdirSync(path.join(TMP, "wt", "wv9004-a", ".git"), { recursive: true });
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "т", status: "open", orch: { path: path.join(TMP, "orch"), branch: "orch/e1" }, slots: [{ slot: "wv9004-a", tag: "П4", branch: "dev/wv-9004", title: "а" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "т",
+                status: "open",
+                orch: { path: path.join(TMP, "orch"), branch: "orch/e1" },
+                slots: [{ slot: "wv9004-a", tag: "П4", branch: "dev/wv-9004", title: "а" }],
+            },
+        ],
+    }),
+);
 await import("./wiring.mjs");
 const D = await import("./deadlock.mjs");
 const { applyEpics } = await import("./trees.mjs");
@@ -22,7 +36,13 @@ const R = await import("./relay.mjs");
 const A = await import("./agents.mjs");
 const L = await import("./orchlog.mjs");
 const { loadJobs } = await import("./jobs.mjs");
-after(async () => { const st = await import("./store.mjs"); await st.settled(); st.flushSync(); await st.settled(); fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => {
+    const st = await import("./store.mjs");
+    await st.settled();
+    st.flushSync();
+    await st.settled();
+    fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
 applyEpics();
 loadInbox();
 A.loadSessions();
@@ -53,7 +73,14 @@ test("А5: счёт — та же причина подряд; другая пр
 });
 
 test("А5: ворота трижды не пустили ПРОГНАТЬ оркестратора — оркестратору «правила противоречат», карточка, на третий раз", () => {
-    const ask = { tree: "wv9004-a", task: "api-test", input: "wv-0999", by: "просьба оркестратора", fp: "fp1", why: "волна закоммичена, код с коммита не менялся — проверять дальше будет поезд влива (j1)" };
+    const ask = {
+        tree: "wv9004-a",
+        task: "api-test",
+        input: "wv-0999",
+        by: "просьба оркестратора",
+        fp: "fp1",
+        why: "волна закоммичена, код с коммита не менялся — проверять дальше будет поезд влива (j1)",
+    };
     R.gateFeedback(ask);
     R.gateFeedback({ ...ask, why: ask.why.replace("j1", "j2") });
     assert.ok(!sends.some((s) => /Правила противоречат/.test(s.text)), "два раза — ещё не тупик");

@@ -42,7 +42,12 @@ test("сужение: последний прогон задачи красны�
     const J = (id, status, o = {}) => ({ id, tree: "s1", task: "api-test", input: "x", status, endedAt: Number(id.slice(1)), ...o });
     const fails = { j1: ["__tests__/b.spec.ts", "__tests__/a.spec.ts"], j3: ["__tests__/c.spec.ts"] };
     const f = (id) => fails[id] || [];
-    assert.deepEqual(R.narrowRedRun("s1", "api-test", { jobs: [J("j1", "fail")], fails: f }), { task: "api-test", input: "a\\.spec\\.ts|b\\.spec\\.ts", specs: ["__tests__/a.spec.ts", "__tests__/b.spec.ts"], from: "j1" });
+    assert.deepEqual(R.narrowRedRun("s1", "api-test", { jobs: [J("j1", "fail")], fails: f }), {
+        task: "api-test",
+        input: "a\\.spec\\.ts|b\\.spec\\.ts",
+        specs: ["__tests__/a.spec.ts", "__tests__/b.spec.ts"],
+        from: "j1",
+    });
     assert.equal(R.narrowRedRun("s1", "api-test", { jobs: [J("j1", "fail"), J("j2", "ok")], fails: f }), null, "последний — зелёный");
     assert.equal(R.narrowRedRun("s1", "api-test", { jobs: [J("j3", "fail", { summary: "Timeout, server build1 not responding" })], fails: f }), null, "красное по связи");
     assert.equal(R.narrowRedRun("s1", "api-test", { jobs: [J("j4", "fail")], fails: f }), null, "без упавших спек");
@@ -50,7 +55,15 @@ test("сужение: последний прогон задачи красны�
 });
 
 test("упавшие спеки прошли позже на нынешнем коде — да; на другом коде или раньше падения — нет", () => {
-    const f = "__tests__/a.spec.ts", hist = { [f]: [{ ok: false, at: 100, code: "s1:fpA" }, { ok: true, at: 200, code: "s1:fpA" }], g: [{ ok: true, at: 50, code: "s1:fpA" }], h: [{ ok: true, at: 300, code: "s1:fpB" }] };
+    const f = "__tests__/a.spec.ts",
+        hist = {
+            [f]: [
+                { ok: false, at: 100, code: "s1:fpA" },
+                { ok: true, at: 200, code: "s1:fpA" },
+            ],
+            g: [{ ok: true, at: 50, code: "s1:fpA" }],
+            h: [{ ok: true, at: 300, code: "s1:fpB" }],
+        };
     assert.equal(R.specsPassedSince([f], "s1", "fpA", 150, hist), true);
     assert.equal(R.specsPassedSince([f, "g"], "s1", "fpA", 150, hist), false, "g прошла до падения");
     assert.equal(R.specsPassedSince(["h"], "s1", "fpA", 150, hist), false, "h прошла на другом коде");

@@ -33,14 +33,26 @@ for (let i = 1; i < argv.length; i++) {
         pos.push(argv[i]);
 }
 
-const USAGE = "использование: node scripts/dev/backlog.mjs list [--status S[,S]] [--area A] [--epic E] [--json] | show BL-NNNN | add \"текст\" [--area a] [--source s] | set BL-NNNN поле=значение… [--status S] [--reason \"…\"] | triage [--epic E] [--json] | check-cmd \"<команда>\" | prompt\nстатусы: " + STATUSES.join(" | ") + " (rejected — отказ, только с --reason)";
+const USAGE =
+    "использование: node scripts/dev/backlog.mjs list [--status S[,S]] [--area A] [--epic E] [--json] | " +
+    'show BL-NNNN | add "текст" [--area a] [--source s] | set BL-NNNN поле=значение… [--status S] ' +
+    '[--reason "…"] | triage [--epic E] [--json] | check-cmd "<команда>" | prompt\nстатусы: ' +
+    STATUSES.join(" | ") +
+    " (rejected — отказ, только с --reason)";
 
 const die = (m, code = 1) => {
     console.error(m);
     process.exit(code);
 };
 
-const line = (it) => [it.id, (STATUS_WORD[it.status] || it.status) + " (" + it.status + ")" + (it.reason ? ": " + it.reason : ""), it.area.length ? it.area.join(", ") : "—", it.epic ? "эпик " + it.epic + (it.wave ? " · " + it.wave : "") : "без эпика", it.title].join(" · ");
+const line = (it) =>
+    [
+        it.id,
+        (STATUS_WORD[it.status] || it.status) + " (" + it.status + ")" + (it.reason ? ": " + it.reason : ""),
+        it.area.length ? it.area.join(", ") : "—",
+        it.epic ? "эпик " + it.epic + (it.wave ? " · " + it.wave : "") : "без эпика",
+        it.title,
+    ].join(" · ");
 
 export function filterItems(items, { status = "", area = "", epic = "" } = {}) {
     const st = status ? status.split(",").map((s) => s.trim()).filter(Boolean) : null;
@@ -146,7 +158,14 @@ async function main() {
     }
     if (cmd === "prompt") {
         const A = await import("./dashboard/backlog-agent.mjs");
-        console.log("рабочая папка агента бэклога: " + fwd(A.BACKLOG_WT) + "\n\n── постоянная подсказка агента бэклога ──\n" + A.backlogPrompt() + "\n\n── раздел оркестратора «Бэклог» ──\n" + A.orchBacklog());
+        console.log(
+            "рабочая папка агента бэклога: " +
+                fwd(A.BACKLOG_WT) +
+                "\n\n── постоянная подсказка агента бэклога ──\n" +
+                A.backlogPrompt() +
+                "\n\n── раздел оркестратора «Бэклог» ──\n" +
+                A.orchBacklog(),
+        );
         process.exit(0);
     }
     die("нет команды " + cmd + "\n" + USAGE, 2);

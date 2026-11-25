@@ -9,7 +9,21 @@ after(() => fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryD
 process.env.DASH_DATA = TMP;
 process.env.DASH_DRY = "1";
 process.env.DASH_EPIC_FILE = path.join(TMP, "epics.json");
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "эпик", status: "open", orch: { path: TMP, branch: "dev/epic-e1" }, slots: [{ slot: "wv0001-a", tag: "П1", branch: "dev/wv-0001-a", area: "api" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "эпик",
+                status: "open",
+                orch: { path: TMP, branch: "dev/epic-e1" },
+                slots: [{ slot: "wv0001-a", tag: "П1", branch: "dev/wv-0001-a", area: "api" }],
+            },
+        ],
+    }),
+);
 const { jobEpic } = await import("./runner.mjs");
 const { loadEpics } = await import("../slots.mjs");
 

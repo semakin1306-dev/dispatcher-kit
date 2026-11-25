@@ -30,7 +30,11 @@ export function provisionDue({ archived = false, missing = false, merged = false
         return { due: false, why: "подготовку отменили: повтор кнопкой" };
     const ago = now - (last.endedAt || 0);
     if (last.status === "ok")
-        return !missing ? { due: false, why: "слот готов" } : ago >= PROVISION_RETRY_MS ? { due: true, why: "папки нет после зелёной подготовки", reuse: false } : { due: false, why: "подготовка только что прошла" };
+        return !missing
+            ? { due: false, why: "слот готов" }
+            : ago >= PROVISION_RETRY_MS
+              ? { due: true, why: "папки нет после зелёной подготовки", reuse: false }
+              : { due: false, why: "подготовка только что прошла" };
     if (last.status === "interrupted" && last.bootInterrupted)
         return { due: true, why: "подготовку оборвал перезапуск диспетчерской (" + last.id + ")", reuse: !missing };
     if (ago < PROVISION_RETRY_MS)
@@ -49,7 +53,18 @@ export function prepNext({ jobs = [], now = Date.now() }) {
         return null;
     if (d.attention)
         return { kind: "bad", text: d.why, act: "provision", jobId: d.jobId };
-    return { kind: "warn", text: "Подготовка слота не завершена (" + last.id + ", " + last.status + "): " + (d.due ? "повтор поставится сам в течение минуты" : d.why), act: "provision", jobId: last.id };
+    return {
+        kind: "warn",
+        text:
+            "Подготовка слота не завершена (" +
+            last.id +
+            ", " +
+            last.status +
+            "): " +
+            (d.due ? "повтор поставится сам в течение минуты" : d.why),
+        act: "provision",
+        jobId: last.id,
+    };
 }
 
 export function relayToSlot({ folder = false, preparing = false, live = false, session = false, prompt = false }) {
@@ -105,8 +120,14 @@ export function slotIdleText({ tag, title = "", min, jobId, plan = true }) {
 export function slotEnvNote(x) {
     if (x.readOnly)
         return "";
-    return "ОКРУЖЕНИЕ ПАПКИ. Сборку, гарды и тесты в этой папке сам не запускай" +
-        ": проверки — станции диспетчерской (сборка → гарды → тесты → регресс) на её копии кода; их ставит диспетчерская или оркестратор строкой «ПРОГНАТЬ " + x.tag + ": задача=фильтр». Если план велит прогнать проверку самому — пропусти этот шаг, продолжай по плану, а в докладе напиши «Нужно от оркестратора: ПРОГНАТЬ " + x.tag + ": …» — не СТОП.";
+    return (
+        "ОКРУЖЕНИЕ ПАПКИ. Сборку, гарды и тесты в этой папке сам не запускай" +
+        ": проверки — станции диспетчерской (сборка → гарды → тесты → регресс) на её копии кода; их ставит диспетчерская или оркестратор строкой «ПРОГНАТЬ " +
+        x.tag +
+        ": задача=фильтр». Если план велит прогнать проверку самому — пропусти этот шаг, продолжай по плану, а в докладе напиши «Нужно от оркестратора: ПРОГНАТЬ " +
+        x.tag +
+        ": …» — не СТОП."
+    );
 }
 
 /** Почему задаче не место в этом слоте; "" — можно. Слоту «только чтение» сборка, тесты и гарды не нужны. */

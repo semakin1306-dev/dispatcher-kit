@@ -11,7 +11,15 @@ process.env.DASH_DRY = "1";
 const { enqueueChecked, holdOk, queues } = await import("./runner.mjs");
 const { loadJobs } = await import("./jobs.mjs");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const args = () => ({ treeKey: "orchestrator-staging", cwd: process.cwd(), label: "Влить X в staging", taskId: "merge", lane: "ops", steps: [{ show: "git merge", cmd: "git", args: ["--version"], cwd: process.cwd() }], extra: { pipeline: true } });
+const args = () => ({
+    treeKey: "orchestrator-staging",
+    cwd: process.cwd(),
+    label: "Влить X в staging",
+    taskId: "merge",
+    lane: "ops",
+    steps: [{ show: "git merge", cmd: "git", args: ["--version"], cwd: process.cwd() }],
+    extra: { pipeline: true },
+});
 
 test("задача в очереди сразу и держится «проверяю условия»; проверка прошла — удержание снято, метка и добавки применены", async () => {
     loadJobs([]);

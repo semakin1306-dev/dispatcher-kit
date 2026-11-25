@@ -44,7 +44,11 @@ export function deployWriteWhy(command, protectedGlobs = []) {
     const cmd = String(command || ""), F = protectedFileRe(protectedGlobs);
     if (!F || !new RegExp(F).test(cmd))
         return "";
-    return writesOf(F).some((re) => re.test(cmd)) ? "защищённые файлы проекта (" + protectedGlobs.join(", ") + ") из сессии агента не правят — это делает окно диспетчерской или оркестратор: опиши нужный шаг в докладе" : "";
+    return writesOf(F).some((re) => re.test(cmd))
+        ? "защищённые файлы проекта (" +
+              protectedGlobs.join(", ") +
+              ") из сессии агента не правят — это делает окно диспетчерской или оркестратор: опиши нужный шаг в докладе"
+        : "";
 }
 
 export function blockTargetTag(lang, trees) {
@@ -67,7 +71,9 @@ export function relayDecision({ body, prev, cur, sync = false }) {
     const asks = slotAsks(body);
     const changed = !prev || !cur || prev.fp !== cur.fp || prev.sha !== cur.sha;
     if (asks)
-        return asks !== ((prev && prev.asks) || "") || changed ? { relay: true, why: "есть просьбы или ответ оркестратору" } : { relay: false, why: "те же просьбы при том же коде, что в прошлой передаче" };
+        return asks !== ((prev && prev.asks) || "") || changed
+            ? { relay: true, why: "есть просьбы или ответ оркестратору" }
+            : { relay: false, why: "те же просьбы при том же коде, что в прошлой передаче" };
     if (sync)
         return { relay: false, why: "ход по «Подтянуть staging»: влив staging в ветку диспетчерская видит сама и перегоняет проверки" };
     if (st === "ЖДУ")
@@ -177,26 +183,30 @@ export function orchWake(text) {
     return m ? { wake: m.wake, kind: m.kind, why: m.why } : { wake: true, kind: "other", why: "сообщение владельца, окна диспетчерской или приёмки — решение оркестратора" };
 }
 
-export function orchNudgeDue({ now, busy = false, queued = false, liveJobs = 0, lastWork = 0, orchSawAt = 0, lastNudge = 0, slotsWithSession = 0, slotsWaitingOwner = 0, idleMs = 20 * 60e3, everyMs = 60 * 60e3 }) {
+export function orchNudgeDue({
+    now,
+    busy = false,
+    queued = false,
+    liveJobs = 0,
+    lastWork = 0,
+    orchSawAt = 0,
+    lastNudge = 0,
+    slotsWithSession = 0,
+    slotsWaitingOwner = 0,
+    idleMs = 20 * 60e3,
+    everyMs = 60 * 60e3,
+}) {
     const no = (why) => ({ due: false, why });
-    if (busy)
-        return no("агент эпика отвечает");
-    if (queued)
-        return no("передачи в очереди");
-    if (liveJobs)
-        return no("идут прогоны: их итог придёт слотам сам");
-    if (!slotsWithSession)
-        return no("слотов с сессией нет");
-    if (slotsWaitingOwner >= slotsWithSession)
-        return no("все слоты ждут владельца");
-    if (!lastWork || now - lastWork < idleMs)
-        return no("простой короче порога");
-    if (lastNudge && now - lastNudge < everyMs)
-        return no("толкали меньше часа назад");
+    if (busy) return no("агент эпика отвечает");
+    if (queued) return no("передачи в очереди");
+    if (liveJobs) return no("идут прогоны: их итог придёт слотам сам");
+    if (!slotsWithSession) return no("слотов с сессией нет");
+    if (slotsWaitingOwner >= slotsWithSession) return no("все слоты ждут владельца");
+    if (!lastWork || now - lastWork < idleMs) return no("простой короче порога");
+    if (lastNudge && now - lastNudge < everyMs) return no("толкали меньше часа назад");
     if (orchSawAt && orchSawAt >= lastWork)
         return no("оркестратор уже отвечал после последней работы в эпике — нового нет");
-    if (lastNudge && lastNudge >= lastWork)
-        return no("после прошлого толчка никто ничего не сделал");
+    if (lastNudge && lastNudge >= lastWork) return no("после прошлого толчка никто ничего не сделал");
     return { due: true, why: "слоты работали после последнего хода оркестратора и стоят" };
 }
 
@@ -233,7 +243,17 @@ export function orchTurnsReplay(evs, { idleMs = 20 * 60e3, everyMs = 60 * 60e3, 
                 if (e.at - at > liveMaxMs)
                     s.live.delete(id);
             if (e.kind === "nudge") {
-                const d = orchNudgeDue({ now: e.at, liveJobs: s.live.size, lastWork: s.lastWork, orchSawAt: s.sawAt, lastNudge: s.lastNudge, slotsWithSession: 1, slotsWaitingOwner: 0, idleMs, everyMs });
+                const d = orchNudgeDue({
+                    now: e.at,
+                    liveJobs: s.live.size,
+                    lastWork: s.lastWork,
+                    orchSawAt: s.sawAt,
+                    lastNudge: s.lastNudge,
+                    slotsWithSession: 1,
+                    slotsWaitingOwner: 0,
+                    idleMs,
+                    everyMs,
+                });
                 const later = !d.due && /короче порога|идут прогоны|меньше часа/.test(d.why);
                 if (d.due || later)
                     s.lastNudge = e.at;
@@ -317,7 +337,15 @@ export function mergeWaitStep({ w, checks = [], red = {}, live = false, busy = f
     if (quiet > quietMs && (w.tries || 0) < 2)
         return { act: "queue", need, direct: true };
     if (quiet > stuckMs)
-        return { act: "red", stuck: true, need, why: "недостающие проверки (" + need.map((id) => MERGE_LABEL[id] || id).join(", ") + ") на этом коде не встали: ворота не пускают или станция ждёт — нужна правка или решение" };
+        return {
+            act: "red",
+            stuck: true,
+            need,
+            why:
+                "недостающие проверки (" +
+                need.map((id) => MERGE_LABEL[id] || id).join(", ") +
+                ") на этом коде не встали: ворота не пускают или станция ждёт — нужна правка или решение",
+        };
     return { act: "wait", need, why: "проверки поставлены, жду начала" };
 }
 
@@ -352,9 +380,19 @@ export function redGroupNote({ own = [], carry = [], violations = [] }) {
     const mine = [...new Set(own.map(base))], prev = [...new Set(carry.map(base))].filter((x) => !mine.includes(x));
     const out = [];
     if (mine.length + prev.length > 1 || prev.length)
-        out.push("Все упавшие спеки группы — проверь и поправь КАЖДУЮ до перепрогона, а не только первую (следующий перепрогон диспетчерская сама соберёт из них всех и задетых правкой): " + mine.join(", ") + (prev.length ? (mine.length ? "; " : "") + "ещё красные с прошлого прогона: " + prev.join(", ") : "") + ".");
+        out.push(
+            "Все упавшие спеки группы — проверь и поправь КАЖДУЮ до перепрогона, а не только первую (следующий перепрогон диспетчерская сама соберёт из них всех и задетых правкой): " +
+                mine.join(", ") +
+                (prev.length ? (mine.length ? "; " : "") + "ещё красные с прошлого прогона: " + prev.join(", ") : "") +
+                ".",
+        );
     if (violations.length > 1)
-        out.push("Нарушения гардов этого прогона — все " + violations.length + ", поправь каждое до перепрогона (цепочка гардов встаёт на первом красном: шаги после него не проверялись):\n" + violations.map((v) => "  • " + v).join("\n"));
+        out.push(
+            "Нарушения гардов этого прогона — все " +
+                violations.length +
+                ", поправь каждое до перепрогона (цепочка гардов встаёт на первом красном: шаги после него не проверялись):\n" +
+                violations.map((v) => "  • " + v).join("\n"),
+        );
     return out.join("\n");
 }
 

@@ -1,6 +1,6 @@
 // monitor.mjs — монитор машины без привязки к ОС: загрузка ЦП, память, тяжёлые процессы, проверка служб проекта.
 //
-// Общая часть работает везде: ЦП — по os.cpus(), память — os и /proc/meminfo (Linux), процессы — `ps` (Linux, macOS).
+// Общая часть работает везде: ЦП — по os.cpus(), память — /proc/meminfo (Linux), `vm_stat` (macOS) или os, процессы — `ps` (Linux, macOS).
 // Подробности конкретной ОС подставляет модуль платформы через setPlatformMonitor (например, win-desktop: лимит
 // выделения памяти Windows и список процессов) — ядро о них не знает.
 import { execFile } from "./spawner.mjs"
@@ -17,6 +17,7 @@ import { TREES, treeByKey } from "./trees.mjs"
 import { enabled } from "./modules.mjs"
 import { localServices } from "./services.mjs"
 import * as win from "./monitor-win.mjs"
+import { availMem } from "./free-mem.mjs"
 
 const procs = lateObject("runner.mjs", "procs")
 const GB = 1073741824
@@ -27,7 +28,15 @@ const winOn = () => process.platform === "win32" && enabled("win-desktop")
 /** Что модулю win-desktop нужно знать о прогонах, агентах и слотах для разбора снимка. */
 function winCtx() {
   const jobs = []
-  try { for (const [id, ch] of procs.entries()) if (ch && ch.pid) { const j = jobList().find((x) => x.id === id); jobs.push({ id, pid: ch.pid, slot: j && j.tree, label: j ? j.label : id }) } } catch { /* раннер ещё не подключён */ }
+  try {
+    for (const [id, ch] of procs.entries())
+      if (ch && ch.pid) {
+        const j = jobList().find((x) => x.id === id)
+        jobs.push({ id, pid: ch.pid, slot: j && j.tree, label: j ? j.label : id })
+      }
+  } catch {
+    /* раннер ещё не подключён */
+  }
   const ags = [...agents.values()].filter(agentPid).map((a) => ({ key: a.key, pid: agentPid(a), label: (treeByKey(a.key) || {}).tag || a.key }))
   const tagOf = (k) => { const t = treeByKey(k); return t ? { tag: t.tag, epic: t.epic || null, emoji: t.emoji, title: t.title } : { tag: k, epic: null } }
   return { jobs, agents: ags, tagOf, tagSlots: Object.fromEntries(TREES.filter((t) => t.tag).map((t) => [t.tag, t.key])), wt: WT, main: MAIN }
@@ -63,7 +72,7 @@ export async function memInfo() {
   try { v = platform.memInfo ? await platform.memInfo() : winOn() ? await win.readOsMemory() : null } catch { v = null }
   if (v && winOn() && !platform.memInfo) v = { ...v, commit: true }
   if (!v) v = procMeminfo()
-  if (!v) { const free = os.freemem() / GB, total = os.totalmem() / GB; v = { freeCommitGB: free, totalCommitGB: total, freePhysGB: free, totalPhysGB: total } }
+  if (!v) { const free = availMem() / GB, total = os.totalmem() / GB; v = { freeCommitGB: free, totalCommitGB: total, freePhysGB: free, totalPhysGB: total } }
   S.memCache = { at: Date.now(), v }
   return v
 }
@@ -90,10 +99,25 @@ export function startCpuSampler() {
     const cores = cpuLoad(S.prevCpu, cur)
     S.prevCpu = cur
     const cpu = Math.round(cores.reduce((a, b) => a + b, 0) / Math.max(1, cores.length))
-    const total = os.totalmem(), m = S.memCache.v, free = m ? m.freePhysGB * GB : os.freemem()
+    const total = os.totalmem(), m = S.memCache.v, free = m ? m.freePhysGB * GB : availMem()
     const phys = Math.round(100 * (1 - free / total)), commit = m && m.commit ? Math.round(100 * (1 - m.freeCommitGB / m.totalCommitGB)) : null
     for (const [k, v] of [["cpu", cpu], ["phys", phys], ["commit", commit]]) { sysHist[k].push(v); if (sysHist[k].length > HIST_N) sysHist[k].shift() }
-    S.sysNow = { cpu, cores, model: (os.cpus()[0] || {}).model || "", physTotalGB: total / GB, physUsedGB: (total - free) / GB, phys, commit, commitTotalGB: commit != null ? m.totalCommitGB : null, commitFreeGB: commit != null ? m.freeCommitGB : null, load: sysHist, top: S.topProcs || [], topCpu: S.cpuTop || [], cpuTasks: S.cpuTasks || [], at: Date.now() }
+    S.sysNow = {
+      cpu,
+      cores,
+      model: (os.cpus()[0] || {}).model || "",
+      physTotalGB: total / GB,
+      physUsedGB: (total - free) / GB,
+      phys,
+      commit,
+      commitTotalGB: commit != null ? m.totalCommitGB : null,
+      commitFreeGB: commit != null ? m.freeCommitGB : null,
+      load: sysHist,
+      top: S.topProcs || [],
+      topCpu: S.cpuTop || [],
+      cpuTasks: S.cpuTasks || [],
+      at: Date.now(),
+    }
   }
   tick()
   setInterval(tick, 2000).unref()
@@ -183,7 +207,18 @@ export async function sampleStack() {
   const checks = await Promise.all(svcs.map((s) => s.check ? ls.check(s, PROJECT.repo.main) : Promise.resolve(null)))
   svcs.forEach((s, i) => {
     const r = checks[i]
-    rows.push({ id: "svc-" + s.name, name: s.name, ok: r ? r.ok : true, ms: r ? r.ms : null, need: !!r, note: r ? (r.ok ? "проверка прошла" : r.why || "проверка не прошла: " + s.check) : "проверки нет (ключ `check`); поднимается командой `up` перед каждым прогоном" })
+    rows.push({
+      id: "svc-" + s.name,
+      name: s.name,
+      ok: r ? r.ok : true,
+      ms: r ? r.ms : null,
+      need: !!r,
+      note: r
+        ? r.ok
+          ? "проверка прошла"
+          : r.why || "проверка не прошла: " + s.check
+        : "проверки нет (ключ `check`); поднимается командой `up` перед каждым прогоном",
+    })
   })
   S.stackNow = rows
 }

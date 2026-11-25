@@ -33,8 +33,16 @@ describe("коммит агента слота: форма команды", () =
     assert.equal(bash('git commit -m "feat: x"', { full: false }), null, "без полных разрешений — человеку, но не отказ")
   })
   test("-A, «.», -u, commit -a, --no-verify — отказ с причиной даже без полных разрешений", () => {
-    for (const [c, re] of [["git add -A", /-A/], ['git add . && git commit -m "a"', /явно/], ["git add -u", /явно/], ['git commit -am "x"', /-a не используем/], ['git commit --no-verify -m "x"', /--no-verify/]]) {
-      const r = bash(c, { full: false }); assert.ok(r && r.deny, c + " → " + JSON.stringify(r)); assert.match(r.deny, re, c)
+    for (const [c, re] of [
+        ["git add -A", /-A/],
+        ['git add . && git commit -m "a"', /явно/],
+        ["git add -u", /явно/],
+        ['git commit -am "x"', /-a не используем/],
+        ['git commit --no-verify -m "x"', /--no-verify/],
+    ]) {
+        const r = bash(c, { full: false })
+        assert.ok(r && r.deny, c + " → " + JSON.stringify(r))
+        assert.match(r.deny, re, c)
     }
     assert.equal(bash("git add ./a.ts b.ts"), "allow")
   })
@@ -43,10 +51,29 @@ describe("коммит агента слота: форма команды", () =
 describe("ночной режим и режим коммитов", () => {
   const A = (o) => ctx({ full: false, ...o })
   test("ночью: add/commit/merge staging/checkout --theirs — сами; push, reset --hard, --no-verify, ssh, чужая ветка — нет", () => {
-    for (const c = [`cd ${fwd(SLOT)}; git diff --cached --name-only; git add web/index.html`, 'git commit -m "merge: staging"', "git merge staging", "git merge origin/staging", "git merge --continue", "git checkout --theirs package.json"]; c.length;) {
-      const x = c.shift(); assert.equal(bashAllowed(A({ night: true, selfCommit: false }), x), true, x)
+    for (
+        const c = [
+            `cd ${fwd(SLOT)}; git diff --cached --name-only; git add web/index.html`,
+            'git commit -m "merge: staging"',
+            "git merge staging",
+            "git merge origin/staging",
+            "git merge --continue",
+            "git checkout --theirs package.json",
+        ];
+        c.length;
+    ) {
+        const x = c.shift()
+        assert.equal(bashAllowed(A({ night: true, selfCommit: false }), x), true, x)
     }
-    for (const x of ["git push origin HEAD", "git reset --hard staging", "git commit --no-verify -m x", "ssh host ls", "git checkout main", "git merge dev/other"]) assert.equal(bashAllowed(A({ night: true, selfCommit: false }), x), false, x)
+    for (const x of [
+        "git push origin HEAD",
+        "git reset --hard staging",
+        "git commit --no-verify -m x",
+        "ssh host ls",
+        "git checkout main",
+        "git merge dev/other",
+    ])
+        assert.equal(bashAllowed(A({ night: true, selfCommit: false }), x), false, x)
     assert.equal(bashAllowed(A({ night: true, role: "orch" }), "git merge staging"), false, "оркестратору — нет")
   })
   test("днём, коммиты по слову — commit и merge спрашивают; самокоммит — commit сам, merge — нет", () => {

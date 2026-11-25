@@ -1,8 +1,21 @@
 // train-rules.mjs — слоты-поезда: поезд — обычный слот области с очередью волн-вагонов. Чистые правила без файлов и git:
 // реестр поездов и вагонов, очередь вагонов по коммитам со строкой «Wave: WV-NNNN», шаг между вагонами, подпись влива,
 // станция вагона для страницы.
+//
+// Кто зовёт: реестр эпиков (epic.mjs add-train, add-wagon, move-wagon, remove-wagon, order-wagons), trains.mjs (очередь
+// поезда по git и выдача следующего вагона агенту), trees, view, stations (станция вагона), agents.mjs (законные номера
+// Wave, которые получает хук commit-msg).
+// Состояние модуль не ведёт: реестр (epics.json) и отметки поездов (trains.json) читают и пишут вызывающие.
+//
+// Инварианты:
+// - номер волны в эпике один: вагон есть ровно в одном поезде и не ведётся отдельным слотом;
+// - вагоны идут строго по одному: голова очереди — первый вагон не в staging; следующий выдаётся агенту только после влива
+//   прошлого (ветка поезда одна на все вагоны, невлитый код смешал бы два вагона);
+// - менять очередь (перевод, снятие, порядок) можно только у вагонов в депо: у начатого уже есть коммиты со своим номером;
+// - принадлежность коммита вагону — строка «Wave: WV-NNNN» в подписи; влив поезда несёт номера вагонов в теме merge-коммита.
 import { EPIC_CLI, PROJECT } from "../slots.mjs";
 import { areaList, areaPresets, slotAreaFields, trainAreasOf } from "../areas.mjs";
+import { prompt } from "../prompts.mjs";
 
 // Поезд — слот области проекта: области поездов выводятся из раздела `areas` конфига (areas.mjs).
 export const TRAIN_AREAS = trainAreasOf(PROJECT);
@@ -11,36 +24,55 @@ export const TRAIN_AREA_DEFS = Object.fromEntries(Object.values(PROJECT.areas).m
 
 export const TRAIN_EMOJI = "🚂";
 
+// Ошибки правил реестра — с кодом TRAIN: команда эпика отличает их от сбоев и печатает текст как есть.
 const fail = (m) => {
     const e = new Error(m);
     e.code = "TRAIN";
     throw e;
 };
 
+/** Слот — поезд: kind «train» или (старые записи реестра) есть список wagons. */
 export const isTrain = (x) => !!x && (x.kind === "train" || Array.isArray(x.wagons));
 
+/** Номер волны в каноническом виде WV-NNNN из любой записи (wv-12, WV-0012, dev/wv-0012-…); не нашлось — пусто. */
 export const normWave = (w) => {
     const m = /wv-?0*(\d{1,4})(?!\d)/i.exec(String(w || ""));
     return m ? "WV-" + m[1].padStart(4, "0") : "";
 };
 
+/** Аргумент команды: голые цифры «1122» — тоже номер волны (normWave их не узнаёт, чтобы не ловить числа в тексте). */
 export const waveArg = (x) => (/^\s*\d{3,4}\s*$/.test(String(x || "")) ? "WV-" + String(x).trim().padStart(4, "0") : normWave(x));
 const tagNum = (t) => Number((/\d+/.exec(String(t || "")) || [0])[0]);
 const slug = (s, n) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, n);
+/** Имя слота поезда: tr-<область>[полоса]-<эпик>; вторая полоса той же области — с номером. Это и имя папки, и ветка dev/<имя>. */
 export const trainSlotName = (area, epicId, lane = 1) => ("tr-" + slug(area, 12) + (lane > 1 ? String(lane) : "") + "-" + slug(epicId, 26)).replace(/-+$/, "");
 export const MAX_TRAINS = 10;
+/** Метка нового поезда: Т1, Т2, … — следующая после наибольшей (снятые поезда не освобождают номер в середине). */
 export const nextTrainTag = (epic) => "Т" + (Math.max(0, ...(epic.slots || []).filter(isTrain).map((z) => tagNum(z.tag))) + 1);
 
+/**
+ * Поезд эпика по метке ТN, имени слота или области. Область годится, только если поезд у неё один — иначе неоднозначно.
+ * Латинская «T» в метке принимается за кириллическую «Т»: так метку набирают с латинской раскладки.
+ */
 export function findTrain(epic, key) {
     const k = String(key || "").trim();
     if (!k)
         fail("какой поезд: метка ТN, имя слота или область");
-    const t = (epic.slots || []).filter(isTrain).find((z) => z.tag === k || z.slot === k || (z.trainArea === k && (epic.slots || []).filter((y) => isTrain(y) && y.trainArea === k).length === 1) || z.tag === k.replace(/^T/, "Т"));
+    const t = (epic.slots || [])
+        .filter(isTrain)
+        .find(
+            (z) =>
+                z.tag === k ||
+                z.slot === k ||
+                (z.trainArea === k && (epic.slots || []).filter((y) => isTrain(y) && y.trainArea === k).length === 1) ||
+                z.tag === k.replace(/^T/, "Т"),
+        );
     if (!t)
         fail("нет поезда " + k + " в эпике " + epic.id);
     return t;
 }
 
+/** Где вагон: { train, wagon, index } по всем поездам эпика; нет — null. */
 export function findWagon(epic, wave) {
     const w = waveArg(wave);
     if (!w)
@@ -53,6 +85,10 @@ export function findWagon(epic, wave) {
     return null;
 }
 
+/**
+ * Завести поезд области в эпике (запись реестра; папку и ветку готовит вызывающий). Поля сборки и области — как у слота этой
+ * области, цвет — первый свободный из палитры. taken — занятые имена слотов вне эпика (папка уже есть).
+ */
 export function newTrain(epic, { area, title = "", scope = null, taken = new Set(), areas = TRAIN_AREAS, areaDefs = TRAIN_AREA_DEFS, palette = [], sparse = false }) {
     const A = Object.prototype.hasOwnProperty.call(areas, area) ? areas[area] : null;
     if (!A)
@@ -68,8 +104,22 @@ export function newTrain(epic, { area, title = "", scope = null, taken = new Set
         fail("имя слота занято: " + name);
     const used = new Set((epic.slots || []).map((z) => z.color)), n = tagNum(nextTrainTag(epic));
     const [emoji, color] = palette.find(([, c]) => !used.has(c)) || palette[(n - 1) % Math.max(1, palette.length)] || ["🟩", "#16a34a"];
-    const slot = { tag: "Т" + n, emoji, slot: name, kind: "train", trainArea: area, branch: "dev/" + name, title: title || A.title + (lane > 1 ? " · " + lane : ""), color, ...(lane > 1 ? { lane } : {}), ...(areaDefs[A.base] || {}),
-        presets: [], scope: scope && scope.length ? scope : A.scope, wagons: [], ...(sparse ? { sparse: true } : {}) };
+    const slot = {
+        tag: "Т" + n,
+        emoji,
+        slot: name,
+        kind: "train",
+        trainArea: area,
+        branch: "dev/" + name,
+        title: title || A.title + (lane > 1 ? " · " + lane : ""),
+        color,
+        ...(lane > 1 ? { lane } : {}),
+        ...(areaDefs[A.base] || {}),
+        presets: [],
+        scope: scope && scope.length ? scope : A.scope,
+        wagons: [],
+        ...(sparse ? { sparse: true } : {}),
+    };
     (epic.slots || (epic.slots = [])).push(slot);
     return slot;
 }
@@ -80,6 +130,10 @@ export function wagonPresets(train, wave, project = PROJECT) {
     return areaPresets(project.areas[base], wave, project);
 }
 
+/**
+ * Зависимости вагона «после …»: вагон своего поезда — номером, чужого — «WV-NNNN@ТN». Метка чужого поезда хранится в ссылке,
+ * потому что очередь своего поезда проверяет зависимость по staging, а чужого — отдельной проверкой (depOk в queueState).
+ */
 export function parseAfter(epic, train, list) {
     const out = [];
     for (const raw of (Array.isArray(list) ? list : String(list || "").split(",")).map((x) => String(x).trim()).filter(Boolean)) {
@@ -96,6 +150,7 @@ export function parseAfter(epic, train, list) {
     return out;
 }
 
+/** Поставить вагон в конец очереди поезда. Заголовок хранится без номера волны: номер — отдельное поле. */
 export function addWagon(epic, trainKey, { wave, title, after = [], presets = null }) {
     const train = findTrain(epic, trainKey), w = waveArg(wave);
     if (!w)
@@ -113,6 +168,7 @@ export function addWagon(epic, trainKey, { wave, title, after = [], presets = nu
     return { train, wagon };
 }
 
+/** Перевести вагон из депо в другой поезд. started — вагоны с коммитами или выданные агенту: их ветка уже несёт номер. */
 export function moveWagon(epic, wave, toKey, { started = new Set() } = {}) {
     const hit = findWagon(epic, wave);
     if (!hit)
@@ -124,6 +180,7 @@ export function moveWagon(epic, wave, toKey, { started = new Set() } = {}) {
         fail("вагон " + hit.wagon.wave + " уже начат (есть коммиты или выдан агенту) — переводить можно только вагон в депо");
     hit.train.wagons.splice(hit.index, 1);
     to.wagons = [...(to.wagons || []), hit.wagon];
+    // Ссылки after у всех вагонов пересчитываются: своя ссылка становится чужой «@ТN» и наоборот.
     for (const tr of (epic.slots || []).filter(isTrain))
         for (const z of tr.wagons || [])
             if (z.after)
@@ -134,6 +191,7 @@ export function moveWagon(epic, wave, toKey, { started = new Set() } = {}) {
     return { wagon: hit.wagon, from: hit.train.tag, to: to.tag };
 }
 
+/** Снять вагон из депо. Если на него ссылается after другого вагона — отказ: та зависимость не исполнилась бы никогда. */
 export function removeWagon(epic, wave, { started = new Set() } = {}) {
     const hit = findWagon(epic, wave);
     if (!hit)
@@ -151,6 +209,10 @@ export function removeWagon(epic, wave, { started = new Set() } = {}) {
     return { wagon: hit.wagon, from: hit.train.tag };
 }
 
+/**
+ * Порядок очереди: начатые вагоны остаются впереди как были, названные идут следом в заданном порядке, остальные — за ними.
+ * Начатый вагон двигать нельзя: голова уже у агента, перестановка выдала бы ему другой номер посреди работы.
+ */
 export function orderWagons(epic, trainKey, waves, { started = new Set() } = {}) {
     const train = findTrain(epic, trainKey), list = train.wagons || [];
     const want = waves.map(waveArg).filter(Boolean);
@@ -166,8 +228,14 @@ export function orderWagons(epic, trainKey, waves, { started = new Set() } = {})
     return train.wagons.map((z) => z.wave);
 }
 
+// Формат git log для очереди: sha, время коммита, тема и значения трейлера Wave через запятую; разделители — управляющие знаки,
+// которых не бывает в подписи.
 export const WAVE_LOG_FORMAT = "%H%x1f%ct%x1f%s%x1f%(trailers:key=Wave,valueonly,separator=%x2C)%x1e";
 
+/**
+ * Разбор git log в формате WAVE_LOG_FORMAT → [{ sha, at, subject, waves }]. Главный источник номера — трейлер Wave.
+ * bySubject — номер из темы, только для своих коммитов ветки: в чужой истории номер в теме может быть упоминанием.
+ */
 export function parseWaveLog(text, { bySubject = false } = {}) {
     const out = [];
     for (const rec of String(text || "").split("\x1e")) {
@@ -187,6 +255,10 @@ export function parseWaveLog(text, { bySubject = false } = {}) {
 
 export const MERGE_LOG_FORMAT = "%H%x1f%ct%x1f%s";
 
+/**
+ * Отметки времени вагонов для диаграммы: первый и последний коммит вагона и последний влив с его номером (sha и время).
+ * Вливы распознаются по теме merge-коммита, поэтому читаются и вливы старых составов.
+ */
 export function stagedMarks(waveCommits = [], mergeText = "") {
     const out = new Map(), at = (w) => out.get(w) || out.set(w, { firstAt: 0, lastAt: 0, mergedAt: 0, mergeSha: "" }).get(w);
     for (const c of waveCommits)
@@ -213,6 +285,12 @@ export function stagedMarks(waveCommits = [], mergeText = "") {
     return out;
 }
 
+/**
+ * Очередь поезда по git. own — коммиты ветки поезда впереди staging, staged — номера, которые уже есть в staging.
+ * Вагон «в staging», только если в ветке нет его невлитых коммитов: правка после влива снова делает его головой.
+ * Голова — первый вагон не в staging, даже если ждёт зависимость (тогда «wait», и в работу не идёт никто: строго по очереди).
+ * → { list, head, current } — current пусто, если голова ждёт.
+ */
 export function queueState({ wagons = [], own = [], staged = new Set(), depOk = () => false }) {
     const commits = new Map();
     for (const c of own)
@@ -238,6 +316,10 @@ export function queueState({ wagons = [], own = [], staged = new Set(), depOk = 
     return { list, head, current: h && h.state === "work" ? head : "" };
 }
 
+/**
+ * Вагон, которым сейчас живёт дерево поезда: голова, если агент её уже ведёт (выдана или есть коммиты); иначе последний
+ * влитый — у дерева до выдачи следующего вагона его код, стенд и приёмка; ничего не влито — голова.
+ */
 export function wagonOfTree(qs, issued = "") {
     const h = (qs.list || []).find((x) => x.wave === qs.head);
     if (h && (issued === h.wave || h.commits > 0))
@@ -246,12 +328,21 @@ export function wagonOfTree(qs, issued = "") {
     return (lastStaged && lastStaged.wave) || qs.head || (((qs.list || [])[0] || {}).wave || "");
 }
 
+/**
+ * Номер для строки Wave и номера, под которыми коммит законен → { cur, allowed }.
+ * Если вагон дерева уже влит, а голова в работе, новый код идёт под номером головы: иначе голова осталась бы без коммитов.
+ * Законны и вагоны с коммитами впереди staging: красный влитый вагон чинится своим номером. Номер вагона из депо не законен.
+ */
 export function trainCommitWaves(wave = "", wagons = []) {
     const w0 = normWave(wave), self = wagons.find((z) => z.wave === w0), head = wagons.find((z) => z.state === "work" || z.state === "wait");
     const cur = self && self.state === "staging" && head ? head.wave : w0;
     return { cur, allowed: [...new Set([cur, head && head.wave, ...wagons.filter((z) => z.commits > 0).map((z) => z.wave)].filter(Boolean))] };
 }
 
+/**
+ * Шаг поезда между вагонами → { act: "issue" | "", why }. Выдавать следующий вагон можно, только когда прошлый влит:
+ * впереди staging пусто и дерево чистое. Первый вагон уходит не здесь, а стартовым промптом слота.
+ */
 export function trainNextAct({ current = "", head = "", waitFor = [], issued = "", ahead = 0, dirty = false }) {
     if (!current)
         return { act: "", why: head ? "вагон " + head + " ждёт " + waitFor.join(", ") : "в очереди нет вагонов — все влиты в staging" };
@@ -264,14 +355,24 @@ export function trainNextAct({ current = "", head = "", waitFor = [], issued = "
     return { act: "issue", why: "вагон " + issued + " в staging — следующий вагон " + current };
 }
 
+/** trainNextAct по дереву из снимка; не поезд — пустой шаг. */
 export function trainNext(t) {
     if (!t || !t.train)
         return { act: "", why: "" };
     const h = (t.wagons || []).find((x) => x.wave === t.head) || {};
-    return trainNextAct({ current: t.current || "", head: t.head || "", waitFor: h.waitFor || [], issued: t.issued || "", ahead: t.ahead || 0, dirty: (t.dirtyTracked || 0) + (t.dirtyUntracked || 0) > 0 });
+    return trainNextAct({
+        current: t.current || "",
+        head: t.head || "",
+        waitFor: h.waitFor || [],
+        issued: t.issued || "",
+        ahead: t.ahead || 0,
+        dirty: (t.dirtyTracked || 0) + (t.dirtyUntracked || 0) > 0,
+    });
 }
 
-export const ORCH_TRAINS_RULE = "СЛОТЫ-ПОЕЗДА. Исполнитель с меткой ТN — поезд области: обычный слот с очередью волн-вагонов WV-NNNN (порядок — в реестре). Вагоны идут строго по одному, как волна слота: агент поезда ведёт голову очереди по станциям (сборка, гарды, тесты, ревью, регресс, коммит со строкой «Wave: WV-NNNN» этого вагона). Влив в staging при включённом автовливе — сам: станции зелёные на нынешнем коде, ревью «ЗА», агент доложил «ГОТОВО», конфликта и невлитых зависимостей нет; при конфликте со staging диспетчерская сама подтягивает staging и отдаёт файлы агенту. Если автовлив выключен, нужен «ВЛИТЬ ТN». После влива ветка поезда подтягивает staging, и диспетчерская сама отдаёт агенту следующий вагон в той же сессии. Выкат стенда, релиз и «принудительно» — только словом владельца. Новая волна — вагон в очередь поезда своей области: node " + EPIC_CLI + " add-wagon --train ТN --title … [--after WV-…|WV-…@ТM]; нового слота на волну не заводи. Блок slot:ТN уходит агенту поезда — пиши в нём номер вагона.";
+export const ORCH_TRAINS_RULE = prompt("orch-trains", { epicCli: EPIC_CLI });
+// Тема merge-коммита поезда: ветка, место влива в очереди (#n) и номера вагонов. wavesOfMerge разбирает её обратно —
+// по ней очередь узнаёт влитые вагоны.
 export const trainMergeMessage = (branch, tag, n, waves) => "merge: " + branch + " — поезд " + tag + "#" + n + ": " + waves.join(", ");
 
 export const wavesOfMerge = (subject) => {
@@ -281,6 +382,11 @@ export const wavesOfMerge = (subject) => {
 
 export const waveTrailer = (wave) => "Wave: " + normWave(wave);
 
+/**
+ * Станция вагона для страницы: в очереди, ждёт, следующий (ещё не выдан), в работе (станция линии поезда), после влива —
+ * стенд, приёмка, прод. Отметки станций у поезда одни на ветку, поэтому после влива они относятся к вагону дерева,
+ * а более ранние влитые вагоны показываются по признакам stand и prod.
+ */
 export function wagonStation(w, { tree = "", issued = "", cur = null, committed = false, stages = [], stand = false, prod = false } = {}) {
     const done = (id) => !!(stages.find((s) => s.id === id) || {}).done;
     if (w.state === "depot")

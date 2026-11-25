@@ -1,6 +1,7 @@
 // retro-rules.mjs — чистые правила ретро: окно эпика по журналу, когда ретро пора, выжимки прогресса и провалов для
 // агента, текст задания, разбор предложений из ответа и отбор новых (без повторов уже заведённых карточек).
 import { retroOfMeta } from "./backlog-rules.mjs";
+import { prompt } from "../prompts.mjs";
 
 export const RETRO_KINDS = ["гард", "правка навыка", "правило диспетчерской"];
 export const RETRO_JOURNAL_SKIP = new Set(["chain.kick", "chain.step", "chain.skip", "server.pulse", "slow.loop"]);
@@ -65,16 +66,78 @@ export function progressBrief(p) {
     const k = p.counters || {}, c = p.commands || {}, o = p.owner || {}, r = p.restarts || {}, i = p.idle || {};
     const L = [
         "прогонов слотов: " + (k.runs || 0) + " (" + hm(k.runMin || 0) + " машинного времени)",
-        k.regress ? "регресс: " + k.regress.runs + " запусков, " + hm(k.regress.min) + "; доведено " + k.regress.done + " (" + hm(k.regress.doneMin) + "), потеряно " + k.regress.lost + " (" + hm(k.regress.lostMin) + ")" : "",
+        k.regress
+            ? "регресс: " +
+              k.regress.runs +
+              " запусков, " +
+              hm(k.regress.min) +
+              "; доведено " +
+              k.regress.done +
+              " (" +
+              hm(k.regress.doneMin) +
+              "), потеряно " +
+              k.regress.lost +
+              " (" +
+              hm(k.regress.lostMin) +
+              ")"
+            : "",
         k.review ? "ревью: " + k.review.runs + ", с вопросами " + k.review.questions : "",
         k.security ? "гарды: " + k.security.runs + ", " + hm(k.security.min) : "",
         k.lost ? "потеряно на сбоях (прерванные и отменённые): " + k.lost.runs + ", " + hm(k.lost.min) : "",
-        k.repeats ? "повторы на том же коде: " + k.repeats.runs + ", " + hm(k.repeats.min) + ((k.repeats.top || []).length ? " — " + k.repeats.top.map((g) => g.tree + " " + g.task + (g.input ? " «" + String(g.input).slice(0, 40) + "»" : "") + " ×" + g.n).join("; ") : "") : "",
-        k.questions ? "вопросов владельцу: " + k.questions.n + (k.questions.waits != null && k.questions.waits < k.questions.n ? " (ожиданий ответа " + k.questions.waits + ", остальное — переспросы неотвеченного)" : "") + ", простой на них " + hm(k.questions.waitMin) + (k.questions.open ? ", открыто " + k.questions.open : "") : "",
-        "готово, не влито: " + (p.readyWaveH || 0) + " волна-ч; простой эпика: " + hm(i.min || 0) + " (" + (i.share || 0) + "% открытого времени)",
-        "команды оркестратора: " + (c.total || 0) + ", отказов " + (c.failed || 0) + ", тупиков " + (c.deadlocks || 0) + ", блоков ворот " + (c.gateBlocked || 0) + (c.gateSaved ? " (и лишних повторов сбережено воротами " + c.gateSaved + ")" : ""),
+        k.repeats
+            ? "повторы на том же коде: " +
+              k.repeats.runs +
+              ", " +
+              hm(k.repeats.min) +
+              ((k.repeats.top || []).length
+                  ? " — " +
+                    k.repeats.top
+                        .map(
+                            (g) =>
+                                g.tree +
+                                " " +
+                                g.task +
+                                (g.input ? " «" + String(g.input).slice(0, 40) + "»" : "") +
+                                " ×" +
+                                g.n,
+                        )
+                        .join("; ")
+                  : "")
+            : "",
+        k.questions
+            ? "вопросов владельцу: " +
+              k.questions.n +
+              (k.questions.waits != null && k.questions.waits < k.questions.n
+                  ? " (ожиданий ответа " + k.questions.waits + ", остальное — переспросы неотвеченного)"
+                  : "") +
+              ", простой на них " +
+              hm(k.questions.waitMin) +
+              (k.questions.open ? ", открыто " + k.questions.open : "")
+            : "",
+        "готово, не влито: " +
+            (p.readyWaveH || 0) +
+            " волна-ч; простой эпика: " +
+            hm(i.min || 0) +
+            " (" +
+            (i.share || 0) +
+            "% открытого времени)",
+        "команды оркестратора: " +
+            (c.total || 0) +
+            ", отказов " +
+            (c.failed || 0) +
+            ", тупиков " +
+            (c.deadlocks || 0) +
+            ", блоков ворот " +
+            (c.gateBlocked || 0) +
+            (c.gateSaved ? " (и лишних повторов сбережено воротами " + c.gateSaved + ")" : ""),
         "перезапусков диспетчерской: " + (r.starts || []).length + ", прерванных ими прогонов " + (r.interrupted || 0),
-        "сообщений владельца: " + (o.messages || 0) + ", ходов оркестратора " + (o.orchTurns || 0) + " (без действия " + (o.emptyTurns || 0) + ")",
+        "сообщений владельца: " +
+            (o.messages || 0) +
+            ", ходов оркестратора " +
+            (o.orchTurns || 0) +
+            " (без действия " +
+            (o.emptyTurns || 0) +
+            ")",
         k.agents ? "агентов слотов в час: пик " + k.agents.peak + ", p50 " + k.agents.p50 : "",
     ];
     return L.filter(Boolean).map((l) => "- " + l).join("\n");
@@ -87,47 +150,83 @@ export function failuresBrief(groups, max = 80) {
         return "Красных прогонов с логом за окно эпика нет (логи живут 7 суток: у старых эпиков их может не быть).";
     return groups.slice(0, max).map((g) => {
         const rs = (g.reasons || []).filter((r) => r.text);
-        const why = rs.length > 1 ? "\n  причины (разные, " + rs.length + "):" + rs.slice(0, 3).map((r) => "\n   · ×" + r.n + " " + r.jobs.join(", ") + ": " + oneLine(r.text, 200)).join("") + (rs.length > 3 ? "\n   · … ещё " + (rs.length - 3) : "")
-            : g.reason ? "\n  причина: " + oneLine(g.reason, 240) : "";
-        return "- [" + g.cat + "] " + String(g.label || g.key).slice(0, 140) + " ×" + g.n + " · слоты " + g.trees.join(", ") + (g.repeated.length ? " · агент повторял после правки: " + g.repeated.join(", ") : "") + " · прогоны " + g.jobs.slice(-5).join(", ") + why;
+        const why =
+            rs.length > 1
+                ? "\n  причины (разные, " +
+                  rs.length +
+                  "):" +
+                  rs
+                      .slice(0, 3)
+                      .map((r) => "\n   · ×" + r.n + " " + r.jobs.join(", ") + ": " + oneLine(r.text, 200))
+                      .join("") +
+                  (rs.length > 3 ? "\n   · … ещё " + (rs.length - 3) : "")
+                : g.reason
+                  ? "\n  причина: " + oneLine(g.reason, 240)
+                  : "";
+        return (
+            "- [" +
+            g.cat +
+            "] " +
+            String(g.label || g.key).slice(0, 140) +
+            " ×" +
+            g.n +
+            " · слоты " +
+            g.trees.join(", ") +
+            (g.repeated.length ? " · агент повторял после правки: " + g.repeated.join(", ") : "") +
+            " · прогоны " +
+            g.jobs.slice(-5).join(", ") +
+            why
+        );
     }).join("\n") + (groups.length > max ? "\n- … ещё групп: " + (groups.length - max) : "");
 }
 
-export const RETRO_RULES = `Ты — ретро-агент диспетчерской. Задача — ретроспектива эпика по его журналам, чтобы учиться на провалах: какие проверки краснеют, где простои, какие гарды, навыки и правила диспетчерской дописать.
-
-ТОЛЬКО ЧТЕНИЕ: читай файлы и ищи по ним. Ничего не правь и не создавай файлов — весь ответ выведи текстом, диспетчерская сама сохранит его и заведёт карточки бэклога.
-
-ВХОД (пути — в конце):
-- progress.json — сводка «Ход эпика» за всё окно эпика. Метрики уже посчитаны: бери числа оттуда, по журналам их не пересчитывай. Простой — отрезки без работы слотов, составов и стенда (влив, выкат, автоприёмка, релиз — работа); причина «ждём ответа владельца» или «ждём слова» — простой на владельце, а не сбой; «нет хода» — разбери по журналу, что было. Вопросы: n — всего, waits — ожиданий; разница — переспросы неотвеченного, а не новые вопросы.
-- failures.md — группы одинаковых провалов по красным прогонам эпика (вид, причина, слоты, прогоны jNNN, «агент повторял после правки»).
-- journal.txt — журнал эпика, строка на событие: «ДД.ММ ЧЧ:ММ тип кто → кому: суть». Ищи в нём поиском, целиком не читай.
-- логи прогонов <папка логов>/jNNN.log — выборочно, по id из failures.md (поиск по «✗», «FAIL», «Error»).
-- план эпика и планы волн (раздел «Решения владельца») — чтобы отличать провал от решения владельца.
-
-ФОРМАТ ОТВЕТА — markdown, разделы по порядку:
-## Итог — 3–5 строк: что эпик сделал и чего стоил.
-## Таймлайн — ключевые точки со временем ДД.ММ ЧЧ:ММ: старт, вливы волн, выкаты, перезапуски, длинные простои и их причины.
-## Метрики — таблица «метрика | значение | комментарий»: машинное время прогонов; регресс, ревью, гарды по запускам и минутам; простой на вопросах; потерянное на сбоях; повторы на том же коде; готово, не влито; простой эпика; отказы команд.
-## Причины красного — топ по группам с делением: код / окружение / нестабильные спеки / данные стенда; у каждой — число и пример jNNN. Если у группы «причины (разные)» — разбирай каждую, не обобщай по первой. «ВИСИТ СПЕКА» — код спеки или компонента, не окружение.
-## Что сработало
-## Что нет
-ПРЕДЛОЖЕНИЯ:
-- <вид>: <что сделать — одна фраза> | эпизоды: <jNNN или ДД.ММ ЧЧ:ММ через запятую>
-
-Строка «ПРЕДЛОЖЕНИЯ:» — ровно так, отдельной строкой, последним разделом. Виды — только: гард, правка навыка, правило диспетчерской. Не больше ${RETRO_MAX_PROPOSALS}; каждое опирается на эпизоды этого эпика (без эпизода — не предлагай). Нечего предложить — одна строка «- нет».
-Пиши по-русски, коротко, без воды. Не выдумывай: нет данных — так и напиши.`;
+export const RETRO_RULES = prompt("retro-rules", { maxProposals: RETRO_MAX_PROPOSALS });
 
 export function retroPrompt({ epic, from, to, waves = [], brief = "", counts = {}, files = {}, made = [] }) {
     const cnt = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([t, n]) => t + " " + n).join(", ");
-    return [RETRO_RULES,
-        "ЭПИК: " + epic.id + (epic.title ? " — " + epic.title : "") + "; окно " + dm(from) + " → " + dm(to) + (epic.closedAt ? " (закрыт)" : " (ещё открыт: ретро промежуточное)"),
-        waves.length ? "ВОЛНЫ:\n" + waves.map((w) => "- " + w.tag + (w.wave && !String(w.title || "").includes(w.wave) ? " " + w.wave : "") + (w.title ? " " + w.title : "") + (w.archived ? " (снята)" : "")).join("\n") : "",
+    return [
+        RETRO_RULES,
+        "ЭПИК: " +
+            epic.id +
+            (epic.title ? " — " + epic.title : "") +
+            "; окно " +
+            dm(from) +
+            " → " +
+            dm(to) +
+            (epic.closedAt ? " (закрыт)" : " (ещё открыт: ретро промежуточное)"),
+        waves.length
+            ? "ВОЛНЫ:\n" +
+              waves
+                  .map(
+                      (w) =>
+                          "- " +
+                          w.tag +
+                          (w.wave && !String(w.title || "").includes(w.wave) ? " " + w.wave : "") +
+                          (w.title ? " " + w.title : "") +
+                          (w.archived ? " (снята)" : ""),
+                  )
+                  .join("\n")
+            : "",
         "СВОДКА (из progress.json):\n" + brief,
         cnt ? "СОБЫТИЙ В ЖУРНАЛЕ ПО ТИПАМ: " + cnt : "",
-        made.length ? "УЖЕ ЗАВЕДЕНО ПРОШЛЫМ РЕТРО ЭТОГО ЭПИКА — не предлагай то же другими словами (новое — только новое; можно сослаться на BL в «Что нет»):\n" + made.map((x) => "- " + x.id + " " + x.title).join("\n") : "",
-        "ФАЙЛЫ:\n- progress.json: " + files.progress + "\n- failures.md: " + files.failures + "\n- journal.txt: " + files.journal + "\n- логи прогонов: " + files.logs + "/jNNN.log" +
-            ((files.plans || []).length ? "\n- план эпика: " + files.plans.join(", ") : "") + (files.plansDir ? "\n- планы волн: " + files.plansDir + " (WV-NNNN*.md)" : ""),
-    ].filter(Boolean).join("\n\n");
+        made.length
+            ? "УЖЕ ЗАВЕДЕНО ПРОШЛЫМ РЕТРО ЭТОГО ЭПИКА — не предлагай то же другими словами (новое — только новое; можно сослаться на BL в «Что нет»):\n" +
+              made.map((x) => "- " + x.id + " " + x.title).join("\n")
+            : "",
+        "ФАЙЛЫ:\n- progress.json: " +
+            files.progress +
+            "\n- failures.md: " +
+            files.failures +
+            "\n- journal.txt: " +
+            files.journal +
+            "\n- логи прогонов: " +
+            files.logs +
+            "/jNNN.log" +
+            ((files.plans || []).length ? "\n- план эпика: " + files.plans.join(", ") : "") +
+            (files.plansDir ? "\n- планы волн: " + files.plansDir + " (WV-NNNN*.md)" : ""),
+    ]
+        .filter(Boolean)
+        .join("\n\n");
 }
 
 const KIND_RE = new RegExp("^\\s*[-*•]\\s*\\**\\s*(" + RETRO_KINDS.join("|") + ")\\s*\\**\\s*:\\s*(.+?)\\s*$", "i");
@@ -178,9 +277,28 @@ export function freshProposals(props, items, epicId) {
 }
 
 export function retroDoc({ epic, from, to, at, text, items = [], model = "", input = "" }) {
-    return ["# Ретроспектива эпика «" + (epic.title || epic.id) + "» (" + epic.id + ")", "",
-        "Окно " + dm(from) + " → " + dm(to) + (epic.closedAt ? "" : " (эпик ещё открыт — промежуточное ретро)") + ". Собрано " + dm(at) + " ретро-агентом диспетчерской" + (model ? " (" + model + ")" : "") + " по журналу эпика, прогонам, логам красного и плану." + (input ? " Вход агента: `" + input + "`." : ""), "",
-        String(text || "").trim(), "",
-        "## Карточки бэклога", "",
-        items.length ? items.map((x) => "- " + x.id + " — " + x.kind + ": " + x.title).join("\n") : "Новых карточек нет (предложений нет или такие уже заведены прошлым ретро).", ""].join("\n");
+    return [
+        "# Ретроспектива эпика «" + (epic.title || epic.id) + "» (" + epic.id + ")",
+        "",
+        "Окно " +
+            dm(from) +
+            " → " +
+            dm(to) +
+            (epic.closedAt ? "" : " (эпик ещё открыт — промежуточное ретро)") +
+            ". Собрано " +
+            dm(at) +
+            " ретро-агентом диспетчерской" +
+            (model ? " (" + model + ")" : "") +
+            " по журналу эпика, прогонам, логам красного и плану." +
+            (input ? " Вход агента: `" + input + "`." : ""),
+        "",
+        String(text || "").trim(),
+        "",
+        "## Карточки бэклога",
+        "",
+        items.length
+            ? items.map((x) => "- " + x.id + " — " + x.kind + ": " + x.title).join("\n")
+            : "Новых карточек нет (предложений нет или такие уже заведены прошлым ретро).",
+        "",
+    ].join("\n");
 }

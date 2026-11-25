@@ -25,7 +25,8 @@ test("модули протокола не импортируют то, чего
 });
 
 test("модули протокола не собирают сообщений рантайма и не запускают CLI агента сами", () => {
-    const RUNTIME = /type:\s*"user",\s*message|control_request|control_response|parent_tool_use_id|claudeBinary|claude\.exe|"-p"|--output-format|--allowedTools|--model"|\bagentSend\(|projectDirFor|isRemoteSlot|mirrorNow|shortCacheAt|rateLimits|saveWarm|setWarmFlag/;
+    const RUNTIME =
+        /type:\s*"user",\s*message|control_request|control_response|parent_tool_use_id|claudeBinary|claude\.exe|"-p"|--output-format|--allowedTools|--model"|\bagentSend\(|projectDirFor|isRemoteSlot|mirrorNow|shortCacheAt|rateLimits|saveWarm|setWarmFlag/;
     for (const f of FILES)
         assert.doesNotMatch(src(f), RUNTIME, f);
     assert.match(src("review.mjs"), /from "\.\.\/runtimes\/index\.mjs"/, "ревьюер — через runOnce");

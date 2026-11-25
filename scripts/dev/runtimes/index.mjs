@@ -97,25 +97,64 @@ export function proxyEnv(proxy = PROJECT.agent.proxy) {
  * addDirs — папки, которые агенту можно читать вне cwd; maxTurns — предел ходов; timeoutMs — предел времени.
  * @returns {Promise<{ok:boolean, text:string, code:number|null, err:string}>}
  */
-export function runOnce({ prompt, cwd, model = "", readOnly = true, allowBash = false, addDirs = [], maxTurns = 60, timeoutMs = 30 * 60e3, onProc = null, rt = runtime(), spawnFn = spawn, killFn = killTree } = {}) {
-  const c = rt.onceCommand({ prompt, model, readOnly, allowBash, addDirs: addDirs.map((d) => path.resolve(d)), maxTurns })
-  return new Promise((resolve) => {
-    let child
-    try { child = spawnFn(c.cmd, c.args, { cwd, windowsHide: true, env: { ...process.env, ...proxyEnv(), ...c.env } }) } catch (e) { resolve({ ok: false, text: "", code: null, err: e.message }); return }
-    if (onProc) onProc(child)
-    const out = [], err = []
-    let timedOut = false
-    const lim = setTimeout(() => { timedOut = true; try { killFn(child) } catch { /* уже закончился */ } }, timeoutMs)
-    child.stdout.on("data", (b) => out.push(Buffer.from(b)))
-    child.stderr.on("data", (b) => err.push(Buffer.from(b)))
-    child.on("error", (e) => { clearTimeout(lim); resolve({ ok: false, text: "", code: null, err: e.message }) })
-    child.on("close", (code) => {
-      clearTimeout(lim)
-      const raw = Buffer.concat(out).toString("utf8"), e = Buffer.concat(err).toString("utf8") + (timedOut ? "\nснят по времени: " + Math.round(timeoutMs / 60e3) + " мин" : "")
-      const text = rt.onceText ? rt.onceText(raw) : raw // ok — по ответу, а не по служебному выводу (у Codex stdout — JSONL)
-      resolve({ ok: code === 0 && !timedOut && !!text.trim(), text, code, err: e.trim() })
+export function runOnce({
+    prompt,
+    cwd,
+    model = "",
+    readOnly = true,
+    allowBash = false,
+    addDirs = [],
+    maxTurns = 60,
+    timeoutMs = 30 * 60e3,
+    onProc = null,
+    rt = runtime(),
+    spawnFn = spawn,
+    killFn = killTree,
+} = {}) {
+    const c = rt.onceCommand({
+        prompt,
+        model,
+        readOnly,
+        allowBash,
+        addDirs: addDirs.map((d) => path.resolve(d)),
+        maxTurns,
     })
-    child.stdin.on("error", () => { })
-    child.stdin.end(c.input || "")
-  })
+    return new Promise((resolve) => {
+        let child
+        try {
+            child = spawnFn(c.cmd, c.args, { cwd, windowsHide: true, env: { ...process.env, ...proxyEnv(), ...c.env } })
+        } catch (e) {
+            resolve({ ok: false, text: "", code: null, err: e.message })
+            return
+        }
+        if (onProc) onProc(child)
+        const out = [],
+            err = []
+        let timedOut = false
+        const lim = setTimeout(() => {
+            timedOut = true
+            try {
+                killFn(child)
+            } catch {
+                /* уже закончился */
+            }
+        }, timeoutMs)
+        child.stdout.on("data", (b) => out.push(Buffer.from(b)))
+        child.stderr.on("data", (b) => err.push(Buffer.from(b)))
+        child.on("error", (e) => {
+            clearTimeout(lim)
+            resolve({ ok: false, text: "", code: null, err: e.message })
+        })
+        child.on("close", (code) => {
+            clearTimeout(lim)
+            const raw = Buffer.concat(out).toString("utf8"),
+                e =
+                    Buffer.concat(err).toString("utf8") +
+                    (timedOut ? "\nснят по времени: " + Math.round(timeoutMs / 60e3) + " мин" : "")
+            const text = rt.onceText ? rt.onceText(raw) : raw // ok — по ответу, а не по служебному выводу (у Codex stdout — JSONL)
+            resolve({ ok: code === 0 && !timedOut && !!text.trim(), text, code, err: e.trim() })
+        })
+        child.stdin.on("error", () => {})
+        child.stdin.end(c.input || "")
+    })
 }

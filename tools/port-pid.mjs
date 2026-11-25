@@ -9,7 +9,18 @@ export const portOpen = (port, ms = 1500) => new Promise((res) => {
   s.on("connect", () => { s.destroy(); res(true) }); s.on("error", () => res(false)); s.on("timeout", () => { s.destroy(); res(false) })
 })
 
-const run = (cmd, args) => { try { return execFileSync(cmd, args, { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"], timeout: 8000 }) } catch (e) { return e && e.stdout ? String(e.stdout) : "" } }
+const run = (cmd, args) => {
+  try {
+    return execFileSync(cmd, args, {
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 8000,
+    })
+  } catch (e) {
+    return e && e.stdout ? String(e.stdout) : ""
+  }
+}
 
 /** Разбор вывода `netstat -ano -p tcp`: pid слушающего порт или null. */
 export function netstatPid(out, port) {

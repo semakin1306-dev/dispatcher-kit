@@ -36,5 +36,12 @@ export function autoAnswer(q) {
     }
     if (!answers.length)
         return null;
-    return { text: "Автоответ владельца (режим «без владельца», рекомендованные варианты): " + answers.join("; ") + "." + (skipped.length ? " Вопросы " + skipped.join(", ") + " ждут владельца — их не трогаю." : ""), skipped };
+    return {
+        text:
+            "Автоответ владельца (режим «без владельца», рекомендованные варианты): " +
+            answers.join("; ") +
+            "." +
+            (skipped.length ? " Вопросы " + skipped.join(", ") + " ждут владельца — их не трогаю." : ""),
+        skipped,
+    };
 }

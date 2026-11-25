@@ -16,7 +16,24 @@ fs.mkdirSync(path.join(TMP, "orch", ".git"), { recursive: true });
 for (const s of ["wv9003-a", "wv9007-b"])
     fs.mkdirSync(path.join(TMP, "wt", s, ".git"), { recursive: true });
 
-fs.writeFileSync(process.env.DASH_EPIC_FILE, JSON.stringify({ active: "e1", epics: [{ id: "e1", title: "т", status: "open", orch: { path: path.join(TMP, "orch"), branch: "orch/e1" }, slots: [{ slot: "wv9003-a", tag: "П3", branch: "dev/wv-9003", title: "а" }, { slot: "wv9007-b", tag: "П7", branch: "dev/wv-9007", title: "б" }] }] }));
+fs.writeFileSync(
+    process.env.DASH_EPIC_FILE,
+    JSON.stringify({
+        active: "e1",
+        epics: [
+            {
+                id: "e1",
+                title: "т",
+                status: "open",
+                orch: { path: path.join(TMP, "orch"), branch: "orch/e1" },
+                slots: [
+                    { slot: "wv9003-a", tag: "П3", branch: "dev/wv-9003", title: "а" },
+                    { slot: "wv9007-b", tag: "П7", branch: "dev/wv-9007", title: "б" },
+                ],
+            },
+        ],
+    }),
+);
 await import("./wiring.mjs");
 const { applyEpics } = await import("./trees.mjs");
 const { loadInbox } = await import("./inbox.mjs");

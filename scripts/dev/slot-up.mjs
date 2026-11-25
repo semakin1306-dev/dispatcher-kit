@@ -27,6 +27,7 @@ import { sparseCone, sparseNote, sparseWanted } from "./dashboard/sparse-rules.m
 import { slotPolicy } from "./areas.mjs";
 import { installSlotHooks } from "./hooks/commit-msg.mjs";
 import { runtime } from "./runtimes/index.mjs";
+import { insidePath, samePath } from "./paths.mjs";
 
 const VALUE_FLAGS = new Set(["branch", "from", "root", "area"]);
 const BOOL_FLAGS = new Set(["list", "dirty", "all", "fetch", "no-prepare", "no-build", "reuse", "dry-run", "help", "sparse", "no-sparse"]);
@@ -82,7 +83,7 @@ function listWorktrees(main) {
 function cmdList(main, root, o) {
     let rows = listWorktrees(main);
     if (!o.flags.has("all"))
-        rows = rows.filter((w) => w.path.toLowerCase() === fwd(main).toLowerCase() || w.path.toLowerCase().startsWith(fwd(root).toLowerCase() + "/"));
+        rows = rows.filter((w) => samePath(w.path, main) || insidePath(w.path, root));
     console.log(`Слоты (${rows.length}); «впереди» — коммитов сверх staging${o.flags.has("dirty") ? "; «грязных» — изменённых файлов" : ""}\n`);
     for (const w of rows) {
         const ahead = w.branch === "(detached)" ? "?" : git(["rev-list", "--count", `staging..${w.branch}`], main).out || "?";
@@ -149,7 +150,7 @@ async function main() {
     if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$/.test(from))
         die("недопустимое значение --from");
     const slotDir = path.join(root, slot);
-    if (path.resolve(slotDir) === path.resolve(mainRepo))
+    if (samePath(slotDir, mainRepo))
         die("слот не может быть основной папкой");
     const rec = slotRecord(slot) || {};
     const areaId = o.vals.area ?? rec.area ?? "";
@@ -171,7 +172,8 @@ async function main() {
 
     // 1. worktree
     const exists = fs.existsSync(slotDir) && fs.readdirSync(slotDir).length > 0;
-    const wtRow = listWorktrees(mainRepo).find((w) => w.path.toLowerCase() === fwd(slotDir).toLowerCase()), registered = !!wtRow;
+    // git отдаёт пути раскрытыми (без коротких имён и ссылок), конфиг — как записал человек: сравнение — по файловой системе
+    const wtRow = listWorktrees(mainRepo).find((w) => samePath(w.path, slotDir)), registered = !!wtRow;
     // Папка — зарегистрированный worktree на этой же ветке: это тот же слот, повторная подготовка идёт как с --reuse.
     if (exists && registered && !o.flags.has("reuse") && wtRow.branch === branch) {
         o.flags.add("reuse");
@@ -191,7 +193,9 @@ async function main() {
     const sp = fresh ? sparsePlan(o, rec, mainRepo, branchExists ? branch : from) : { cone: null, why: "папка уже есть — выкладку не трогаю" };
     const addArgs = [...(sp.cone ? ["worktree", "add", "--no-checkout"] : ["worktree", "add"]), ...(branchExists ? [slotDir, branch] : ["-b", branch, slotDir, from])];
     if (dry) {
-        console.log(`\nПЛАН (dry-run, ничего не создано):\n  слот     ${fwd(slotDir)}\n  ветка    ${branch} (${branchExists ? "есть — откроем" : `новая от ${from}`})\n  git      ${addArgs.join(" ")}`);
+        console.log(
+            `\nПЛАН (dry-run, ничего не создано):\n  слот     ${fwd(slotDir)}\n  ветка    ${branch} (${branchExists ? "есть — откроем" : `новая от ${from}`})\n  git      ${addArgs.join(" ")}`,
+        );
         console.log(`  выкладка ${sp.why}${sp.cone ? `\n           ${sp.cone.join(" ")}` : ""}`);
         console.log(`  область  ${area ? area.id + (build ? " (со сборкой)" : "") : "не задана"}`);
         console.log(`  шаги     ${steps.map((s) => s.run).join(" → ") || "только worktree"}`);
@@ -287,7 +291,13 @@ async function main() {
     if (o.flags.has("reuse") && dirty.length)
         result("дерево", "ok", `в работе: ${dirty.length} изменённых файлов слота (--reuse)`);
     else
-        result("дерево", dirty.length === 0 ? "ok" : "fail", dirty.length === 0 ? "чистое" : `${dirty.length} изменённых файлов после подготовки: ${dirty.slice(0, 3).join("; ")} — добавьте их в .gitignore проекта или поправьте шаг`);
+        result(
+            "дерево",
+            dirty.length === 0 ? "ok" : "fail",
+            dirty.length === 0
+                ? "чистое"
+                : `${dirty.length} изменённых файлов после подготовки: ${dirty.slice(0, 3).join("; ")} — добавьте их в .gitignore проекта или поправьте шаг`,
+        );
     summarize(plan, slotDir, branch);
 }
 

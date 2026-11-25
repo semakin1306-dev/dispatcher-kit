@@ -1,7 +1,23 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { NO_GATE, ORCH_GATHER_MS, ORCH_ROTATE_TOKENS, SLOT_ASKS_RE, blockTargetTag, canonInput, deployWriteWhy, staleRed, factsDelta, relayDecision, retrySpecs, rotateDue, runGate, slotAsks, slotStatus } from "./loops.mjs";
+import {
+    NO_GATE,
+    ORCH_GATHER_MS,
+    ORCH_ROTATE_TOKENS,
+    SLOT_ASKS_RE,
+    blockTargetTag,
+    canonInput,
+    deployWriteWhy,
+    staleRed,
+    factsDelta,
+    relayDecision,
+    retrySpecs,
+    rotateDue,
+    runGate,
+    slotAsks,
+    slotStatus,
+} from "./loops.mjs";
 import { RESET_TO_RE, backupTagName, resetSlotCmd, resetSlotPlan, carryRedSpecs, protectedFileRe } from "./loops.mjs";
 
 const FP = "6ba8276c1c0ee27e", FP2 = "99299a2419d84b70", TREE = "wv0969-demo";
@@ -62,7 +78,16 @@ describe("runGate — ворота автоматического прогона
         assert.equal(gate([g]).job, g);
         const r = runGate({ jobs: [job({ input: "b\\.spec\\.ts|a", status: "running" })], tree: TREE, task: "api-test", input: "a|b", fp: FP });
         assert.match(r.why, /^уже идёт/);
-        assert.equal(runGate({ jobs: [job({ task: "guard-test", input: "status-quorum|mirror-manifest" })], tree: TREE, task: "guard-test", input: "mirror-manifest,status-quorum", fp: FP }).run, false);
+        assert.equal(
+            runGate({
+                jobs: [job({ task: "guard-test", input: "status-quorum|mirror-manifest" })],
+                tree: TREE,
+                task: "guard-test",
+                input: "mirror-manifest,status-quorum",
+                fp: FP,
+            }).run,
+            false,
+        );
     });
     test("дважды красный на этом же коде — третий без правки не ставится", () => {
         const a = job({ status: "fail" }), b = job({ status: "fail" }), r = gate([a, b]);
@@ -281,7 +306,12 @@ describe("relayDecision — уходит ли доклад оркестрато�
         }
     });
     test("разделы «Нужно от оркестратора», «Вопросы владельцу», «Ответ оркестратору» уходят и при том же коде", () => {
-        for (const sec of ["Нужно от оркестратора: подтвердить схему", "Вопросы владельцу: оставить ли старый маршрут?", "Ответ оркестратору: да, маршрут снят", "> **Вопросы по ТЗ:** нужен ли лимит"]) {
+        for (const sec of [
+            "Нужно от оркестратора: подтвердить схему",
+            "Вопросы владельцу: оставить ли старый маршрут?",
+            "Ответ оркестратору: да, маршрут снят",
+            "> **Вопросы по ТЗ:** нужен ли лимит",
+        ]) {
             const body = "Статус: ГОТОВО\n\nСделано.\n\n" + sec + "\n\nДальше: жду";
             assert.deepEqual(relayDecision({ body, prev: { ...same, asks: "" }, cur: same }), ASKS, sec);
             assert.equal(relayDecision({ body, prev: prevOf(body), cur: same }).relay, false, sec);
@@ -406,7 +436,11 @@ describe("rotateDue — порог контекста оркестратора",
         const env = { ...process.env };
         delete env.DASH_ORCH_ROTATE_K;
         delete env.DASH_ORCH_GATHER_SEC;
-        const src = `import { ORCH_GATHER_MS, ORCH_ROTATE_TOKENS, rotateDue } from ${JSON.stringify(new URL("./loops.mjs", import.meta.url).href)}; console.log(JSON.stringify([ORCH_GATHER_MS, ORCH_ROTATE_TOKENS, rotateDue(299999), rotateDue(300000), rotateDue(1e9)]))`;
+        const src =
+            `import { ORCH_GATHER_MS, ORCH_ROTATE_TOKENS, rotateDue } ` +
+            `from ${JSON.stringify(new URL("./loops.mjs", import.meta.url).href)}; ` +
+            `console.log(JSON.stringify([ORCH_GATHER_MS, ORCH_ROTATE_TOKENS, rotateDue(299999), ` +
+            `rotateDue(300000), rotateDue(1e9)]))`;
         const probe = (extra) => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", src], { encoding: "utf8", env: { ...env, ...extra }, windowsHide: true }));
         assert.deepEqual(probe({}), [0, 300000, false, true, true]);
         assert.deepEqual(probe({ DASH_ORCH_ROTATE_K: "150", DASH_ORCH_GATHER_SEC: "10" }), [10000, 150000, true, true, true]);

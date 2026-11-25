@@ -25,7 +25,11 @@ export function upLines(services, { tries = 15, pauseS = 2 } = {}) {
         const up = `${cmdOf(s.up)} || fail ${shq("служба " + s.name + ": запуск не прошёл")} $?`;
         if (s.check) {
             const ck = `${cmdOf(s.check)} >/dev/null 2>&1`;
-            L.push(`if ${ck}; then echo "уже работает"; else ${up}; n=0; until ${ck}; do n=$((n+1)); [ "$n" -ge ${Math.max(1, Number(tries) || 1)} ] && fail ${shq("служба " + s.name + " не отвечает после запуска: проверка «" + s.check + "» не проходит")}; sleep ${Number(pauseS) || 0}; done; echo "запущена"; fi`);
+            L.push(
+                `if ${ck}; then echo "уже работает"; else ${up}; n=0; until ${ck}; do n=$((n+1)); [ "$n" ` +
+                    `-ge ${Math.max(1, Number(tries) || 1)} ] && fail ${shq("служба " + s.name + " не отвечает после запуска: проверка «" + s.check + "» не проходит")}; ` +
+                    `sleep ${Number(pauseS) || 0}; done; echo "запущена"; fi`,
+            );
         }
         else
             L.push(up);

@@ -37,7 +37,13 @@ test("ssh: только BatchMode и таймаут подключения, хо
 });
 
 test("тело прогона: папка прогона на sha → подготовка → службы (проверка, запуск, ожидание) → команда", () => {
-    const m = box({ prepare: ["npm ci"], services: [{ name: "db", up: "docker compose up -d db", check: "pg_isready", down: "" }, { name: "cache", up: "redis-server --daemonize yes", check: "", down: "" }] });
+    const m = box({
+        prepare: ["npm ci"],
+        services: [
+            { name: "db", up: "docker compose up -d db", check: "pg_isready", down: "" },
+            { name: "cache", up: "redis-server --daemonize yes", check: "", down: "" },
+        ],
+    });
     const s = runBody({ m, mk: "box", sha: "a".repeat(40), key: "slot-1", idx: 1, jobId: "j7", cmd: "cd 'apps/api' && 'npx' 'jest' 'it'\\''s'" });
     const at = (x) => {
         const i = s.indexOf(x);
@@ -142,7 +148,21 @@ test("сквозной прогон: доставка по sha (с несохр�
     const m = box({ dir: remote, prepare: ["echo prep-ok > prep.txt"], services: [{ name: "db", up: 'touch "$HOME/db.up"', check: 'test -e "$HOME/db.up"', down: 'rm -f "$HOME/db.up"' }] });
     const api = fakeApi(m);
     let out = "", child = null;
-    const code = await api.slotRun({ jobId: "j42", key: "slot-1", cwd: slot, cmd: 'cat a.txt new.txt prep.txt; test -e "$HOME/db.up" && echo db-up; echo "place=$DISPATCHER_PLACE slot=$DISPATCHER_SLOT"; exit 3' }, (s) => { out += s; }, (c) => { child = c; }, "box");
+    const code = await api.slotRun(
+        {
+            jobId: "j42",
+            key: "slot-1",
+            cwd: slot,
+            cmd: 'cat a.txt new.txt prep.txt; test -e "$HOME/db.up" && echo db-up; echo "place=$DISPATCHER_PLACE slot=$DISPATCHER_SLOT"; exit 3',
+        },
+        (s) => {
+            out += s;
+        },
+        (c) => {
+            child = c;
+        },
+        "box",
+    );
     assert.equal(code, 3, out);
     assert.ok(child, "onChild получил процесс ssh");
     const order = ["== код", "снимок ", "== подготовка", "== служба db", "запущена", "== прогон", "dirty", "fresh", "prep-ok", "db-up", "place=0 slot=slot-1", "== службы: остановка"];
@@ -198,11 +218,15 @@ test("проба по поддельному ssh даёт нагрузку ил�
     fs.rmSync(SSHLOG, { force: true });
     const api = fakeApi(box({ dir: fwd(path.join(TMP, "remote3")) }));
     await api.probeNow();
-    const st = api.hostHealth().box || { state: "online" };
-    if (st.state === "online")
+    // поддельный ssh исполняет пробу здесь же: на Linux /proc есть — нагрузка; на macOS /proc нет — машина мест не даёт
+    // (одна неудачная проба ещё не «не на связи» у счётчика здоровья, но места без свежей нагрузки не бывает)
+    if (api.slotOnline("box"))
         assert.ok(api.load().box.memTotalGB > 0, "на связи — значит проба вернула память");
-    else
+    else {
+        assert.equal(api.load().box, undefined, "без памяти в пробе нагрузки машины нет");
         assert.equal(api.slotAnyOnline(), false);
+        assert.equal(api.slotFree("main", { ageMs: 0 }), false);
+    }
     assert.equal(await api.slotCancel("j9", "local"), false, "на этой машине процесс снимает раннер");
     assert.equal(await api.slotCancel("j9", "box"), true, "нет файла номера — снимать нечего, это не ошибка");
     assert.equal(sshCalls().length, 2);

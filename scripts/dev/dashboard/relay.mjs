@@ -2,8 +2,40 @@
 // действия», автоотчёты о прогонах, просьбы агентов о проверках, решения «ДАЛЬШЕ: …» и команды оркестратора (ПРОГНАТЬ,
 // ВЛИТЬ, КОММИТ, СБРОСИТЬ, ПОРЯДОК, ПРИНЯТЬ РЕВЬЮ). Команды, которые меняют ветки, исполняются только при слове
 // владельца; пуш, выкат и «принудительно» оставлены человеку.
+//
+// Кто зовёт: agents.mjs после каждого хода агента (inboxAfterTurn, поздней привязкой), runner.mjs по итогу прогона
+// (queueResult, buildReport), boot.mjs на старте и по таймерам (orchAfterBoot, mergeWaitTick, nudgeIdleSlots, relayAfterPrep,
+// загрузка файлов), http.mjs — кнопки страницы (doRelay, inboxSend, sendBatch, agentCommit, inboxPublic, testReqsPublic).
+//
+// Состояние: поля S.relaySent (хеши уже переданных блоков), S.testReqs (просьбы о прогонах по слотам), S.presetsExtra
+// (тесты волны, добавленные просьбами), S.relayFactsTimer. Файлы в DATA: relay-sent.json, relay-facts.json (что оркестратор
+// уже видел о слоте — для справки разностью), test-requests.json, presets-extra.json, slot-nudges.json. Карточки — inbox.mjs,
+// журнал команд оркестратора и слово владельца — orchlog.mjs, ожидание влива — merge-wait.mjs.
+//
+// Инварианты:
+// - один и тот же блок одному адресату дважды не уходит: хеш (от кого, кому, нормализованный текст) — в S.relaySent,
+//   одновременная вторая отправка того же блока отсекается relayFlight;
+// - агенту, который сейчас отвечает (busy и не служебный пинг), сообщение не вливается в середину хода: передача встаёт
+//   в очередь и уходит из drainQueued, когда ход закончен;
+// - команда оркестратора записывается в журнал до исполнения (cmdBegin) и исполняется один раз на ход, итог — после;
+//   прерванная перезапуском команда не повторяется молча, а возвращается оркестратору отказом;
+// - справку о слоте («факты») пишет диспетчерская по git и прогонам, а не слот: оркестратор сверяет слова слота с ней.
 import { EPIC_CLI, EPIC_FILE, PROJECT, fwd, loadEpics, saveEpics } from "../slots.mjs";
-import { MERGE_LABEL, ORCH_GATHER_MS, SLOT_ASKS_RE, blockTargetTag, factsDelta, guardViolations, mergeArm, mergeWaitStep, parseRunList, redGroupNote, relayDecision, slotAsks, staleRed } from "./loops.mjs";
+import {
+    MERGE_LABEL,
+    ORCH_GATHER_MS,
+    SLOT_ASKS_RE,
+    blockTargetTag,
+    factsDelta,
+    guardViolations,
+    mergeArm,
+    mergeWaitStep,
+    parseRunList,
+    redGroupNote,
+    relayDecision,
+    slotAsks,
+    staleRed,
+} from "./loops.mjs";
 import { dropMergeWait, keepMergeWord, mergeWaitOf, mergeWaits, mergeWordOf, setMergeWait } from "./merge-wait.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -13,7 +45,25 @@ import { S } from "./state.mjs";
 import { drainState } from "./epics.mjs";
 import { jobList } from "./jobs.mjs";
 import { remAddFromText } from "./accept.mjs";
-import { COMMIT_GRANT_MS, PROMPTS_DIR, agentCwd, agentPublic, agentSession, agents, deliver, ensureAgent, genSlotPrompt, lastAnswerOf, push, readSessionTail, recordRelay, rotateOrchIfDue, sendWhenFree, slotPreparing, turnEdits } from "./agents.mjs";
+import {
+    COMMIT_GRANT_MS,
+    PROMPTS_DIR,
+    agentCwd,
+    agentPublic,
+    agentSession,
+    agents,
+    deliver,
+    ensureAgent,
+    genSlotPrompt,
+    lastAnswerOf,
+    push,
+    readSessionTail,
+    recordRelay,
+    rotateOrchIfDue,
+    sendWhenFree,
+    slotPreparing,
+    turnEdits,
+} from "./agents.mjs";
 import { relayToSlot, rerunByChain, slotIdleNudge, slotIdleText, startHeldByStub } from "./slot-rules.mjs";
 import { autoChain, autoTrainOffFor, nextHint, runTask } from "./autochain.mjs";
 import { workChanges } from "./changes.mjs";
@@ -42,15 +92,20 @@ import { slotReset } from "./slot-reset.mjs";
 import { BACKLOG_KEY } from "./backlog-agent.mjs";
 import { backlogAfterTurn } from "./backlog.mjs";
 import { isSyncAsk } from "./sync-rules.mjs";
+import { prompt } from "../prompts.mjs";
 
+// runner.mjs сам импортирует этот модуль (итоги прогонов → queueResult), поэтому очередь задач — поздней привязкой.
 const { enqueue, publicJob, pumpAll, save } = late("runner.mjs", ["enqueue", "publicJob", "pumpAll", "save"]);
 
 // Задачи станций — из конфига проекта: гарды (ворота влива) и тесты. `build`, `review`, `commit` — свои задачи диспетчерской.
 export const GUARD_TASKS = new Set(PROJECT.stations.guards);
 export const TEST_TASKS = new Set(PROJECT.stations.tests);
 const guardIds = () => [...GUARD_TASKS].filter((id) => TASKS[id]);
+// Строки, по которым в логе видна причина падения (jest/vitest, tsc, Node, npm). Ищем их, а не берём хвост: хвост лога
+// обычно — сводка раннера без самой ошибки.
 export const FAIL_LINE = /(^\s*●\s|^\s*FAIL\s|✗|\berror TS\d+|\bAssertionError\b|\bTypeError\b|\bReferenceError\b|^\s*Error:|Expected:|Received:|НОВЫЕ ошибки|ELIFECYCLE|Cannot find module)/i;
 
+/** Выжимка лога для агента: до 4 блоков вокруг строк ошибки (2 строки до, 22 после) и хвост; не длиннее 9000 знаков. */
 export function failureExcerpt(text) {
     const lines = text.replace(ANSI, "").split(/\r?\n/).map((l) => l.trimEnd());
     const blocks = [];
@@ -71,6 +126,7 @@ export function failureExcerpt(text) {
 }
 
 export const FENCE = "`".repeat(3);
+// Блок кода ```язык … ```: язык «slot:П4» у оркестратора — адресат передачи, «text» у слота — доклад оркестратору.
 export const BLOCK_RE = new RegExp(FENCE + "([^\\n`]*)\\n([\\s\\S]*?)" + FENCE, "g");
 
 export function lastAnswer(a) {
@@ -78,6 +134,7 @@ export function lastAnswer(a) {
     return x ? x.text : "";
 }
 
+/** Последний ответ агента в текущем ходе: поиск идёт с конца ленты и обрывается на сообщении человека (старый ход не берём). */
 export function lastAnswerItem(a) {
     for (let i = a.items.length - 1; i >= 0; i--) {
         const x = a.items[i];
@@ -91,6 +148,11 @@ export function lastAnswerItem(a) {
 
 export const ORCH_RUN_RE = /^[\s>*_-]*ПРОГНАТЬ\s+([ПТ]\d+)\s*:\s*(.+)$/gim;
 
+/**
+ * «ПРОГНАТЬ ПN: задача=фильтр» из ответа оркестратора: просьба ставится в тесты волны слота (setTestReqs), при автопоезде —
+ * сразу в очередь. turn — id хода: вместе с позицией строки даёт ключ команды, и разбор того же хода второй раз
+ * (повтор после перезапуска) её не исполняет.
+ */
 export function orchRunCommands(a, text, turn = "") {
     for (const m of String(text || "").matchAll(ORCH_RUN_RE)) {
         const once = cmdKey(turn, text, m.index);
@@ -111,16 +173,50 @@ export function orchRunCommands(a, text, turn = "") {
         const runDetail = (reqs.map((r) => r.task + (r.input ? "=" + r.input : "")).join(", ") + (bad.length ? " | не понял: " + bad.join(", ") : "")).slice(0, 200);
         cmdEnd(once, reqs.length > 0, runDetail);
         logEvent("orch.command", { tree: a.key, cmd: "ПРОГНАТЬ", target: t.tag, ok: reqs.length > 0, detail: runDetail });
-        push(a, { id: "orun-" + a.rev + m.index, t: "status", text: (reqs.length ? "Поставлено в прогон " + t.tag + ": " + reqs.map((r) => TASKS[r.task].label + (r.input ? " " + r.input : "")).join(", ") + (settings.autoTrain ? " (автопоезд)" : " (автопоезд выключен: только в тесты волны)") + "." : "") + (bad.length ? " Не понял: " + parsed.bad.map((x) => x.word + " — " + x.why).join("; ") + " (формат задача=фильтр, задачи: " + Object.keys(TASKS).join(", ") + ")." : "") });
+        push(a, {
+            id: "orun-" + a.rev + m.index,
+            t: "status",
+            text:
+                (reqs.length
+                    ? "Поставлено в прогон " +
+                      t.tag +
+                      ": " +
+                      reqs.map((r) => TASKS[r.task].label + (r.input ? " " + r.input : "")).join(", ") +
+                      (settings.autoTrain ? " (автопоезд)" : " (автопоезд выключен: только в тесты волны)") +
+                      "."
+                    : "") +
+                (bad.length
+                    ? " Не понял: " +
+                      parsed.bad.map((x) => x.word + " — " + x.why).join("; ") +
+                      " (формат задача=фильтр, задачи: " +
+                      Object.keys(TASKS).join(", ") +
+                      ")."
+                    : ""),
+        });
     }
 }
 
 export const RUN_FORMAT_HINT = "Формат: «ПРОГНАТЬ ПN: задача=набор,набор, задача=набор» — наборы одной задачи подряд после неё через запятую, пояснения — после « — ».";
 
+/**
+ * Непонятое в «ПРОГНАТЬ» — оркестратору сообщением (иначе он считает, что прогон стоит). Всё понято — молчим.
+ * Та же формулировка тому же оркестратору — не чаще раза в 30 минут: он мог повторить строку, не прочитав ответ.
+ */
 export function runFeedback(key, tag, reqs, bad, noSlot = "", now = Date.now()) {
     if (!noSlot && !bad.length)
         return "";
-    const body = "«ПРОГНАТЬ " + tag + "»: " + (noSlot ? noSlot + "." : (reqs.length ? "поставлено: " + reqs.map((r) => r.task + (r.input ? "=" + r.input : "")).join(", ") + "; " : "ничего не поставлено; ") + "не понял: " + bad.map((x) => x.word + " (" + x.why + ")").join(", ") + ".");
+    const body =
+        "«ПРОГНАТЬ " +
+        tag +
+        "»: " +
+        (noSlot
+            ? noSlot + "."
+            : (reqs.length
+                  ? "поставлено: " + reqs.map((r) => r.task + (r.input ? "=" + r.input : "")).join(", ") + "; "
+                  : "ничего не поставлено; ") +
+              "не понял: " +
+              bad.map((x) => x.word + " (" + x.why + ")").join(", ") +
+              ".");
     const k = key + "|run|" + body;
     if (now - (orchFailSeen.get(k) || 0) < 30 * 60e3)
         return "";
@@ -132,6 +228,7 @@ export function runFeedback(key, tag, reqs, bad, noSlot = "", now = Date.now()) 
 
 const gateSeen = new Map();
 
+/** Что делать, когда ворота отказали в прогоне: подсказка по причине отказа, чтобы агент не повторял ту же просьбу. */
 export function gateHint(why, tag) {
     if (/поезд влива/.test(why))
         return "Прогон не нужен: волну проверит поезд влива. Готова — «ВЛИТЬ " + tag + "» по слову владельца; нужна проверка до влива — сначала правка кода, после неё прогон встанет сам.";
@@ -144,6 +241,8 @@ export function gateHint(why, tag) {
     return "Ту же просьбу без правки кода не повторяй.";
 }
 
+// Тупик правил: тот же отказ на том же коде с той же причиной подряд (deadlock.mjs). Счёт — по области (прогон задачи у
+// слота или команда оркестратора); на пороге — карточка человеку и одно сообщение оркестратору.
 const deadStreaks = new Map();
 
 export function deadlockNote({ scope, sig, what, why, tree = "", orch = "" }, now = Date.now()) {
@@ -169,8 +268,10 @@ export const deadlockClear = (scope) => {
     }
 };
 
+// Область счёта тупика для отказов ворот: слот + задача + ввод.
 export const gateScope = (tree, task, input = "") => "gate|" + tree + "|" + task + "|" + input;
 
+/** Итог команды оркестратора в счёт тупика: исполнена — счёт и карточка сняты, отказ — +1 к серии. */
 export function cmdDeadlock(orch, what, detail, ok) {
     const scope = "cmd|" + orch + "|" + what;
     if (ok)
@@ -178,13 +279,28 @@ export function cmdDeadlock(orch, what, detail, ok) {
     deadlockNote({ scope, sig: normWhy(detail), what, why: String(detail).replace(/^не исполнено:\s*/, ""), orch });
 }
 
+/**
+ * Отказ ворот в прогоне — тому, кто просил: просьба оркестратора — оркестратору, просьба агента — самому слоту.
+ * Автопоезд и «уже идёт/в очереди» не сообщаются: там никто не ждёт ответа. Одна и та же причина на том же коде
+ * (fp) — одно сообщение за жизнь сервера; память ограничена 500 записями.
+ */
 export function gateFeedback({ tree, task, input = "", by, why, fp = "" }, now = Date.now()) {
     const to = by === "просьба оркестратора" ? orchOfKey(tree) : by === "просьба агента" ? tree : null;
     if (!to || /^уже (идёт|в очереди)/.test(String(why)))
         return "";
     {
         const t0 = treeByKey(tree);
-        deadlockNote({ scope: gateScope(tree, task, input), sig: fp + "|" + normWhy(why), what: "прогон " + task + (input ? "=" + input : "") + " у " + (t0 ? t0.tag : tree), why: String(why), tree, orch: orchOfKey(tree) }, now);
+        deadlockNote(
+            {
+                scope: gateScope(tree, task, input),
+                sig: fp + "|" + normWhy(why),
+                what: "прогон " + task + (input ? "=" + input : "") + " у " + (t0 ? t0.tag : tree),
+                why: String(why),
+                tree,
+                orch: orchOfKey(tree),
+            },
+            now,
+        );
     }
     const k = [to, tree, task, input, fp, String(why).replace(/\s*\([^)]*\)/g, "")].join("|");
     if (gateSeen.has(k))
@@ -193,12 +309,27 @@ export function gateFeedback({ tree, task, input = "", by, why, fp = "" }, now =
     if (gateSeen.size > 500)
         gateSeen.delete(gateSeen.keys().next().value);
     const t = treeByKey(tree), tag = t ? t.tag : tree, label = (TASKS[task] && TASKS[task].label) || task;
-    const msg = "[Диспетчерская] Ворота не пустили прогон, который " + (to === tree ? "ты просил" : "ты поставил строкой ПРОГНАТЬ") + ": «" + label + (input ? " " + input : "") + "» у " + tag + " — " + why + ". " + gateHint(String(why), tag);
+    const msg =
+        "[Диспетчерская] Ворота не пустили прогон, который " +
+        (to === tree ? "ты просил" : "ты поставил строкой ПРОГНАТЬ") +
+        ": «" +
+        label +
+        (input ? " " + input : "") +
+        "» у " +
+        tag +
+        " — " +
+        why +
+        ". " +
+        gateHint(String(why), tag);
     logEvent("gate.notice", { to, tree, task, input });
     _orchSteps.send(to, msg);
     return msg;
 }
 
+// ───────────────────────────── коммит силами агента ─────────────────────────────
+
+// Кнопка «Коммит», команда «КОММИТ ПN» и автопоезд могут попросить коммит одновременно: второй вызов получает тот же
+// результат, а не ставит вторую задачу.
 const commitInflight = new Map();
 
 export function agentCommit(key) {
@@ -210,6 +341,7 @@ export function agentCommit(key) {
     return p;
 }
 
+/** Поставить задачу «коммит силами агента»: только ветка волны (не staging/main), есть изменения, такой задачи ещё нет. */
 async function agentCommitRun(key) {
     const t = treeByKey(key);
     if (!t || /^orchestrator/.test(t.key) || !agentCwd(t.key))
@@ -228,6 +360,10 @@ async function agentCommitRun(key) {
     return { code: 200, body: { ok: true, job: publicJob(job), files: work.length } };
 }
 
+/**
+ * Шаг задачи коммита: агенту — просьба с разрешением на коммит (commitUntil, COMMIT_GRANT_MS), дальше ждём, пока
+ * сдвинется HEAD. Подпись пишет агент, диспетчерская только проверяет, что коммит появился.
+ */
 export async function commitStep(t, write) {
     const br = (await git(t.path, ["rev-parse", "--abbrev-ref", "HEAD"])).out, before = (await git(t.path, ["rev-parse", "HEAD"])).out;
     const work = await workChanges(t.path);
@@ -238,6 +374,7 @@ export async function commitStep(t, write) {
     let a = agents.get(t.key);
     if (!a || a.dead)
         a = await ensureAgent(t.key);
+    // Просьба не должна попасть в середину чужого хода: ждём конца текущего ответа (до 20 минут).
     for (let i = 0; a.busy && !a.pinging && i < 600; i++)
         await new Promise((r) => setTimeout(r, 2000));
     a.commitUntil = Date.now() + COMMIT_GRANT_MS;
@@ -246,6 +383,7 @@ export async function commitStep(t, write) {
     write("задача отправлена агенту " + t.tag + " (" + work.length + " файл(ов)); жду, пока он закоммитит\n");
     const t0 = Date.now(), nap = (ms) => new Promise((r) => setTimeout(r, ms));
     await nap(3000);
+    // HEAD сдвинулся — ждём ещё 6 с тишины или конца хода: агент может сделать несколько коммитов или поправить подпись.
     let moved = "", movedAt = 0, now = before;
     while (!a.dead && Date.now() - t0 < 30 * 60000) {
         if (!a.busy && now === before)
@@ -272,9 +410,14 @@ export async function commitStep(t, write) {
     write("✓ коммит " + subj + "\n" + (left.length ? "вне коммита осталось файлов: " + left.length + " (" + left.slice(0, 5).map((w) => w.path).join(", ") + ")\n" : "дерево чистое\n"));
 }
 
+// ───────────────────────────── команды оркестратора: ВЛИТЬ, КОММИТ, СБРОСИТЬ ─────────────────────────────
+
+// Строка команды — целиком отдельной строкой (разметка markdown вокруг допускается): упоминание в тексте не исполняется.
 export const ORCH_GIT_RE = /^[\s>*_`-]*(ВЛИТЬ|КОММИТ)\s+([ПТ]\d+)(\s+ПРИНУДИТЕЛЬНО)?[\s.*_`]*$/gim;
 export const OWNER_WORD = { ВЛИТЬ: /вле[йи]|влить|влива|слей|слить|мерж|merge/i, КОММИТ: /коммит|закоммит|commit/i };
+// Что снимает «принудительно»: регресс, ревью, гарды и отметку «готово». Конфликт, незакоммиченное и порядок — нет.
 export const FORCE_SOFT = new Set(["regress", "review", "sec", "done"]);
+// Слово владельца действует 12 часов от момента, когда он его написал.
 export const OWNER_WORD_TTL_MS = 12 * 3600e3;
 
 export function ownerLastText(a, now = Date.now(), opt = {}) {
@@ -282,6 +425,11 @@ export function ownerLastText(a, now = Date.now(), opt = {}) {
     return w ? w.text : null;
 }
 
+/**
+ * Последнее сообщение владельца оркестратору → { text, at, by } | null. Сначала лента агента; её нет (после перезапуска
+ * лента пустая) — журнал orchlog.mjs, где слово владельца переживает перезапуск. real — только набранное самим владельцем
+ * на странице: автоответ режима «без владельца» и ответ из бота не дают права (wordGrants), это нужно для сброса ветки.
+ */
 export function ownerLastWord(a, now = Date.now(), { real = false } = {}) {
     for (let i = a.items.length - 1; i >= 0; i--) {
         const x = a.items[i];
@@ -295,8 +443,9 @@ export function ownerLastWord(a, now = Date.now(), { real = false } = {}) {
 }
 
 export const orchFailSeen = new Map();
-export const ORCH_FAIL_HINT = "Реши сам, что дальше: если мешает порядок влива — влей сначала ту ветку, от которой эта зависит (если она готова), иначе переходи к следующей готовой ветке; если не хватает слова владельца — вынеси одним пунктом в «Вопросы владельцу»; ту же команду без изменений не повторяй.";
+export const ORCH_FAIL_HINT = prompt("orch-fail-hint");
 
+/** Неисполненные команды — оркестратору одним сообщением с подсказкой; та же причина повторно — не раньше чем через 30 минут. */
 export function orchFailFeedback(key, fails, now = Date.now()) {
     const fresh = fails.filter((f) => {
         const k = key + "|" + f;
@@ -308,14 +457,21 @@ export function orchFailFeedback(key, fails, now = Date.now()) {
     return fresh.length ? "[Диспетчерская] Команды не исполнены:\n" + fresh.map((f) => "- " + f).join("\n") + "\n" + ORCH_FAIL_HINT : "";
 }
 
+// Предел на один долгий шаг команды (проверка влива, постановка задачи): зависшая проверка не держит разбор хода вечно.
 export const ORCH_STEP_MS = Number(process.env.DASH_ORCH_STEP_MS) || 120000;
 
+// Внешние шаги команд оркестратора одним объектом: тесты подменяют их (проверку влива, постановку задачи, отправку) и
+// проверяют разбор команд без git и без агентов.
 export const _orchSteps = { preflight, recipe: (action, o) => recipe(action, o), agentCommit: (k) => agentCommit(k), reset: (o) => slotReset(o), enqueue: (o) => enqueue(o), send: (key, msg) => {
         if (!DRY)
             sendWhenFree(key, msg);
     },
     queueChecks: (key, need, direct) => mergeQueueChecks(key, need, direct) };
 
+/**
+ * Команды оркестратора, меняющие ветки: ВЛИТЬ/КОММИТ, ОТМЕНИТЬ ВЛИТЬ, СБРОСИТЬ — по порядку в одном ходе. Отказы копятся
+ * и уходят оркестратору (flush) перед каждым долгим шагом и в конце: он узнаёт об отказе, не дожидаясь чужих проверок.
+ */
 export async function orchGitCommands(a, text, turn = "") {
     const fails = [], flush = () => {
         const msg = orchFailFeedback(a.key, fails.splice(0));
@@ -332,9 +488,18 @@ export async function orchGitCommands(a, text, turn = "") {
     }
 }
 
+// ───────────────────────────── ВЛИТЬ ждёт зелёного ─────────────────────────────
+
+// Слово владельца «влей» при незелёных проверках не пропадает: команда становится ожиданием (merge-wait.mjs), диспетчерская
+// сама ставит недостающие проверки и вливает, когда всё зелёное, пока не истёк срок слова. Решение шага — loops.mjs
+// mergeWaitStep; здесь — исполнение.
 const MW_BY = "ВЛИТЬ ждёт зелёного";
 const hhmmOf = (at) => new Date(at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
+/**
+ * Поставить недостающие для влива проверки. При автопоезде порядок станций знает он сам (autoChain); direct — поставить
+ * именно эти проверки в обход автопоезда (решение шага, когда автопоезд их не ставит).
+ */
 export async function mergeQueueChecks(key, need, direct = false) {
     if (!direct && settings.autoTrain && !autoTrainOffFor(key))
         return autoChain(key, MW_BY);
@@ -351,6 +516,10 @@ export async function mergeQueueChecks(key, need, direct = false) {
     }
 }
 
+/**
+ * Что красное на нынешнем коде слота → { sec?, regress?, review? }. Красное только на этом же отпечатке кода (fpEnd === fp):
+ * старое красное после правки ожидание не останавливает.
+ */
 export function mergeRedOf(key, t) {
     const red = {};
     if (!t)
@@ -371,19 +540,46 @@ export function mergeRedOf(key, t) {
     return red;
 }
 
+/**
+ * Превратить «ВЛИТЬ» в ожидание. Срок — от момента слова владельца, а не от команды. Если ожидание уже на паузе из-за
+ * красного на этом же коде, повторная команда отказывает: без правки кода оно не продолжится.
+ */
 function mergeWaitArm(a, t, fails, word) {
     const now = Date.now(), at = (word && word.at) || now, until = at + OWNER_WORD_TTL_MS, need = fails.map((c) => c.id);
     const old = mergeWaitOf(t.key), sn = snapNow() && snapNow().trees.find((x) => x.key === t.key), fp = (sn && sn.fp) || "";
     keepMergeWord(t.key, { text: String((word && word.text) || "").slice(0, 300), at, until, orch: a.key, by: (word && word.by) || "" });
     if (old && old.state === "red" && old.redFp && old.redFp === fp)
-        return { ok: false, text: "не исполнено: ВЛИТЬ " + t.tag + " уже на паузе — на этом коде красное: " + (old.why || "") + ". Нужна правка кода; после неё ожидание продолжится само (слово владельца в силе до " + hhmmOf(until) + ")." };
+        return {
+            ok: false,
+            text:
+                "не исполнено: ВЛИТЬ " +
+                t.tag +
+                " уже на паузе — на этом коде красное: " +
+                (old.why || "") +
+                ". Нужна правка кода; после неё ожидание продолжится само (слово владельца в силе до " +
+                hhmmOf(until) +
+                ").",
+        };
     setMergeWait(t.key, { orch: a.key, tag: t.tag, at: old ? old.at : now, until, state: "wait", need, why: "", queuedFp: "", queuedAt: 0, tries: 0 });
     logEvent("merge.wait", { tree: t.key, orch: a.key, need: need.join(",") });
     if (!DRY)
         setTimeout(() => mergeWaitTick(t.key).catch((e) => console.error("ожидание влива:", e.message)), 1500);
-    return { ok: true, text: "ждёт зелёного: на нынешнем коде нет «" + need.map((id) => MERGE_LABEL[id] || id).join("», «") + "». Диспетчерская сама ставит недостающие проверки и вольёт " + t.tag + ", когда всё позеленеет (до " + hhmmOf(until) + ", срок слова владельца). Красное — пауза с причиной, слово владельца остаётся до срока: поправят код — продолжу сам, владельца заново не спрашивай. Отменить — строкой «ОТМЕНИТЬ ВЛИТЬ " + t.tag + "»." };
+    return {
+        ok: true,
+        text:
+            "ждёт зелёного: на нынешнем коде нет «" +
+            need.map((id) => MERGE_LABEL[id] || id).join("», «") +
+            "». Диспетчерская сама ставит недостающие проверки и вольёт " +
+            t.tag +
+            ", когда всё позеленеет (до " +
+            hhmmOf(until) +
+            ", срок слова владельца). Красное — пауза с причиной, слово владельца остаётся до срока: поправят код — продолжу сам, владельца заново не спрашивай. Отменить — строкой «ОТМЕНИТЬ ВЛИТЬ " +
+            t.tag +
+            "».",
+    };
 }
 
+// «ОТМЕНИТЬ ВЛИТЬ ПN» снимает ожидание влива и гасит слово владельца по этому слоту.
 export const ORCH_UNWAIT_RE = /^[\s>*_`-]*ОТМЕНИТЬ\s+ВЛИТЬ\s+([ПТ]\d+)[\s.*_`]*$/gim;
 
 function orchUnwaitRun(a, text, fails, turn = "") {
@@ -392,7 +588,12 @@ function orchUnwaitRun(a, text, fails, turn = "") {
         if (!cmdBegin({ key: once, orch: a.key, cmd: "ОТМЕНИТЬ ВЛИТЬ", target: m[1], line: m[0].replace(/[*_`>]/g, "").trim() }))
             continue;
         const t = TREES.find((x) => x.kind === "slot" && x.epic === epicOfKey(a.key) && x.tag.toLowerCase() === m[1].toLowerCase());
-        const ok = !!t && dropMergeWait(t.key, { word: true, why: "отменил оркестратор", by: a.key }), s = !t ? "нет такого слота в эпике." : ok ? "ожидание влива " + t.tag + " снято, слово владельца по нему погашено." : "у " + t.tag + " нет ожидания влива.";
+        const ok = !!t && dropMergeWait(t.key, { word: true, why: "отменил оркестратор", by: a.key }),
+            s = !t
+                ? "нет такого слота в эпике."
+                : ok
+                  ? "ожидание влива " + t.tag + " снято, слово владельца по нему погашено."
+                  : "у " + t.tag + " нет ожидания влива.";
         cmdEnd(once, ok, s);
         logEvent("orch.command", { tree: a.key, cmd: "ОТМЕНИТЬ ВЛИТЬ", target: m[1], ok, detail: s });
         if (!ok)
@@ -403,6 +604,7 @@ function orchUnwaitRun(a, text, fails, turn = "") {
 
 export const OWNER_STOP_RE = /(не\s+(?:надо\s+)?вли|не\s+сливай|отмен\S*\s+вл|подожд\S*\s+с\s+вл|(?:^|[\s,.!])стоп(?![а-яё]))/i;
 
+/** Владелец написал оркестратору «не вливай», «стоп» и т. п. — снять все ожидания влива этого оркестратора и погасить слово. */
 export function ownerStopsMergeWaits(orch, text) {
     if (!OWNER_STOP_RE.test(String(text || "")))
         return [];
@@ -417,8 +619,10 @@ export function cancelMergeWait(key, by = "владелец") {
     return dropMergeWait(key, { word: true, why: "отменил " + by, by });
 }
 
+// Таймер и ручной толчок (после постановки, после «продолжить») могут зайти в одно ожидание сразу: шаг по ключу — по одному.
 const mwBusy = new Set();
 
+/** Шаг всех ожиданий влива (или одного — only). Во время подготовки к перезапуску не ходим: влив не должен оборваться. */
 export async function mergeWaitTick(only = "") {
     if (drainState())
         return;
@@ -460,6 +664,8 @@ async function mergeWaitOne(key, w0) {
     const fp = (sn && sn.fp) || "", live = mine.some((j) => ["queued", "waiting", "running"].includes(j.status));
     const ag = agents.get(key), busy = !!ag && !ag.dead && ag.busy && !ag.pinging;
     const marks = ((sn && sn.stages) || []).filter((x) => ["guards", "regress", "review"].includes(x.id)).map((x) => x.id + (x.done ? "+" : "-")).join(",");
+    // Подпись состояния: код, последний итог прогона, идёт ли что-то, занят ли агент, отметки станций. Пока она та же,
+    // результат проверки влива берётся из ожидания (до 10 минут) — проверка дорогая (git, конфликт со staging).
     const sig = [fp, Math.max(0, ...mine.map((j) => j.endedAt || 0)), live ? 1 : 0, busy ? 1 : 0, marks].join("|");
     const ask = async () => {
         const p = await withDeadline(_orchSteps.preflight("merge", key), ORCH_STEP_MS, "проверка влива " + tag);
@@ -477,6 +683,7 @@ async function mergeWaitOne(key, w0) {
         setMergeWait(key, w);
     }
     let d = mergeWaitStep({ w, checks, red: mergeRedOf(key, sn), live, busy, fp });
+    // Вливать по проверке из кеша нельзя: перед вливом — свежая проверка и повторное решение по ней.
     if (d.act === "merge" && !p) {
         try {
             ({ p, checks } = await ask());
@@ -490,12 +697,41 @@ async function mergeWaitOne(key, w0) {
     }
     const upd = (o) => setMergeWait(key, { ...w, ...o });
     if (d.act === "expire")
-        return stop("[Диспетчерская] Ожидание влива снято: " + tag + " — срок слова владельца истёк (" + hhmmOf(w.until) + "), а условия влива так и не позеленели. Нужен новый ответ владельца.", true);
+        return stop(
+            "[Диспетчерская] Ожидание влива снято: " +
+                tag +
+                " — срок слова владельца истёк (" +
+                hhmmOf(w.until) +
+                "), а условия влива так и не позеленели. Нужен новый ответ владельца.",
+            true,
+        );
     if (d.act === "cancel")
-        return stop("[Диспетчерская] Ожидание влива снято: " + tag + " — " + d.why + ". Слово владельца в силе до " + hhmmOf(w.until) + ": устрани помеху и повтори «ВЛИТЬ " + tag + "», владельца заново не спрашивай.");
+        return stop(
+            "[Диспетчерская] Ожидание влива снято: " +
+                tag +
+                " — " +
+                d.why +
+                ". Слово владельца в силе до " +
+                hhmmOf(w.until) +
+                ": устрани помеху и повтори «ВЛИТЬ " +
+                tag +
+                "», владельца заново не спрашивай.",
+        );
     if (d.act === "merge") {
         const tt = (p.trees || []).find((x) => x.key === key) || { branch: t.branch }, r = _orchSteps.recipe("merge", { slotKey: key, branch: tt.branch });
-        const job = await withDeadline(_orchSteps.enqueue({ treeKey: r.treeKey, cwd: r.cwd, label: r.label, taskId: "merge", lane: r.lane, steps: r.steps, extra: { pipeline: true, by: "оркестратор по слову владельца (ждал зелёного)" } }), ORCH_STEP_MS, "постановка влива " + tag);
+        const job = await withDeadline(
+            _orchSteps.enqueue({
+                treeKey: r.treeKey,
+                cwd: r.cwd,
+                label: r.label,
+                taskId: "merge",
+                lane: r.lane,
+                steps: r.steps,
+                extra: { pipeline: true, by: "оркестратор по слову владельца (ждал зелёного)" },
+            }),
+            ORCH_STEP_MS,
+            "постановка влива " + tag,
+        );
         dropMergeWait(key, { word: true, why: "вливаю (" + job.id + ")", by: "диспетчерская" });
         logEvent("merge.wait.done", { tree: key, orch, job: job.id });
         const a = agents.get(orch);
@@ -506,7 +742,18 @@ async function mergeWaitOne(key, w0) {
     if (d.act === "red") {
         upd({ state: "red", redFp: fp, why: d.why, need: d.need });
         logEvent("merge.wait.red", { tree: key, orch, why: d.why.slice(0, 200), stuck: !!d.stuck });
-        return _orchSteps.send(orch, "[Диспетчерская] Влив " + tag + " на паузе: " + d.why + ". Слово владельца в силе до " + hhmmOf(w.until) + ": когда код поправят и проверки позеленеют, волью сам — владельца заново не спрашивай. Отменить — «ОТМЕНИТЬ ВЛИТЬ " + tag + "».");
+        return _orchSteps.send(
+            orch,
+            "[Диспетчерская] Влив " +
+                tag +
+                " на паузе: " +
+                d.why +
+                ". Слово владельца в силе до " +
+                hhmmOf(w.until) +
+                ": когда код поправят и проверки позеленеют, волью сам — владельца заново не спрашивай. Отменить — «ОТМЕНИТЬ ВЛИТЬ " +
+                tag +
+                "».",
+        );
     }
     if (d.act === "resume") {
         upd({ state: "wait", redFp: "", why: "", need: d.need, queuedFp: "", tries: 0 });
@@ -524,9 +771,14 @@ async function mergeWaitOne(key, w0) {
         upd({ need: d.need, why: d.why });
 }
 
+// Метка поезда принимается и с латинской T: оркестратор иногда пишет её так.
 export const ORCH_RESET_RE = /^[\s>*_`-]*СБРОСИТЬ\s+([ПТT]\d+)(?:\s+НА\s+(staging|[0-9a-f]{7,40}))?[\s.*_`]*$/gim;
 export const OWNER_RESET_WORD = /сбро[сш]|откат|reset/i;
 
+/**
+ * «СБРОСИТЬ ПN [НА staging|<sha>]»: снимает коммиты слота, поэтому нужно слово «сбрось» в последнем сообщении, которое
+ * владелец набрал сам (real). Проверки и страховочный тег — slot-reset.mjs.
+ */
 async function orchResetRun(a, text, fails, flush = () => { }, turn = "") {
     for (const m of String(text || "").matchAll(ORCH_RESET_RE)) {
         const tag = m[1].replace(/^T/i, "Т"), to = m[2] || "staging", once = cmdKey(turn, text, m.index), line = m[0].replace(/[*_`>]/g, "").trim().replace(/^-\s*/, "");
@@ -547,7 +799,11 @@ async function orchResetRun(a, text, fails, flush = () => { }, turn = "") {
         }
         const word = ownerLastText(a, Date.now(), { real: true });
         if (!word || !OWNER_RESET_WORD.test(word)) {
-            say("не исполнено: в последнем сообщении, которое набрал сам владелец, нет слова «сбрось» (автоответ «без владельца» и ответ из бота не в счёт): коммиты слота снимаются — только по его слову.", false);
+            say(
+                "не исполнено: в последнем сообщении, которое набрал сам владелец, нет слова «сбрось» (автоответ " +
+                    "«без владельца» и ответ из бота не в счёт): коммиты слота снимаются — только по его слову.",
+                false,
+            );
             continue;
         }
         try {
@@ -561,6 +817,11 @@ async function orchResetRun(a, text, fails, flush = () => { }, turn = "") {
     }
 }
 
+/**
+ * ВЛИТЬ и КОММИТ. Слово владельца — из его последнего сообщения; для ВЛИТЬ ещё и сохранённое слово ожидания влива (kept):
+ * повтор команды после правки не требует нового ответа владельца. «Принудительно» — только для ВЛИТЬ и только если
+ * владелец сам написал это слово на странице. Незелёное при включённом ожидании — не отказ, а ожидание (mergeArm).
+ */
 async function orchGitRun(a, text, fails, flush = () => { }, turn = "") {
     const step = (run, what) => {
         flush();
@@ -596,7 +857,18 @@ async function orchGitRun(a, text, fails, flush = () => { }, turn = "") {
         try {
             if (op === "КОММИТ") {
                 const r = await step(() => _orchSteps.agentCommit(t.key), "коммит " + t.tag);
-                say(r.code === 200 ? "коммит " + t.tag + " поставлен в очередь задач (" + r.body.files + " файлов, " + (r.body.job ? r.body.job.id : "") + "): уйдёт агенту, когда он допишет текущий ответ." : "не исполнено: " + r.body.error, r.code === 200);
+                say(
+                    r.code === 200
+                        ? "коммит " +
+                              t.tag +
+                              " поставлен в очередь задач (" +
+                              r.body.files +
+                              " файлов, " +
+                              (r.body.job ? r.body.job.id : "") +
+                              "): уйдёт агенту, когда он допишет текущий ответ."
+                        : "не исполнено: " + r.body.error,
+                    r.code === 200,
+                );
                 continue;
             }
             const p = await step(() => _orchSteps.preflight("merge", t.key), "проверка влива " + t.tag);
@@ -608,11 +880,33 @@ async function orchGitRun(a, text, fails, flush = () => { }, turn = "") {
                     say(r.text, r.ok);
                     continue;
                 }
-                say("не исполнено: " + bad.map((c) => c.text + (c.detail ? " (" + c.detail + ")" : "")).join("; ") + (fail.some((c) => FORCE_SOFT.has(c.id)) && !force ? ". Регресс, ревью и гарды снимаются словом владельца «принудительно»." : ""), false);
+                say(
+                    "не исполнено: " +
+                        bad.map((c) => c.text + (c.detail ? " (" + c.detail + ")" : "")).join("; ") +
+                        (fail.some((c) => FORCE_SOFT.has(c.id)) && !force
+                            ? ". Регресс, ревью и гарды снимаются словом владельца «принудительно»."
+                            : ""),
+                    false,
+                );
                 continue;
             }
             const tt = p.trees.find((x) => x.key === t.key), r = _orchSteps.recipe("merge", { slotKey: t.key, branch: tt.branch });
-            const job = await step(() => _orchSteps.enqueue({ treeKey: r.treeKey, cwd: r.cwd, label: r.label, taskId: "merge", lane: r.lane, steps: r.steps, extra: { pipeline: true, by: "оркестратор по слову владельца" + (force ? ", принудительно" : "") } }), "постановка влива " + t.tag);
+            const job = await step(
+                () =>
+                    _orchSteps.enqueue({
+                        treeKey: r.treeKey,
+                        cwd: r.cwd,
+                        label: r.label,
+                        taskId: "merge",
+                        lane: r.lane,
+                        steps: r.steps,
+                        extra: {
+                            pipeline: true,
+                            by: "оркестратор по слову владельца" + (force ? ", принудительно" : ""),
+                        },
+                    }),
+                "постановка влива " + t.tag,
+            );
             dropMergeWait(t.key, { word: true, why: "вливаю (" + job.id + ")", by: a.key });
             say("вливаю " + tt.branch + " в staging (" + job.id + ")" + (force && fail.length ? "; снято принудительно: " + fail.map((c) => c.text).join("; ") : "") + ".");
         }
@@ -624,6 +918,10 @@ async function orchGitRun(a, text, fails, flush = () => { }, turn = "") {
 
 export const ORCH_ORDER_RE = /^[\s>*_`-]*ПОРЯДОК\s+([ПТ]\d+)\s+(?:(ПОСЛЕ)\s+([ПТ]\d+)|([ПТ]\d+)\s+НЕ\s+СВЯЗАНЫ)[\s.*_`]*$/gim;
 
+/**
+ * «ПОРЯДОК ПM ПОСЛЕ ПN» / «ПОРЯДОК ПN ПM НЕ СВЯЗАНЫ» — запись в реестр порядка вливов (pipeline.mjs setOrder), как кнопка
+ * карточки «Порядок». Слова владельца не нужно: порядок вливов решает оркестратор. → строки исполненных команд.
+ */
 export function orchOrderCommands(a, text, turn = "") {
     const done = [];
     for (const m of String(text || "").matchAll(ORCH_ORDER_RE)) {
@@ -655,6 +953,10 @@ export function orchOrderCommands(a, text, turn = "") {
 
 export const ORCH_ACCEPT_RE = /^[\s>*_`-]*ПРИНЯТЬ\s+РЕВЬЮ\s+([ПТ]\d+)[\s.*_`]*$/gim;
 
+/**
+ * «ПРИНЯТЬ РЕВЬЮ ПN»: оркестратор проверил замечания и считает их неблокирующими — станция «Ревью» отмечается для
+ * текущей ветки слота, автопоезд идёт к коммиту. Отметка повторяемая, поэтому журнал команд (cmdBegin) не нужен.
+ */
 export async function orchAcceptReview(a, text) {
     for (const m of String(text || "").matchAll(ORCH_ACCEPT_RE)) {
         const t = TREES.find((x) => x.kind === "slot" && x.epic === epicOfKey(a.key) && x.tag.toLowerCase() === m[1].toLowerCase()), say = (x, ok = true) => {
@@ -688,7 +990,13 @@ export async function orchAfterBoot({ readSession = readSessionTail, lastAnswer 
         logEvent("orch.command", { tree: x.orch, cmd: x.cmd, target: x.target, ok: false, detail: "прервано перезапуском диспетчерской" });
     }
     for (const [orch, list] of byOrch)
-        _orchSteps.send(orch, "[Диспетчерская] Перезапуск диспетчерской прервал исполнение твоих команд — исполнение НЕ подтверждено:\n" + list.map((x) => "- «" + x.line + "»").join("\n") + "\n" + RESTART_CUT_HINT);
+        _orchSteps.send(
+            orch,
+            "[Диспетчерская] Перезапуск диспетчерской прервал исполнение твоих команд — исполнение НЕ подтверждено:\n" +
+                list.map((x) => "- «" + x.line + "»").join("\n") +
+                "\n" +
+                RESTART_CUT_HINT,
+        );
     for (const t of TREES.filter((x) => x.kind === "orch" && !x.archived)) {
         let fin = null;
         try {
@@ -712,10 +1020,17 @@ export async function orchAfterBoot({ readSession = readSessionTail, lastAnswer 
     }
 }
 
+// ───────────────────────────── разбор хода агента ─────────────────────────────
+
+/**
+ * Разбор законченного хода агента: блоки передач → карточки (и автопередача), просьбы о прогонах, команды оркестратора,
+ * «ГОТОВО» и вопросы владельцу (stations.mjs), напоминания, сводка, решение «ДАЛЬШЕ: …», правки кода → проверка.
+ */
 export function inboxAfterTurn(a) {
     const key = a.key, ans = lastAnswerItem(a), text = ans ? ans.text : "", turn = ans ? ans.id : "";
     if (key === BACKLOG_KEY)
         return backlogAfterTurn(a, text);
+    // Карточки передач от этого агента пересобираются по новому ответу: прежний ответ устарел.
     keepCards((x) => !(x.kind === "relay" && x.tree === key));
     for (const m of text.matchAll(BLOCK_RE)) {
         const lang = m[1].trim(), body = m[2].trim();
@@ -726,6 +1041,8 @@ export function inboxAfterTurn(a) {
             if (tt && body.length > 3)
                 to = tt;
         }
+        // Доклад слота — первый блок ```text: одна передача на ход. Нужна ли она оркестратору (есть ли для него дело, новое ли
+        // это) — решает relayDecision; «ЖДУ» и «Принял» без дела остаются в чате слота.
         else if ((lang === "text" || lang === "") && body.length > 40 && !inboxCards().some((x) => x.kind === "relay" && x.tree === key)) {
             const lr = lastRelay.get(key), t = snapNow() && snapNow().trees.find((x) => x.key === key);
             const lastUser = [...a.items].reverse().find((x) => x.t === "user");
@@ -737,6 +1054,7 @@ export function inboxAfterTurn(a) {
             }
             to = treeByKey(orchOfKey(key));
         }
+        // Блок уже передан (тот же ответ разбирается повторно) — карточку не заводим.
         if (to && S.relaySent.includes(relayHash(key, to.key, body)))
             to = null;
         if (to) {
@@ -782,15 +1100,19 @@ export function inboxAfterTurn(a) {
     }
     setTimeout(pumpAll, 500);
     kick();
+    // Агент освободился — отдать ему передачи, которые ждали в очереди, пока он отвечал.
     setTimeout(() => drainQueued(key), 1500);
     if (!isOrch(key)) {
         const sm = summaryOf(text);
         if (sm)
             setSummary(key, { text: sm, at: Date.now() });
     }
+    // Решение «ДАЛЬШЕ: …» — после разбора блоков: передача, которую оно отправляет, уже должна лежать карточкой.
     if (!isOrch(key) && hasDecision(text))
         setTimeout(() => applyDecision(a, text).catch((e) => console.error("решение слота:", e.message)), 300);
     const edits = isOrch(key) ? 0 : turnEdits(a);
+    // Агент правил код в этом ходе — прежние проверки устарели: автопоезд пройдёт станции заново (если ход не закончился
+    // решением — тогда ведёт решение), без автопоезда — карточка «проверить».
     if (edits > 0 && agentCwd(key)) {
         keepCards((x) => !(x.kind === "verify" && x.tree === key));
         if (settings.autoTrain && !hasDecision(text))
@@ -801,9 +1123,14 @@ export function inboxAfterTurn(a) {
     saveInbox();
 }
 
+// ───────────────────────────── справка о слоте для оркестратора ─────────────────────────────
+
+// Что оркестратор уже видел о каждом слоте (отпечаток кода, план, список красных): следующая справка идёт разностью.
+// Файл читает boot.mjs при старте, поэтому разность переживает перезапуск.
 export const RELAY_FACTS_FILE = path.join(DATA, "relay-facts.json");
 export const lastRelay = new Map();
 
+/** Запись файла фактов с задержкой 500 мс: несколько передач подряд дают одну запись. */
 export function saveRelayFacts() {
     if (DRY)
         return;
@@ -811,6 +1138,7 @@ export function saveRelayFacts() {
     S.relayFactsTimer = setTimeout(() => saveJson(RELAY_FACTS_FILE, Object.fromEntries(lastRelay)), 500);
 }
 
+/** Забыть, что видел оркестратор эпика: после ротации его сессии новая сессия должна получить справки целиком. */
 export function forgetRelayFacts(epicId) {
     for (const k of [...lastRelay.keys()])
         if (epicOfKey(k) === epicId)
@@ -823,6 +1151,11 @@ const LOCKFILES = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lock
 export const DIFF_NOISE = [...LOCKFILES.map((f) => "*" + f), "**/dist/**", "**/*.snap"];
 export const DIFF_NOISE_RE = new RegExp("(^|/)dist/|\\.snap$|(^|/)(" + LOCKFILES.map((f) => f.replace(/[.]/g, "\\.")).join("|") + ")$");
 
+/**
+ * Справка диспетчерской о слоте к передаче оркестратору: ветка, коммиты, незакоммиченное, станции, последние прогоны,
+ * регресс, план волны, дифф, причины красного. Что оркестратор уже видел (lastRelay), не повторяется — factsDelta.
+ * record=false — собрать, не запоминая как увиденное (предпросмотр).
+ */
 export async function slotFacts(key, record = true) {
     try {
         await rebuildFresh();
@@ -833,14 +1166,45 @@ export async function slotFacts(key, record = true) {
         return "";
     const prev = lastRelay.get(key);
     const v = t.verdict || {}, fwdp = (p) => String(p).replace(/\\/g, "/");
-    const W = { ok: "зелёная на текущем коде", green: "зелёные на текущем коде", fail: "КРАСНЫЕ", stale: "были на ДРУГОМ коде, файлы менялись после прогона", nobuild: "зелёные, но без сборки на этом коде", none: "НЕ ПРОГОНЯЛИСЬ", notneeded: "не нужны", requested: "попросили перепрогнать" };
+    const W = {
+        ok: "зелёная на текущем коде",
+        green: "зелёные на текущем коде",
+        fail: "КРАСНЫЕ",
+        stale: "были на ДРУГОМ коде, файлы менялись после прогона",
+        nobuild: "зелёные, но без сборки на этом коде",
+        none: "НЕ ПРОГОНЯЛИСЬ",
+        notneeded: "не нужны",
+        requested: "попросили перепрогнать",
+    };
     const [st, df] = await Promise.all([git(t.path, ["status", "--porcelain"], 60000, true), git(t.path, ["diff", "--name-only", "staging...HEAD"])]);
     const dirty = (st.out || "").split("\n").filter((l) => l.trim() && !l.startsWith("??")).map((l) => l.slice(3));
     const added = (st.out || "").split("\n").filter((l) => l.startsWith("??")).map((l) => l.slice(3));
     const touched = [...new Set([...(df.out || "").split("\n").filter(Boolean), ...dirty, ...added])];
-    const lastJob = (task, input) => [...jobList()].reverse().find((k) => k.tree === key && k.task === task && (input == null || (k.input || "") === input) && ["ok", "fail", "skipped"].includes(k.status));
-    const jl = (j) => !j ? "не прогонялся" : ["running", "queued", "waiting"].includes(j.status) ? "идёт или в очереди, " + j.id : (j.status === "ok" ? "зелёный" : j.status === "fail" ? "УПАЛ" : "нет тестов") + (j.status === "ok" ? (jobFresh(j, t) === "ok" ? ", на текущем коде" : ", на ДРУГОМ коде") : "") + ", " + j.id + ", лог " + fwdp(logPath(j.id)) + (j.summary ? " — " + j.summary.slice(0, 160) : "");
+    const lastJob = (task, input) =>
+        [...jobList()]
+            .reverse()
+            .find(
+                (k) =>
+                    k.tree === key &&
+                    k.task === task &&
+                    (input == null || (k.input || "") === input) &&
+                    ["ok", "fail", "skipped"].includes(k.status),
+            );
+    const jl = (j) =>
+        !j
+            ? "не прогонялся"
+            : ["running", "queued", "waiting"].includes(j.status)
+              ? "идёт или в очереди, " + j.id
+              : (j.status === "ok" ? "зелёный" : j.status === "fail" ? "УПАЛ" : "нет тестов") +
+                (j.status === "ok" ? (jobFresh(j, t) === "ok" ? ", на текущем коде" : ", на ДРУГОМ коде") : "") +
+                ", " +
+                j.id +
+                ", лог " +
+                fwdp(logPath(j.id)) +
+                (j.summary ? " — " + j.summary.slice(0, 160) : "");
     const ses = digestSession({ to: orchOfKey(key), kind: "facts", seed: key + "|" + (t.fp || "") + "|" + (t.last ? t.last.sha : ""), settings, record });
+    // Место правил сверки держим меткой: полные или короткие правила зависят от того, целиком ли справка, а это известно
+    // только после factsDelta ниже. Правила — в начале, чтобы начало сообщения не плавало между передачами.
     const out = ["── Справка диспетчерской о слоте (факты на момент передачи, слот их не писал) ──", "@@RULES@@",
         "Слот " + t.tag + ". Ветка " + t.branch + ", HEAD " + (t.last ? t.last.sha + " «" + t.last.subject + "» (" + t.last.when + ")" : "?") + ". Папка " + fwdp(t.path) + ".",
         t.ahead ? "Впереди staging " + t.ahead + " коммит(а): " + (t.commits || []).map((c) => c[0] + " " + c[1]).join("; ") : "Впереди staging коммитов НЕТ.",
@@ -869,7 +1233,19 @@ export async function slotFacts(key, record = true) {
                 reg.push(area.title + ": " + TASKS[id].label + " — " + jl(lastJob(id, "")));
     }
     if ((t.regress || []).length)
-        out.push("Станция «Регресс» (соседи по тронутым путям): " + (W[v.regress] || v.regress) + ".", ...t.regress.map((x) => "- " + x.label + (x.input ? " " + x.input : "") + " (" + x.why + "): " + jl(x.jobId ? jobList().find((k) => k.id === x.jobId) : null)));
+        out.push(
+            "Станция «Регресс» (соседи по тронутым путям): " + (W[v.regress] || v.regress) + ".",
+            ...t.regress.map(
+                (x) =>
+                    "- " +
+                    x.label +
+                    (x.input ? " " + x.input : "") +
+                    " (" +
+                    x.why +
+                    "): " +
+                    jl(x.jobId ? jobList().find((k) => k.id === x.jobId) : null),
+            ),
+        );
     else if (reg.length)
         out.push("Регресс по тронутым путям (вне тестов волны):", ...reg.map((x) => "- " + x));
     const pend = (S.testReqs[key] || []).filter((r) => ["todo", "run", "stale"].includes(reqItemStatus(key, r, t).status));
@@ -902,10 +1278,36 @@ export async function slotFacts(key, record = true) {
         else if (mb && touched.length) {
             const EXCL = ["--", ".", ...DIFF_NOISE.map((p) => ":(exclude)" + p)];
             const only = d.diff === "files" ? d.files.filter((f) => !DIFF_NOISE_RE.test(f)) : null;
-            const [stat, patch] = await Promise.all([git(t.path, ["diff", "--stat=140", mb, ...EXCL], 60000), only ? (only.length ? git(t.path, ["diff", "-U2", "--no-color", mb, "--", ...only], 60000) : { out: "" }) : git(t.path, ["diff", "-U2", "--no-color", mb, ...EXCL], 60000)]);
+            const [stat, patch] = await Promise.all([
+                git(t.path, ["diff", "--stat=140", mb, ...EXCL], 60000),
+                only
+                    ? only.length
+                        ? git(t.path, ["diff", "-U2", "--no-color", mb, "--", ...only], 60000)
+                        : { out: "" }
+                    : git(t.path, ["diff", "-U2", "--no-color", mb, ...EXCL], 60000),
+            ]);
             const p = patch.out || "", CAP = 6000, whole = "целиком — git -C " + fwdp(t.path) + " diff " + mb.slice(0, 10);
             const untr = only ? only.filter((f) => added.includes(f)) : [];
-            out.push("", only ? "Правки ветки против staging (весь список файлов; дифф — только " + only.length + " файл(ов), тронутых после прошлой справки" + (untr.length ? "; из них новые вне git, их diff не покажет: " + untr.join(", ") : "") + "):" : "Правки ветки против staging (закоммиченное и незакоммиченное; новые файлы вне git — выше):", (stat.out || "").trim(), FENCE + "diff", p.length > CAP ? ses.diff(p, p.slice(0, CAP) + "\n… (обрезано: всего " + p.length + " знаков; " + whole + ")", "… (выжимка диффа: всего " + p.length + " знаков; " + whole + ")") : p, FENCE);
+            out.push(
+                "",
+                only
+                    ? "Правки ветки против staging (весь список файлов; дифф — только " +
+                          only.length +
+                          " файл(ов), тронутых после прошлой справки" +
+                          (untr.length ? "; из них новые вне git, их diff не покажет: " + untr.join(", ") : "") +
+                          "):"
+                    : "Правки ветки против staging (закоммиченное и незакоммиченное; новые файлы вне git — выше):",
+                (stat.out || "").trim(),
+                FENCE + "diff",
+                p.length > CAP
+                    ? ses.diff(
+                          p,
+                          p.slice(0, CAP) + "\n… (обрезано: всего " + p.length + " знаков; " + whole + ")",
+                          "… (выжимка диффа: всего " + p.length + " знаков; " + whole + ")",
+                      )
+                    : p,
+                FENCE,
+            );
         }
     }
     catch (e) {
@@ -920,7 +1322,15 @@ export async function slotFacts(key, record = true) {
     }
     out[out.indexOf("@@RULES@@")] = d.full ? FACTS_RULES_FULL : FACTS_RULES_SHORT;
     if (record) {
-        lastRelay.set(key, { ...(prev || {}), fp: t.fp, sha: t.last && t.last.sha, planHash: cur.planHash, snap: cur.snap, reds: [...new Set([...((prev && prev.reds) || []), ...cur.reds])].slice(-30), at: Date.now() });
+        lastRelay.set(key, {
+            ...(prev || {}),
+            fp: t.fp,
+            sha: t.last && t.last.sha,
+            planHash: cur.planHash,
+            snap: cur.snap,
+            reds: [...new Set([...((prev && prev.reds) || []), ...cur.reds])].slice(-30),
+            at: Date.now(),
+        });
         saveRelayFacts();
     }
     const text = out.join("\n");
@@ -930,9 +1340,12 @@ export async function slotFacts(key, record = true) {
 
 export { DECISION_HELP };
 export { DECISION_RE };
+// Слот → прогоны, которые перезапустить после сборки (решение «перепрогон» для задач, которые идут по собранному).
 export const afterBuild = new Map();
+// «Слот|задача|ввод» → отпечаток кода последнего перепрогона по решению: тот же код второй раз не гоняем.
 export const rerunGuard = new Map();
 
+/** Упавшие прогоны слота: последний по каждой паре «задача|ввод», кроме подготовки, влива и красного только в staging. */
 export function unresolvedFails(key) {
     const by = new Map();
     for (const j of jobList())
@@ -941,6 +1354,10 @@ export function unresolvedFails(key) {
     return [...by.values()].filter((j) => j.status === "fail" && !onlyStagingRed(j.id));
 }
 
+/**
+ * Исполнить решение слота из последних строк ответа: ПЕРЕПРОГОН — перезапустить упавшее (при автопоезде — через него,
+ * сборка — раньше задач по собранному), ОРКЕСТРАТОРУ / СЛОТУ ПN — передать блок, ПРИНЯЛ / ЖДУ — только в журнал.
+ */
 export async function applyDecision(a, text) {
     const key = a.key, m = DECISION_RE.exec(text.split(/\r?\n/).slice(-6).join("\n"));
     if (!m)
@@ -998,10 +1415,20 @@ export async function applyDecision(a, text) {
         card.toTag = to.tag;
         saveInbox();
         const r = await doRelay(key, to.key, card.text).catch((e) => ({ code: 500, body: { error: e.message } }));
-        return note(r.code === 200 ? "передано " + to.tag + " само, по решению слота" : r.code === 202 ? "в очереди к " + to.tag + ": уйдёт само, когда он допишет ответ" : "не передано " + to.tag + " (" + (r.body && r.body.error) + "): карточка ждёт кнопку");
+        return note(
+            r.code === 200
+                ? "передано " + to.tag + " само, по решению слота"
+                : r.code === 202
+                  ? "в очереди к " + to.tag + ": уйдёт само, когда он допишет ответ"
+                  : "не передано " + to.tag + " (" + (r.body && r.body.error) + "): карточка ждёт кнопку",
+        );
     }
 }
 
+// ───────────────────────────── передачи ─────────────────────────────
+
+// Хеши уже переданных блоков (последние 400): разбор того же ответа повторно (перезапуск, повторный ход) не передаёт
+// блок второй раз.
 export const RELAY_SENT_FILE = path.join(DATA, "relay-sent.json");
 export const relaySentList = () => S.relaySent;
 
@@ -1016,6 +1443,7 @@ export function loadTestReqs() {
 
 export const relayNorm = (s) => String(s || "").replace(/\r\n?/g, "\n").split("\n").map((l) => l.trimEnd()).join("\n").trim();
 
+/** Хеш передачи (FNV-1a) по отправителю, получателю и тексту без хвостовых пробелов и разницы переводов строк. */
 export function relayHash(from, to, text) {
     let h = 0x811c9dc5;
     const s = from + ">" + to + "\n" + relayNorm(text);
@@ -1035,6 +1463,11 @@ export function markRelaySent(h) {
     saveJson(RELAY_SENT_FILE, S.relaySent);
 }
 
+/**
+ * Передать блок агенту → { code, body }: 200 — передан, 202 — в очереди (адресат отвечает, пачка к оркестратору,
+ * папка слота готовится), 409 — уже передан или передаётся, 404/400 — нет адресата или текст не годится.
+ * force — передать повторно уже переданный; now — без пачки и без ожидания подготовки к перезапуску.
+ */
 export async function doRelay(from, to, text, force, now = !!force) {
     text = String(text || "").trim();
     if (to === "orchestrator")
@@ -1054,6 +1487,8 @@ export async function doRelay(from, to, text, force, now = !!force) {
         return { code: 400, body: { error: "отправитель и получатель — один и тот же агент" } };
     if (text.length < 3 || text.length > 30000)
         return { code: 400, body: { error: "текст передачи: от 3 до 30000 знаков" } };
+    // Кнопка и автопередача могут отправить один блок одновременно: пока передача идёт, вторая отказывает. Пометка
+    // sending у карточки — для страницы.
     if (relayFlight.has(rh))
         return { code: 409, body: { error: "этот блок уже передаётся", already: true, hash: rh } };
     relayFlight.add(rh);
@@ -1073,6 +1508,7 @@ export async function doRelay(from, to, text, force, now = !!force) {
 
 export const relayFlight = new Set();
 
+/** Адресат ещё не готов (папка слота готовится, план — заготовка): карточка ждёт, relayAfterPrep отправит её сама. */
 function relayWaitPrep(from, to, text, why, until = "когда подготовка кончится") {
     const tt = treeByKey(to);
     let card = inboxCards().find((x) => x.kind === "relay" && x.tree === from && x.to === to && relayNorm(x.text) === relayNorm(text));
@@ -1089,6 +1525,7 @@ function relayWaitPrep(from, to, text, why, until = "когда подготов
     return { code: 202, body: { ok: true, queued: true, waitPrep: true, toTag: tt.tag } };
 }
 
+/** По таймеру: отправить передачи, ждавшие подготовки слота, когда подготовка кончилась и план заполнен. */
 export function relayAfterPrep() {
     if (DRY)
         return;
@@ -1107,11 +1544,16 @@ export function relayAfterPrep() {
     }
 }
 
+// Агента слота не запускаем, пока план волны — заготовка: со стартовым промптом без плана он начнёт работу вслепую.
 const stubHold = (to) => {
     const a = agents.get(to), t = snapNow() && snapNow().trees.find((z) => z.key === to);
     return !!t && startHeldByStub({ kind: t.kind, live: !!(a && !a.dead), session: !!agentSession(to), stub: planIsStubOf(t) });
 };
 
+/**
+ * Доставка передачи (doRelay уже проверил адресата и повторы). Слоту без агента и сессии — сначала стартовый промпт,
+ * передача — следом из очереди. Оркестратору доклады копятся ORCH_GATHER_MS и уходят пачкой, со справкой о слоте.
+ */
 export async function relayNow(from, to, text, rh, now = false) {
     const tf = treeByKey(from), tt = treeByKey(to);
     let a = agents.get(to), start = "";
@@ -1123,7 +1565,13 @@ export async function relayNow(from, to, text, rh, now = false) {
         if (d.act === "start" && stubHold(to)) {
             const sa = agents.get(from);
             if (sa && !sa.dead && isOrch(from))
-                push(sa, { id: "stub-" + sa.rev, t: "status", text: tt.tag + ": план волны — заготовка, агент слота не запущен. Заполните план (источник, решения, станции, манифест) — передача уйдёт сама." });
+                push(sa, {
+                    id: "stub-" + sa.rev,
+                    t: "status",
+                    text:
+                        tt.tag +
+                        ": план волны — заготовка, агент слота не запущен. Заполните план (источник, решения, станции, манифест) — передача уйдёт сама.",
+                });
             return relayWaitPrep(from, to, text, "план волны — заготовка", "когда план будет заполнен");
         }
         if (d.act === "start")
@@ -1141,6 +1589,7 @@ export async function relayNow(from, to, text, rh, now = false) {
         if (sa && !sa.dead)
             push(sa, { id: "ast-" + sa.rev, t: "status", text: tt.tag + ": агента не было — запущен со стартовым промптом, передача уйдёт следом." });
     }
+    // Встать в очередь к адресату: карточка с пометкой времени, место в очереди — по времени постановки.
     const queueIt = (gather = false) => {
         let card = inboxCards().find((x) => x.kind === "relay" && x.tree === from && x.to === to && relayNorm(x.text) === relayNorm(text));
         if (!card) {
@@ -1152,11 +1601,29 @@ export async function relayNow(from, to, text, rh, now = false) {
         if (gather)
             card.gather = true;
         const pos = inboxCards().filter((x) => x.kind === "relay" && x.to === to && x.queued && x.queued <= card.queued).length;
-        card.note = gather ? "собирается пачка к " + tt.tag + ": уйдёт через ~" + Math.round(ORCH_GATHER_MS / 1000) + " с вместе с попутными докладами" : drainState() ? "диспетчерская готовится к перезапуску: уйдёт после него" : "в очереди к " + tt.tag + " (" + pos + "-я): уйдёт сама, когда он допишет ответ";
+        card.note = gather
+            ? "собирается пачка к " +
+              tt.tag +
+              ": уйдёт через ~" +
+              Math.round(ORCH_GATHER_MS / 1000) +
+              " с вместе с попутными докладами"
+            : drainState()
+              ? "диспетчерская готовится к перезапуску: уйдёт после него"
+              : "в очереди к " + tt.tag + " (" + pos + "-я): уйдёт сама, когда он допишет ответ";
         saveInbox();
         const sa = agents.get(from);
         if (sa && !sa.dead)
-            push(sa, { id: "rq-" + sa.rev, t: "status", text: gather ? "Доклад ждёт попутных (до " + Math.round(ORCH_GATHER_MS / 1000) + " с) и уйдёт " + tt.tag + " одной пачкой." : "В очереди к " + tt.tag + " (" + pos + "-я): он сейчас отвечает, передача уйдёт сама." });
+            push(sa, {
+                id: "rq-" + sa.rev,
+                t: "status",
+                text: gather
+                    ? "Доклад ждёт попутных (до " +
+                      Math.round(ORCH_GATHER_MS / 1000) +
+                      " с) и уйдёт " +
+                      tt.tag +
+                      " одной пачкой."
+                    : "В очереди к " + tt.tag + " (" + pos + "-я): он сейчас отвечает, передача уйдёт сама.",
+            });
         logEvent("relay.queued", { from, to, gather, pos });
         return { code: 202, body: { ok: true, queued: true, pos, toTag: tt.tag } };
     };
@@ -1166,12 +1633,14 @@ export async function relayNow(from, to, text, rh, now = false) {
         return queueIt();
     if (a.busy && !a.pinging)
         return queueIt();
+    // Доклады оркестратору собираются в пачку: каждый отдельный ход оркестратора дорог (он перечитывает весь контекст).
     if (isOrch(to) && !now && ORCH_GATHER_MS > 0) {
         const r = queueIt(true);
         setTimeout(() => drainQueued(to), ORCH_GATHER_MS + 500);
         return r;
     }
     if (isOrch(to))
+        // Ротация сессии оркестратора — до сбора справки: новая сессия забыла увиденное, справка для неё должна быть полной.
         a = await rotateOrchIfDue(a);
     let facts = "";
     if (isOrch(to)) {
@@ -1181,6 +1650,7 @@ export async function relayNow(from, to, text, rh, now = false) {
         catch (e) {
             facts = "── Справку диспетчерской собрать не удалось: " + e.message + " ──";
         }
+        // Запомнить «ЖДУ» и просьбы слота из доклада: по ним loops.mjs решает, будить ли оркестратора и стоит ли слот.
         const lr = lastRelay.get(from);
         if (lr) {
             lr.wait = waitsHead(text);
@@ -1190,10 +1660,22 @@ export async function relayNow(from, to, text, rh, now = false) {
     }
     if (a.busy && !a.pinging)
         return queueIt();
-    const msg = (isOrch(to)
-        ? "Ответ слота " + tf.tag + " (" + from + "), передан кнопкой дашборда:\n\n"
-        : isOrch(from) ? "Сообщение от оркестратора (передано кнопкой дашборда):\n\n"
-            : "Уточнение от соседнего слота " + tf.tag + " (" + from + ", ветка " + (tf.branch || "?") + "), передано диспетчерской. Ответь ему, если нужно, тем же способом: блок ```text и строка «ДАЛЬШЕ: СЛОТУ " + tf.tag + "».\n\n") + text + (facts ? "\n\n" + facts : "");
+    const msg =
+        (isOrch(to)
+            ? "Ответ слота " + tf.tag + " (" + from + "), передан кнопкой дашборда:\n\n"
+            : isOrch(from)
+              ? "Сообщение от оркестратора (передано кнопкой дашборда):\n\n"
+              : "Уточнение от соседнего слота " +
+                tf.tag +
+                " (" +
+                from +
+                ", ветка " +
+                (tf.branch || "?") +
+                "), передано диспетчерской. Ответь ему, если нужно, тем же способом: блок ```text и строка «ДАЛЬШЕ: СЛОТУ " +
+                tf.tag +
+                "».\n\n") +
+        text +
+        (facts ? "\n\n" + facts : "");
     deliver(a, msg);
     if (!isOrch(to)) {
         try {
@@ -1217,16 +1699,40 @@ export async function relayNow(from, to, text, rh, now = false) {
     return { code: 200, body: { ok: true, relay: r, hash: rh, to: agentPublic(to) } };
 }
 
+// ───────────────────────────── итоги прогонов агенту слота ─────────────────────────────
+
+/**
+ * Сообщение агенту с итогами прогонов: строка на прогон, у красных — причина (выжимка лога; красное staging и
+ * нестабильные спеки помечены, чтобы агент их не разбирал), у зелёных — подсказка следующей станции.
+ */
 export function resultsText(ids, { to = "", record = true } = {}) {
     const js = ids.map((id) => jobList().find((j) => j.id === id)).filter(Boolean), key = to || (js[0] && js[0].tree) || "";
     const ses = digestSession({ to: key, kind: "results", seed: js.map((j) => j.id).join(","), settings, record });
     const legacy = (raw) => failureExcerpt(raw).slice(0, 3500);
     const word = { ok: "ЗЕЛЁНЫЙ", fail: "УПАЛ", skipped: "НЕТ ТЕСТОВ (шаблон не совпал ни с одним сьютом)" };
-    const lines = js.map((j) => "- " + j.label + (j.input ? " — " + j.input : "") + ": " + (word[j.status] || j.status) + ", " + Math.round(((j.endedAt || Date.now()) - (j.startedAt || Date.now())) / 1000) + " с" + (j.summary ? ". " + j.summary : ""));
+    const lines = js.map(
+        (j) =>
+            "- " +
+            j.label +
+            (j.input ? " — " + j.input : "") +
+            ": " +
+            (word[j.status] || j.status) +
+            ", " +
+            Math.round(((j.endedAt || Date.now()) - (j.startedAt || Date.now())) / 1000) +
+            " с" +
+            (j.summary ? ". " + j.summary : ""),
+    );
     const bad = js.filter((j) => j.status === "fail").map((j) => {
         if (j.task === "review")
-            return "── Ревью: замечания независимого ревьюера (сессия без твоего контекста, только чтение) ──\n" + (j.review && j.review.text ? ses.review(j.id, j.review.text, j.review.text) : ses.log(j.id, legacy)) + "\nРазбери по пунктам: согласен — поправь; не согласен — коротко почему (это уйдёт владельцу).";
-        const sp = failingSpecs(j.id), known = sp.filter((f) => onStagingRed(f) && inheritedRed(j, f)), flaky = sp.filter((f) => !onStagingRed(f) && inheritedRed(j, f)), own = sp.filter((f) => !inheritedRed(j, f));
+            return (
+                "── Ревью: замечания независимого ревьюера (сессия без твоего контекста, только чтение) ──\n" +
+                (j.review && j.review.text ? ses.review(j.id, j.review.text, j.review.text) : ses.log(j.id, legacy)) +
+                "\nРазбери по пунктам: согласен — поправь; не согласен — коротко почему (это уйдёт владельцу)."
+            );
+        const sp = failingSpecs(j.id),
+            known = sp.filter((f) => onStagingRed(f) && inheritedRed(j, f)),
+            flaky = sp.filter((f) => !onStagingRed(f) && inheritedRed(j, f)),
+            own = sp.filter((f) => !inheritedRed(j, f));
         const note = [known.length ? "Красные И В САМОМ staging (их чинит отдельная волна, тебе не вменяются, не разбирай): " + known.join(", ") : "",
             flaky.length ? "Нестабильные (на том же коде и падали, и проходили — в карантине, не разбирай): " + flaky.join(", ") : "",
             (known.length || flaky.length) && own.length ? "Остальное — смотри: " + own.join(", ") : ""].filter(Boolean).join("\n");
@@ -1235,7 +1741,15 @@ export function resultsText(ids, { to = "", record = true } = {}) {
         let grp = "";
         try {
             const fam = SUITE_FAM[j.task];
-            grp = redGroupNote({ own, carry: fam ? redCarryOf(j.tree, "", { exceptJob: j.id }).filter((x) => x.fam === fam).map((x) => x.spec) : [], violations: sp.length ? [] : guardViolations(readLog(j.id)) });
+            grp = redGroupNote({
+                own,
+                carry: fam
+                    ? redCarryOf(j.tree, "", { exceptJob: j.id })
+                          .filter((x) => x.fam === fam)
+                          .map((x) => x.spec)
+                    : [],
+                violations: sp.length ? [] : guardViolations(readLog(j.id)),
+            });
         }
         catch { }
         return "── " + j.label + ": причина ──\n" + (note ? note + "\n" : "") + (grp ? grp + "\n" : "") + ses.log(j.id, legacy);
@@ -1246,26 +1760,47 @@ export function resultsText(ids, { to = "", record = true } = {}) {
 }
 
 
+/**
+ * Совет по красному прогону для страницы → { act, text } (undefined — прогон не красный). Сначала причины «делать нечего»
+ * (унаследованное, служебное, позже прошло, фильтр снят), потом «уже идёт», потом «код поменялся», и последним — «отдайте
+ * причину агенту».
+ */
 export function failAdvice(j) {
     if (j.status !== "fail")
         return undefined;
     const t = snapNow() && snapNow().trees.find((x) => x.key === j.tree);
     const specs = failingSpecs(j.id);
     if (specs.length && specs.every((f) => inheritedRed(j, f)))
-        return { act: "inherited", text: "Упало только известное: красное в самом staging (его чинит отдельная волна) или нестабильная спека в карантине. Слоту не вменяется, делать ничего не нужно." };
+        return {
+            act: "inherited",
+            text: "Упало только известное: красное в самом staging (его чинит отдельная волна) или нестабильная спека в карантине. Слоту не вменяется, делать ничего не нужно.",
+        };
     if (j.train)
         return { act: "inherited", text: "Поезд влива: итог и деление состава — в карточке поезда." };
     if (j.baseline)
         return { act: "inherited", text: "Сверка со staging: служебный прогон, его итог уже учтён в станции «Регресс» слотов и в карточке красного staging." };
     {
-        const later = jobList().find((k) => k.tree === j.tree && k.task === j.task && k.status === "ok" && (k.queuedAt || 0) > (j.queuedAt || 0) && jobCovers(k, { task: j.task, input: j.input || "" }));
+        const later = jobList().find(
+            (k) =>
+                k.tree === j.tree &&
+                k.task === j.task &&
+                k.status === "ok" &&
+                (k.queuedAt || 0) > (j.queuedAt || 0) &&
+                jobCovers(k, { task: j.task, input: j.input || "" }),
+        );
         if (later)
             return { act: "inherited", text: "Позже тот же прогон прошёл зелёным (" + later.id + ")." };
     }
     if (specs.length) {
         const end = j.endedAt || 0, pref = j.tree + ":", passedLater = (f) => (specHistMap()[f] || []).some((x) => x.ok && x.at > end && String(x.code).startsWith(pref));
         if (specs.every((f) => inheritedRed(j, f) || passedLater(f)))
-            return { act: "inherited", text: "Каждая упавшая здесь спека позже прошла в этом слоте" + (specs.some(knownRed) ? " или красная в самом staging" : "") + ": прогон устарел, делать ничего не нужно." };
+            return {
+                act: "inherited",
+                text:
+                    "Каждая упавшая здесь спека позже прошла в этом слоте" +
+                    (specs.some(knownRed) ? " или красная в самом staging" : "") +
+                    ": прогон устарел, делать ничего не нужно.",
+            };
     }
     if (!t || /^orchestrator/.test(j.tree))
         return { act: "log", text: "Посмотрите лог" };
@@ -1273,13 +1808,34 @@ export function failAdvice(j) {
         return { act: "obsolete", text: "Код поезда целиком в staging: старое падение ничего не значит (staging проверяет свой полный прогон)." };
     if (TEST_TASKS.has(j.task) && /совпало имён 0 из/.test(j.summary || "")) {
         const inWave = (PRESETS[j.tree] || []).some((p) => p.task === j.task && (p.input || "") === (j.input || ""));
-        return inWave ? { act: "log", text: "Фильтр не нашёл ни одной спеки: перепрогон даст то же. Смените фильтр тестов волны: node " + EPIC_CLI + " presets " + (t.tag || "ПN") + " " + j.task + "=<фильтр>." }
-            : { act: "obsolete", text: "Фильтр не нашёл ни одной спеки и уже снят с тестов волны: прогон устарел, делать ничего не нужно." };
+        return inWave
+            ? {
+                  act: "log",
+                  text:
+                      "Фильтр не нашёл ни одной спеки: перепрогон даст то же. Смените фильтр тестов волны: node " +
+                      EPIC_CLI +
+                      " presets " +
+                      (t.tag || "ПN") +
+                      " " +
+                      j.task +
+                      "=<фильтр>.",
+              }
+            : {
+                  act: "obsolete",
+                  text: "Фильтр не нашёл ни одной спеки и уже снят с тестов волны: прогон устарел, делать ничего не нужно.",
+              };
     }
     {
         const act = jobList().filter((k) => k.tree === j.tree && ["running", "queued", "waiting"].includes(k.status));
         if (act.length)
-            return { act: "busy", text: "Уже идёт: " + act.map((k) => k.label + (k.status === "running" ? "" : " (в очереди)")).join(", ") + (afterBuild.has(j.tree) ? "; после сборки перезапущу упавшее" : "") + ". Карточка обновится сама." };
+            return {
+                act: "busy",
+                text:
+                    "Уже идёт: " +
+                    act.map((k) => k.label + (k.status === "running" ? "" : " (в очереди)")).join(", ") +
+                    (afterBuild.has(j.tree) ? "; после сборки перезапущу упавшее" : "") +
+                    ". Карточка обновится сама.",
+            };
     }
     {
         const ag = agents.get(j.tree);
@@ -1307,6 +1863,8 @@ export function failAdvice(j) {
     return { act: "report", text: "Отдайте причину агенту слота." };
 }
 
+// Слот → итоги прогонов, ещё не отданные агенту. Прогоны одной станции кончаются почти вместе: копим 5 с и отдаём одним
+// сообщением, а не ходом на каждый.
 export const resultQ = new Map();
 
 export function queueResult(job) {
@@ -1341,6 +1899,11 @@ export function resultCard(key, ids) {
     saveInbox();
 }
 
+/**
+ * Отдать накопленные итоги: пока у слота идут прогоны — ждём (до 20 минут), чтобы агент получил итог станции целиком.
+ * Зелёное при автопоезде агенту не шлём (автопоезд едет сам); красное при мёртвом агенте — поднимаем агента; агент занят —
+ * ждём до 10 минут, потом карточка; автоотчёты выключены — карточка.
+ */
 export function flushResults(key, tries) {
     const q = resultQ.get(key);
     if (!q)
@@ -1359,6 +1922,7 @@ export function flushResults(key, tries) {
         const j = jobList().find((x) => x.id === id);
         return j && j.status === "fail" && !onlyStagingRed(j.id) && !staleRed(j, curFp);
     });
+    // Красное только в staging или на устаревшем коде не считается: агенту чинить нечего.
     if (settings.autoTrain && !redNow) {
         resultQ.delete(key);
         markReported(q.ids, "green-auto");
@@ -1408,6 +1972,9 @@ export function flushResults(key, tries) {
     push(a, { id: "auto-" + a.rev, t: "status", text: "Автоотчёт: итог прогонов (" + ids.length + ") отправлен агенту одним сообщением." });
 }
 
+// ───────────────────────────── карточки «Ждут вашего действия» ─────────────────────────────
+
+/** Почему карточка больше не нужна (строка) или "" — нужна. Карточки «результат» по пути сужаются до неотданных прогонов. */
 export function inboxStale(x) {
     if (x.tree && !/^orchestrator/.test(x.tree) && !treeByKey(x.tree) && !epicOfKey(x.tree))
         return "слота больше нет";
@@ -1426,20 +1993,41 @@ export function inboxStale(x) {
             if (!left.length)
                 return "эти прогоны уже у агента или перепрогнаны";
             const lj = left.map((id) => jobList().find((k) => k.id === id)), end = Math.max(...lj.map((j) => j.endedAt || 0));
-            const moved = ((agentSession(x.tree) || {}).at || 0) > end + 5000 || jobList().some((k) => k.tree === x.tree && ["commit", "merge"].includes(k.task) && k.status === "ok" && (k.endedAt || 0) > end);
+            const moved =
+                ((agentSession(x.tree) || {}).at || 0) > end + 5000 ||
+                jobList().some(
+                    (k) =>
+                        k.tree === x.tree &&
+                        ["commit", "merge"].includes(k.task) &&
+                        k.status === "ok" &&
+                        (k.endedAt || 0) > end,
+                );
             if (lj.every((j) => ["ok", "skipped"].includes(j.status)) && moved)
                 return "всё зелёное, слот уже ушёл дальше";
             x.jobs = left;
             return "";
         }
         case "stgred": return (x.specs || []).some((f) => stgRedMap()[f]) ? "" : "эти спеки staging уже зелёные";
-        case "relay": return x.to && S.relaySent.includes(relayHash(x.tree, x.to, x.text)) ? "уже передано"
-            : /дважды вернулось с вопросами/.test(x.text || "") && jobList().some((j) => j.tree === x.tree && j.task === "review" && j.review && j.review.verdict === "ЗА" && (j.endedAt || 0) > x.at) ? "новое ревью — ЗА"
-                : isOrch(x.to) && !isOrch(x.tree) && waitsHead(x.text) && !SLOT_ASKS_RE.test(x.text || "") ? "«ЖДУ» без просьб к оркестратору" : "";
+        case "relay": return x.to && S.relaySent.includes(relayHash(x.tree, x.to, x.text))
+            ? "уже передано"
+            : /дважды вернулось с вопросами/.test(x.text || "") &&
+                jobList().some(
+                    (j) =>
+                        j.tree === x.tree &&
+                        j.task === "review" &&
+                        j.review &&
+                        j.review.verdict === "ЗА" &&
+                        (j.endedAt || 0) > x.at,
+                )
+              ? "новое ревью — ЗА"
+              : isOrch(x.to) && !isOrch(x.tree) && waitsHead(x.text) && !SLOT_ASKS_RE.test(x.text || "")
+                ? "«ЖДУ» без просьб к оркестратору"
+                : "";
         default: return "";
     }
 }
 
+/** Карточки для страницы: устаревшие убираются, у передачи — превью и признак «уходит сама» (автопоезд, первая минута). */
 export function inboxPublic() {
     const n0 = inboxCards().length;
     keepCards((x) => !inboxStale(x));
@@ -1448,13 +2036,40 @@ export function inboxPublic() {
     for (const x of inboxCards())
         if (x.epic === undefined)
             x.epic = epicOfKey(x.tree);
-    return inboxCards().map((x) => ({ id: x.id, epic: x.epic, specs: x.specs, task: x.task, input: x.input, jobId: x.jobId, tag: x.tag, kind: x.kind, tree: x.tree, to: x.to, toTag: x.toTag, at: x.at, edits: x.edits, note: x.note || "", sending: x.kind === "relay" && ((!!x.sending && relayFlight.has(relayHash(x.tree, x.to, x.text))) || (!!settings.autoTrain && !x.note && !x.queued && Date.now() - x.at < 60000)), queued: !!(x.kind === "relay" && x.queued), len: x.text ? x.text.length : 0, preview: x.text ? x.text.slice(0, 240) : "", full: x.kind === "ownerq" ? x.text : undefined,
-        jobIds: x.jobs || [], jobs: (x.jobs || []).map((id) => {
-            const j = jobList().find((k) => k.id === id);
-            return j ? { label: j.label, input: j.input || "", status: j.status } : null;
-        }).filter(Boolean) }));
+    return inboxCards().map((x) => ({
+        id: x.id,
+        epic: x.epic,
+        specs: x.specs,
+        task: x.task,
+        input: x.input,
+        jobId: x.jobId,
+        tag: x.tag,
+        kind: x.kind,
+        tree: x.tree,
+        to: x.to,
+        toTag: x.toTag,
+        at: x.at,
+        edits: x.edits,
+        note: x.note || "",
+        sending:
+            x.kind === "relay" &&
+            ((!!x.sending && relayFlight.has(relayHash(x.tree, x.to, x.text))) ||
+                (!!settings.autoTrain && !x.note && !x.queued && Date.now() - x.at < 60000)),
+        queued: !!(x.kind === "relay" && x.queued),
+        len: x.text ? x.text.length : 0,
+        preview: x.text ? x.text.slice(0, 240) : "",
+        full: x.kind === "ownerq" ? x.text : undefined,
+        jobIds: x.jobs || [],
+        jobs: (x.jobs || [])
+            .map((id) => {
+                const j = jobList().find((k) => k.id === id);
+                return j ? { label: j.label, input: j.input || "", status: j.status } : null;
+            })
+            .filter(Boolean),
+    }));
 }
 
+/** Отдать агенту слота все итоги из карточки и очереди одним сообщением (кнопка или пробуждение агента автопоездом). */
 export async function sendBatch(tree, extraIds = []) {
     const card = inboxCards().find((x) => x.kind === "result" && x.tree === tree), q = resultQ.get(tree);
     const ids = [...new Set([...(card ? card.jobs : []), ...(q ? q.ids : []), ...extraIds])];
@@ -1491,12 +2106,14 @@ export async function sendToAgent(key, text) {
     return { code: 200, body: { ok: true, to: agentPublic(key) } };
 }
 
+/** Стартовый промпт слота: готовый файл *-<слот>.txt в папке промптов главнее; нет — собирается из плана (genSlotPrompt). */
 export function slotPromptText(key) {
     const f = fs.existsSync(PROMPTS_DIR) ? fs.readdirSync(PROMPTS_DIR).find((x) => x.endsWith("-" + key + ".txt")) : null;
     return f ? fs.readFileSync(path.join(PROMPTS_DIR, f), "utf8") : genSlotPrompt(key);
 }
 
 export const startOffered = new Set();
+// Слот → id последней подготовки, о простое после которой оркестратор уже предупреждён: после перезапуска не повторяем.
 const NUDGES_FILE = path.join(DATA, "slot-nudges.json");
 let slotNudges = null;
 
@@ -1508,8 +2125,18 @@ export function nudgeIdleSlots(now = Date.now(), send = sendWhenFree) {
     const out = [];
     for (const x of epicSlots()) {
         const t = snapNow().trees.find((z) => z.key === x.slot), ap = agentPublic(x.slot), preps = jobList().filter((j) => j.task === "slot-up" && j.tree === x.slot);
-        const n = slotIdleNudge({ archived: !!x.archived, merged: !!(t && t.verdict && t.verdict.merged), exists: !!(t && t.exists), agent: ap.running || ap.hasLast, relay: inboxCards().some((z) => z.kind === "relay" && z.to === x.slot),
-            preparing: slotPreparing(x.slot), stub: planIsStubOf(t), lastPrep: preps[preps.length - 1] || null, nudged: slotNudges[x.slot] || "", now });
+        const n = slotIdleNudge({
+            archived: !!x.archived,
+            merged: !!(t && t.verdict && t.verdict.merged),
+            exists: !!(t && t.exists),
+            agent: ap.running || ap.hasLast,
+            relay: inboxCards().some((z) => z.kind === "relay" && z.to === x.slot),
+            preparing: slotPreparing(x.slot),
+            stub: planIsStubOf(t),
+            lastPrep: preps[preps.length - 1] || null,
+            nudged: slotNudges[x.slot] || "",
+            now,
+        });
         if (!n)
             continue;
         const okey = orchOfKey(x.slot);
@@ -1524,8 +2151,13 @@ export function nudgeIdleSlots(now = Date.now(), send = sendWhenFree) {
     return out;
 }
 
+// Пара «от>кому» → времена автопередач за последний час: защита от пинг-понга двух агентов без человека.
 export const autoRelayLog = new Map();
 
+/**
+ * Автопередача карточки при автопоезде. Стоп, если за час 12+ передач туда и 8+ обратно (пинг-понг) или 15 в одну сторону
+ * (зациклился слот). 409 «уже передаётся» — повтор через 20 с, до 30 минут.
+ */
 export function autoRelay(id, tries = 0) {
     if (!settings.autoTrain)
         return;
@@ -1554,8 +2186,10 @@ export function autoRelay(id, tries = 0) {
     }).catch((e) => console.error("автопередача:", e.message));
 }
 
+// Адресаты, чья очередь передач сейчас отдаётся: второй вызов drainQueued не отправляет ту же карточку параллельно.
 export const draining = new Set();
 
+/** Отдать очередь передач освободившемуся агенту: оркестратору — всё пачкой (после окна сбора), слоту — по одной. */
 export function drainQueued(to) {
     const a = agents.get(to);
     if (drainState() || draining.has(to) || (a && !a.dead && a.busy && !a.pinging))
@@ -1564,6 +2198,7 @@ export function drainQueued(to) {
     if (!queued.length)
         return;
     if (isOrch(to)) {
+        // Окно сбора пачки ещё не кончилось — ждём попутных докладов (таймер из relayNow придёт сюда снова).
         if (queued.some((x) => x.gather) && Date.now() - queued[0].queued < ORCH_GATHER_MS)
             return;
         draining.add(to);
@@ -1595,8 +2230,13 @@ export function drainQueued(to) {
     }).catch((e) => console.error("очередь передач:", e.message));
 }
 
+/**
+ * Пачка докладов оркестратору одним сообщением, у каждого — справка о слоте. Справки собираются асинхронно, поэтому
+ * перед отправкой «занят ли адресат» проверяется ещё раз: за это время он мог начать ход.
+ */
 export async function deliverOrchBatch(to, cards) {
     const tt = treeByKey(to);
+    // Пока пачка собиралась, карточку могли отправить кнопкой или снять: такие не дублируем.
     const fresh = cards.filter((c) => inboxCards().includes(c) && !S.relaySent.includes(relayHash(c.tree, c.to, c.text)));
     if (fresh.length !== cards.length) {
         keepCards((x) => !(cards.includes(x) && !fresh.includes(x)));
@@ -1634,9 +2274,15 @@ export async function deliverOrchBatch(to, cards) {
         return;
     if (a.busy && !a.pinging)
         return;
-    const msg = parts.length === 1 ? parts[0].body
-        : "Доклады слотов пачкой (" + parts.length + "): диспетчерская собрала их в одно сообщение, чтобы не тратить ход на каждый. Разбери все в одном ответе — блоком slot:ПN каждому, кому нужно.\n\n" +
-            parts.map((p, i) => "═════ " + (i + 1) + " из " + parts.length + " · " + p.tf.tag + " ═════\n" + p.body).join("\n\n");
+    const msg =
+        parts.length === 1
+            ? parts[0].body
+            : "Доклады слотов пачкой (" +
+              parts.length +
+              "): диспетчерская собрала их в одно сообщение, чтобы не тратить ход на каждый. Разбери все в одном ответе — блоком slot:ПN каждому, кому нужно.\n\n" +
+              parts
+                  .map((p, i) => "═════ " + (i + 1) + " из " + parts.length + " · " + p.tf.tag + " ═════\n" + p.body)
+                  .join("\n\n");
     deliver(a, msg);
     for (const p of parts) {
         const h = relayHash(p.c.tree, to, p.c.text);
@@ -1649,11 +2295,24 @@ export async function deliverOrchBatch(to, cards) {
         autoRelayLog.set(pk, log);
         const sa = agents.get(p.c.tree);
         if (sa && !sa.dead)
-            push(sa, { id: "rel-" + sa.rev, t: "status", text: "Передано: " + p.tf.tag + " → " + (tt ? tt.tag : "ОРК") + (parts.length > 1 ? " пачкой вместе с " + (parts.length - 1) + " друг(ими) доклад(ами)" : "") + " (" + p.c.text.length + " знаков)." });
+            push(sa, {
+                id: "rel-" + sa.rev,
+                t: "status",
+                text:
+                    "Передано: " +
+                    p.tf.tag +
+                    " → " +
+                    (tt ? tt.tag : "ОРК") +
+                    (parts.length > 1 ? " пачкой вместе с " + (parts.length - 1) + " друг(ими) доклад(ами)" : "") +
+                    " (" +
+                    p.c.text.length +
+                    " знаков).",
+            });
     }
     saveInbox();
 }
 
+/** Кнопка «отправить» у карточки: красное staging — оркестратору, старт слота, передача, итоги прогонов. */
 export async function inboxSend(id, now = false) {
     const it = inboxCards().find((x) => x.id === id);
     if (!it)
@@ -1685,23 +2344,27 @@ export async function inboxSend(id, now = false) {
     return { code: 400, body: { error: "у этой карточки нет отправки" } };
 }
 
+/** Просьба агенту о коммите: правила из подсказки, у поезда — номер вагона в работе, список изменённых файлов (до 80). */
 export function commitAsk(t, br, work) {
     const files = work.slice(0, 80).map((f) => "  " + f.path).join("\n") + (work.length > 80 ? "\n  … и ещё " + (work.length - 80) : "");
-    return ["Владелец нажал кнопку «Коммит» в дашборде. Это его явное слово на ОДИН коммит в твоей ветке " + br + " (правило «коммит только по слову владельца» выполнено; на пуш, слияние и выкат оно НЕ распространяется).",
-        "Выполни навык slot-commit (если твой агент поддерживает навыки — через него, иначе по тексту ниже): (1) убедись, что ты в ветке волны, не в staging и не в main; (2) выбери только файлы этой волны из списка ниже, мусор, секреты (.env, ключи), отчёты тестов, кеши и чужие файлы не включай, спорные назови в отчёте; (3) созданное генератором вместе с правкой (миграции, снимки, сгенерированные типы) идёт в тот же коммит; (4) подпись пиши сам по образцу истории репозитория: «тип(область): WV-NNNN — суть», в теле что и зачем 3–6 строк и честная строка о тестах (их запускает диспетчерская, не утверждай результат, которого не видел), в последнем абзаце — строка «Wave: WV-NNNN» с номером волны (без неё диспетчерская коммит не пропустит); (5) git add только перечисленных путей, никогда -A и точка; (6) git commit без --no-verify, если хук упал, найди причину; (7) не пушь, не делай merge, не переписывай чужие коммиты.",
+    return [prompt("commit-ask", { branch: br }),
         ...(t.train ? [trainCommitNote(t.tag, trainWaveOf(t.key))] : []),
         "Изменённые файлы в папке слота (" + work.length + "):\n" + files,
         "Ответь одним блоком по формату слота: КОММИТ <хеш> <тема>; сколько файлов; что не включил и почему; что дальше (влить в staging решит владелец)."].join("\n\n");
 }
 
+/** Поезду номер волны для подписи коммита — вагон в работе, а не имя ветки. */
 export function trainCommitNote(tag, wave) {
-    return "Это поезд " + tag + ": в ветке по очереди едут волны-вагоны, номер волны — НЕ из имени ветки. Вагон в работе — " + (wave || "(не определён — спроси оркестратора)") + ": тема «тип(область): " + (wave || "WV-NNNN") + " — суть», а в последнем абзаце сообщения (вместе с другими строками-подписями, если они есть) строка «Wave: " + (wave || "WV-NNNN") + "».";
+    return prompt("train-commit-note", { tag, current: wave || "(не определён — спроси оркестратора)", wave: wave || "WV-NNNN" });
 }
+
+// ───────────────────────────── просьбы о прогонах и тесты волны ─────────────────────────────
 
 export const TREQ_FILE = path.join(DATA, "test-requests.json"), PRESETS_X_FILE = path.join(DATA, "presets-extra.json");
 /** Задачи станций (сборка и гарды): их ставит автопоезд сам, в тесты волны они не попадают. */
 export const STATION_TASKS = new Set(["build", ...GUARD_TASKS]);
 
+/** Добавить к тестам волны из реестра эпиков те, что слоты добавили просьбами (после загрузки реестра и presets-extra.json). */
 export function mergeExtraPresets() {
     for (const [k, list] of Object.entries(S.presetsExtra)) {
         S.presetsExtra[k] = list.filter((x) => !STATION_TASKS.has(x.task));
@@ -1733,6 +2396,11 @@ export function shortTestRequests(body) {
     return out;
 }
 
+/**
+ * Раздел «Тесты для запуска владельцем» из доклада слота: пункты списка до первой пустой строки после них. Задача —
+ * по подписи из конфига или короткой записи; задача с вводом без найденного фильтра пропускается (прогон всего набора
+ * по ошибке разбора дороже, чем пропуск).
+ */
 export function parseTestRequests(text) {
     const i = String(text || "").search(TESTS_HEAD_RE);
     if (i < 0)
@@ -1766,24 +2434,34 @@ export function parseTestRequests(text) {
     return out;
 }
 
+/**
+ * Все просьбы о прогоне в тексте: строки с подписью задачи и фильтром плюс раздел тестов. Строка, которая сообщает итог
+ * («зелёный», «упал»), а не просит прогнать, просьбой не считается.
+ */
 export function parseRunRequests(text) {
-    const out = [], seen = new Set();
+    const out = [],
+        seen = new Set();
     for (const line of String(text || "").split("\n"))
         for (const seg of line.split(/,?\s+(?:потом|затем|после этого)\s+|;\s+/i)) {
-            if (!/«|pattern|filter|задач/i.test(seg))
-                continue;
-            if (/(зел[её]н|упал|красн|прош(ёл|ел|ли)|passed|failed|принял|итог)/i.test(seg) && !/(прогон(и|ите)|запуст(и|ите)|нажм(и|ите)|пришлите|перепрогна|повтор(и|ите)|нужен прогон|нужно прогнать)/i.test(seg))
+            if (!/«|pattern|filter|задач/i.test(seg)) continue;
+            if (
+                /(зел[её]н|упал|красн|прош(ёл|ел|ли)|passed|failed|принял|итог)/i.test(seg) &&
+                !/(прогон(и|ите)|запуст(и|ите)|нажм(и|ите)|пришлите|перепрогна|повтор(и|ите)|нужен прогон|нужно прогнать)/i.test(
+                    seg,
+                )
+            )
                 continue;
             const hit = TITLE_TASKS.find(([re]) => re.test(seg));
-            if (!hit)
-                continue;
-            const task = hit[1], m = /(?:(?:pattern|filter)\s*[:=]?|(?:шаблон|фильтр|подстрок)[а-яё]*\s*(?:[:=]|(?=[«"'`])))\s*[«"'`]?([^\s«»"'`()]+)/i.exec(seg);
+            if (!hit) continue;
+            const task = hit[1],
+                m =
+                    /(?:(?:pattern|filter)\s*[:=]?|(?:шаблон|фильтр|подстрок)[а-яё]*\s*(?:[:=]|(?=[«"'`])))\s*[«"'`]?([^\s«»"'`()]+)/i.exec(
+                        seg,
+                    );
             const input = TASKS[task] && TASKS[task].input ? (m ? m[1].replace(/[.,;:]+$/, "") : "") : "";
-            if (TASKS[task] && TASKS[task].input && !input)
-                continue;
+            if (TASKS[task] && TASKS[task].input && !input) continue;
             const k = task + "|" + input;
-            if (seen.has(k))
-                continue;
+            if (seen.has(k)) continue;
             seen.add(k);
             out.push({ task, input, note: seg.trim().slice(0, 160) });
         }
@@ -1797,6 +2475,7 @@ export function parseRunRequests(text) {
     return out;
 }
 
+/** Пресет тестов волны «мёртв»: последний его прогон не нашёл ни одной спеки, или в папке слота нет спеки под фильтр. */
 export function deadPreset(tree, p, files) {
     const j = [...jobList()].reverse().find((k) => k.tree === tree && k.task === p.task && (k.input || "") === (p.input || "") && ["ok", "fail", "skipped"].includes(k.status));
     if (j && (j.status === "skipped" || /совпало имён 0 из/.test(j.summary || "")))
@@ -1847,6 +2526,7 @@ export function presetHasSpecs(p, files) {
 
 export const samePreset = (a, b) => a.task === b.task && (a.input || "") === (b.input || "");
 
+/** Снять пресеты из тестов волны: в памяти, в presets-extra.json и в реестре эпиков (с копией реестра .prev). */
 export function dropPresets(tree, dead, why) {
     if (!dead.length)
         return;
@@ -1868,6 +2548,7 @@ export function dropPresets(tree, dead, why) {
     console.log("тесты волны", tree, ": снят пресет —", why, "—", dead.map((p) => p.task + " " + (p.input || "")).join(", "));
 }
 
+/** Снять мёртвые пресеты; последний пресет волны не снимается никогда — волна без тестов хуже, чем с неудачным фильтром. */
 export async function pruneDeadPresets(t) {
     const list = PRESETS[t.key] || [];
     if (list.length < 2)
@@ -1879,6 +2560,10 @@ export async function pruneDeadPresets(t) {
 
 export const testReqsOf = (key) => S.testReqs[key];
 
+/**
+ * Записать просьбу слота (или оркестратора) о прогонах: при автопоезде — сразу в очередь, задачи (кроме станций) — в тесты
+ * волны. Пресет той же задачи с другим фильтром, который не нашёл спек, снимается: слот назвал правильный фильтр.
+ */
 export function setTestReqs(tree, reqs, by = "просьба агента") {
     logEvent("agent.asks", { tree, n: reqs.length, tasks: reqs.map((r) => r.task + (r.input ? "=" + r.input : "")).join(", ").slice(0, 200) });
     if (settings.autoTrain)
@@ -1894,11 +2579,21 @@ export function setTestReqs(tree, reqs, by = "просьба агента") {
             list.push(p);
             (S.presetsExtra[tree] = S.presetsExtra[tree] || []).push(p);
         }
-    dropPresets(tree, list.filter((p) => reqs.some((r) => r.task === p.task && (r.input || "") !== (p.input || "")) && deadPreset(tree, p)), "прогон не нашёл ни одной спеки, слот назвал другой фильтр");
+    dropPresets(
+        tree,
+        list.filter(
+            (p) => reqs.some((r) => r.task === p.task && (r.input || "") !== (p.input || "")) && deadPreset(tree, p),
+        ),
+        "прогон не нашёл ни одной спеки, слот назвал другой фильтр",
+    );
     saveJson(TREQ_FILE, S.testReqs);
     saveJson(PRESETS_X_FILE, S.presetsExtra, 1);
 }
 
+/**
+ * Состояние одной просьбы → { j, status: todo|run|ok|fail|stale|skip }. Свежий зелёный прогон до просьбы засчитывается,
+ * красное только в staging — как зелёное (слоту не вменяется).
+ */
 export function reqItemStatus(tree, r, t) {
     const same = (k) => k.tree === tree && k.task === r.task && (k.input || "") === (r.input || "");
     const j = [...jobList()].reverse().find((k) => same(k) && (k.queuedAt || 0) >= r.at - 1000 && ["ok", "fail", "running", "queued", "waiting"].includes(k.status));
@@ -1924,6 +2619,7 @@ export function reqItemStatus(tree, r, t) {
     return { j, status: !j ? "todo" : ["running", "queued", "waiting"].includes(j.status) ? "run" : j.status === "fail" ? "fail" : t && jobFresh(j, t) === "ok" ? "ok" : "stale" };
 }
 
+/** Просьбы для страницы. Влитая ветка — просьба снята; всё зелёное — показывается ещё 45 с и снимается. */
 export function testReqsPublic() {
     const out = [];
     for (const [tree, list] of Object.entries(S.testReqs)) {
@@ -1955,6 +2651,7 @@ export function testReqsPublic() {
     return out;
 }
 
+/** Отчёт агенту о прогоне, который владелец запустил кнопкой: правила разбора, итог, команда, выжимка лога. */
 export function buildReport(j, { to = "", record = false } = {}) {
     const t = TREES.find((x) => x.key === j.tree) || TREES[0], key = to || t.key;
     const ses = digestSession({ to: key, kind: "report", seed: j.id, settings, record });

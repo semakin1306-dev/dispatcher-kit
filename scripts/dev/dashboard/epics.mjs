@@ -1,6 +1,15 @@
 // epics.mjs — эпики и слоты на сервере диспетчерской: вкладки эпиков, подготовка папок слотов очередью прогонов (slot-up
 // и запреты слота), закрытие эпика командой epic.mjs, перемотка папки оркестратора и слотов на staging и разбор
 // конфликтов такой перемотки.
+//
+// Кто зовёт: boot.mjs по таймерам (provisionMissing, orchFollow, autoSyncSlots), http.mjs (кнопки эпиков, «подтянуть staging»,
+// закрытие), runner.mjs (orchFollow после влива), auto-merge.mjs и trains.mjs (syncSlot перед вливом и следующим вагоном).
+// Данные: реестр эпиков — через slots.mjs (пишет только activateEpic и setEpicStatus; закрытие — сам epic.mjs, чтобы
+// проверки закрытия были одни); sync-marks.json — когда и как слот последний раз подтягивал staging (S.syncMarks).
+//
+// Инварианты: чужую работу перемотка не трогает — пока агент слота занят или у слота идут прогоны, слот не двигается;
+// автоматически — только перемотка вперёд (ff), влив staging в ветку со своими коммитами — по кнопке или автовливу;
+// неудачный влив откатывается (merge --abort), и папка остаётся как была.
 import { EPIC_CLI, MAIN, PROJECT, WT, isForeignEpic, loadEpics, saveEpics } from "../slots.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,16 +28,27 @@ import { applyEpics, epicById, epicSlots, openEpics, orchKey, setViewEpic, treeB
 import { dirtyBlockers, parseSync, syncConflictText, syncDirtyText } from "./sync-rules.mjs";
 import { provisionArgs, provisionDue } from "./slot-rules.mjs";
 
+// Очередь прогонов (runner.mjs) импортирует этот модуль — обратная ссылка поздней привязкой, без цикла импортов.
 const { enqueue } = late("runner.mjs", ["enqueue"]);
 
+/** Режим «к перезапуску»: новые прогоны, подготовка и перемотка не начинаются, чтобы сервер можно было остановить. */
 export const drainState = () => S.drainMode;
 
 export const setDrain = (v) => {
     S.drainMode = v;
 };
 
-export const epicsPublic = (view) => loadEpics().epics.map((e) => ({ id: e.id, title: e.title, status: isForeignEpic(e) ? "closed" : e.status, active: (view || (viewEpic() && viewEpic().id)) === e.id, slots: e.slots.length, orchBranch: e.orch.branch }));
+export const epicsPublic = (view) =>
+    loadEpics().epics.map((e) => ({
+        id: e.id,
+        title: e.title,
+        status: isForeignEpic(e) ? "closed" : e.status,
+        active: (view || (viewEpic() && viewEpic().id)) === e.id,
+        slots: e.slots.length,
+        orchBranch: e.orch.branch,
+    }));
 
+/** Сделать эпик активным (вкладка страницы): запись в реестр и смена эпика, который сервер показывает. */
 export function activateEpic(id) {
     const reg = loadEpics(), ep = reg.epics.find((e) => e.id === id && e.status !== "closed" && !isForeignEpic(e));
     if (!ep)
@@ -43,12 +63,14 @@ export function activateEpic(id) {
 
 export const SLOT_UP = process.env.DASH_SLOTUP_SCRIPT || path.join(HERE, "..", "slot-up.mjs");
 const SLOT_WS = path.join(HERE, "..", "slot-workspaces.mjs");
+// Папки слота нет, пока нет её .git (файла worktree): пустая или недоделанная папка — тоже «нет», подготовку надо повторить.
 export const slotMissing = (x) => !fs.existsSync(path.join(WT, x.slot, ".git"));
 const SPEC_RE = /\.(spec|test)\.[cm]?[jt]sx?$|_test\.go$|(^|[\\/])test_[^\\/]*\.py$|_test\.py$/;
 const SPEC_SKIP = new Set(["node_modules", "dist", "build", "vendor", "target", "__pycache__", ".venv", ".git"]);
 export const specCache = new Map();
 
 /** Файлы спек задачи в папке слота: обход папки запуска задачи (`tasks.<id>.cwd`, иначе корень), пути через «/». */
+// Кеш на 30 с: обход дерева слота дорогой, а спрашивают его при каждой проверке «найдёт ли фильтр хоть одну спеку».
 export function taskSpecs(dir, taskId, project = PROJECT) {
     const t = project.tasks[taskId], root = path.join(dir, (t && t.cwd) || ""), k = root;
     const hit = specCache.get(k);
@@ -99,6 +121,11 @@ export const NEED_PKGS = new Set(Object.values(PROJECT.areas).filter((a) => a.bu
 const provLocks = new Map();
 const liveProvision = (key) => jobList().find((j) => j.task === "slot-up" && j.tree === key && ["queued", "waiting", "running"].includes(j.status));
 
+/**
+ * Подготовка папки слота — прогоном очереди (дорожка prep): slot-up, затем запреты слота (slot-workspaces).
+ * Повторный вызов отдаёт уже идущую подготовку: provLocks закрывает гонку двух вызовов до появления прогона в очереди,
+ * liveProvision — прогон, который уже стоит в очереди или идёт.
+ */
 export function enqueueProvision(x) {
     if (provLocks.has(x.slot))
         return provLocks.get(x.slot);
@@ -119,11 +146,19 @@ export function enqueueProvision(x) {
     return p;
 }
 
+/** Каким слотам открытых эпиков пора готовить папку и почему (решение — slot-rules.mjs provisionDue). */
 export function provisionPlan(now = Date.now()) {
     const out = [];
     for (const x of epicSlots()) {
         const t = snapNow() && snapNow().trees.find((z) => z.key === x.slot);
-        const d = provisionDue({ archived: !!x.archived, missing: slotMissing(x), merged: !!(t && t.verdict && t.verdict.merged), jobs: jobList().filter((j) => j.task === "slot-up" && j.tree === x.slot), now, drain: drainState() });
+        const d = provisionDue({
+            archived: !!x.archived,
+            missing: slotMissing(x),
+            merged: !!(t && t.verdict && t.verdict.merged),
+            jobs: jobList().filter((j) => j.task === "slot-up" && j.tree === x.slot),
+            now,
+            drain: drainState(),
+        });
         if (d.due)
             out.push({ x, d });
     }
@@ -145,6 +180,10 @@ export async function provisionMissing() {
     }
 }
 
+/**
+ * Сменить статус эпика из страницы. Единственный открытый эпик не закрывается: страница осталась бы без эпика.
+ * Закрытие с проверками веток — closeEpicOp; это — пометка без проверок (вернуть закрытый, скрыть эпик).
+ */
 export function setEpicStatus(id, status) {
     const reg = loadEpics(), e = reg.epics.find((x) => x.id === id);
     if (!e)
@@ -164,6 +203,10 @@ export function setEpicStatus(id, status) {
     return { code: 200, body: { ok: true } };
 }
 
+/**
+ * Закрыть эпик командой epic.mjs close: проверки закрытия (невлитые ветки, несохранённые файлы) живут в одном месте.
+ * Отказ команды → 409 со списком причин из её вывода (строки «  - …»).
+ */
 export function closeEpicOp(id, { force = false } = {}) {
     const e = (loadEpics().epics || []).find((x) => x.id === id);
     if (!e)
@@ -190,11 +233,21 @@ export function closeEpicOp(id, { force = false } = {}) {
                 return resolve({ code: 200, body: { ok: true, out: out.trim(), message: "эпик " + id + " закрыт" } });
             }
             const problems = out.split("\n").filter((l) => /^\s+- /.test(l)).map((l) => l.replace(/^\s+- /, "").trim());
-            resolve({ code: 409, body: { error: problems.length ? "эпик нельзя закрыть: " + problems.join("; ") : "epic.mjs close: код " + code + " — " + out.trim().slice(-400), problems, out: out.trim() } });
+            resolve({
+                code: 409,
+                body: {
+                    error: problems.length
+                        ? "эпик нельзя закрыть: " + problems.join("; ")
+                        : "epic.mjs close: код " + code + " — " + out.trim().slice(-400),
+                    problems,
+                    out: out.trim(),
+                },
+            });
         });
     });
 }
 
+/** Подтянуть папки оркестраторов всех открытых эпиков до staging (после влива и при запуске). */
 export async function orchFollow(why) {
     if (DRY)
         return;
@@ -202,6 +255,10 @@ export async function orchFollow(why) {
         await orchFollowOne(orchKey(e.id), why).catch((er) => console.error("папка оркестратора", e.id, er.message));
 }
 
+/**
+ * Папка оркестратора держится на коде staging только перемоткой вперёд: в ней незакоммиченные планы оркестратора,
+ * а merge с правками могла бы их задеть. Перемотка не прошла (оркестратор правил отслеживаемый файл) — строка в его чат.
+ */
 export async function orchFollowOne(okey, why) {
     const cwd = agentCwd(okey);
     if (!cwd)
@@ -214,7 +271,17 @@ export async function orchFollowOne(okey, why) {
     const a = agents.get(okey);
     if (!r.ok) {
         if (a)
-            push(a, { id: "of-" + a.rev, t: "status", text: "Папка эпика не подтянута до staging (" + why + "): " + ((r.err || r.out || "").split("\n").filter(Boolean).slice(-2).join(" ") || "перемотка невозможна") + (ahead ? "; в ветке эпика " + ahead + " своих коммитов" : ""), bad: true });
+            push(a, {
+                id: "of-" + a.rev,
+                t: "status",
+                text:
+                    "Папка эпика не подтянута до staging (" +
+                    why +
+                    "): " +
+                    ((r.err || r.out || "").split("\n").filter(Boolean).slice(-2).join(" ") || "перемотка невозможна") +
+                    (ahead ? "; в ветке эпика " + ahead + " своих коммитов" : ""),
+                bad: true,
+            });
         return;
     }
     if (a)
@@ -222,6 +289,7 @@ export async function orchFollowOne(okey, why) {
     kick();
 }
 
+// Последний итог автоперемотки по слоту: одинаковый итог таймера не пишется в журнал каждый проход.
 const syncLogged = new Map();
 export const SYNC_MARKS_FILE = path.join(DATA, "sync-marks.json");
 
@@ -232,6 +300,7 @@ export function loadSyncMarks() {
 
 export const syncMarkOf = (key) => (S.syncMarks || {})[key] || null;
 
+// Отметка «слот подтянул staging» (как: перемотка или влив) — только при настоящем сдвиге, «уже на staging» не в счёт.
 function markSynced(key, r) {
     if (!r || !r.ok || /^уже/.test(r.text || ""))
         return;
@@ -240,10 +309,19 @@ function markSynced(key, r) {
         saveJson(SYNC_MARKS_FILE, S.syncMarks, 1);
 }
 
+/**
+ * Подтянуть staging в слот. opts: { ffOnly — только перемотка вперёд, why — кто просит (в журнал) }.
+ * → { ok, text } | { skip } | { conflict: [файлы] } | { fail, dirty? }.
+ */
 export async function syncSlot(t, opts) {
     const r = await syncSlotNow(t, opts);
     markSynced(t.key, r);
-    const result = r.ok ? "ok" : r.skip ? "skip" : r.conflict ? "conflict" : "fail", detail = String(r.text || r.skip || r.fail || (r.conflict ? r.conflict.length + " файл(ов)" : "")).slice(0, 200), sig = result + "|" + detail;
+    const result = r.ok ? "ok" : r.skip ? "skip" : r.conflict ? "conflict" : "fail",
+        detail = String(r.text || r.skip || r.fail || (r.conflict ? r.conflict.length + " файл(ов)" : "")).slice(
+            0,
+            200,
+        ),
+        sig = result + "|" + detail;
     if (opts.why !== "авто" || syncLogged.get(t.key) !== sig) {
         syncLogged.set(t.key, sig);
         logEvent("slot.sync", { key: t.key, result, why: opts.why || "", detail });
@@ -251,6 +329,8 @@ export async function syncSlot(t, opts) {
     return r;
 }
 
+// Отметка «идёт перемотка» на время git-команд: снимок слота не пересчитывается по полуизменённой папке, автопоезд
+// и сброс ветки слота в это время не начинают (snapshot.mjs isSyncing).
 export async function syncSlotNow(t, opts) {
     markSyncing(t.key);
     try {
@@ -261,6 +341,9 @@ export async function syncSlotNow(t, opts) {
     }
 }
 
+// Порядок проверок: занятый агент и идущие прогоны — первыми, они пишут в ту же папку; дальше без своих коммитов —
+// перемотка, со своими — влив (если не ffOnly). Неудачный влив откатывается сразу: агент получает чистую папку и
+// сообщение с файлами конфликта (syncReport), а не полувлитое дерево.
 async function syncSlotRaw(t, { ffOnly, why }) {
     const a = agents.get(t.key);
     if (a && !a.dead && (a.busy || a.pending.size))
@@ -285,13 +368,27 @@ async function syncSlotRaw(t, { ffOnly, why }) {
     const dirty = conf.length ? [] : dirtyBlockers(m.err || m.out);
     if (dirty.length)
         return { fail: "в слоте незакоммиченные правки в файлах, которые правит и staging: " + dirty.slice(0, 4).join(", ") + (dirty.length > 4 ? " …" : "") + " — влив не начат", dirty };
-    return conf.length ? { conflict: conf } : { fail: "влив staging не прошёл, конфликтных файлов нет: " + String(m.err || m.out || "").split("\n").filter(Boolean).slice(-2).join(" ").slice(0, 200) + " — влив откатан" };
+    return conf.length
+        ? { conflict: conf }
+        : {
+              fail:
+                  "влив staging не прошёл, конфликтных файлов нет: " +
+                  String(m.err || m.out || "")
+                      .split("\n")
+                      .filter(Boolean)
+                      .slice(-2)
+                      .join(" ")
+                      .slice(0, 200) +
+                  " — влив откатан",
+          };
 }
 
 export { parseSync };
+// Слоты, которым отправлена просьба разрешить конфликт со staging: страница показывает, что ждём агента.
 const syncAsks = new Map();
 export const syncAskOf = (key) => syncAsks.get(key) || null;
 
+/** Итог перемотки → агенту слота: конфликт или незакоммиченные правки в общих со staging файлах — сообщение, когда освободится. */
 export function syncReport(t, r) {
     if (r && r.ok)
         syncAsks.delete(t.key);
@@ -304,9 +401,16 @@ export function syncReport(t, r) {
     sendWhenFree(t.key, syncConflictText(t.branch, r.conflict));
 }
 
+// syncDone — что уже пробовали на этом sha staging (не повторять до нового staging или срока, idle.mjs syncTargets);
+// syncRun — идущий проход: таймер не запускает второй поверх первого.
 const syncDone = new Map();
 let syncRun = null;
 
+/**
+ * Автоперемотка слотов активного эпика на свежий staging — только вперёд (ffOnly). Слоты идут по одному с паузой:
+ * каждая перемотка двигает файлы, на которые смотрят снимок и агенты. Эпик сменился или включён режим «к перезапуску» —
+ * проход останавливается на следующем слоте.
+ */
 export function autoSyncSlots() {
     if (DRY || syncRun || !snapNow() || !viewEpic() || S.drainMode)
         return syncRun || Promise.resolve();

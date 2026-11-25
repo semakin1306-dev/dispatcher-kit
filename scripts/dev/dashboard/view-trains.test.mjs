@@ -35,8 +35,31 @@ const TIMES = { issuedAt: 1, firstCommitAt: 2, doneAt: 0, doneSha: "", mergedAt:
 const W = [{ wave: "WV-0001", title: "а", state: "staging", times: { ...TIMES, mergedAt: 3, mergeSha: "m1" } }, { wave: "WV-0002", title: "б", state: "work", commits: 2, times: TIMES },
     { wave: "WV-0003", title: "в", state: "depot" }, { wave: "WV-0004", title: "г", state: "depot" }];
 
-const tree = (o = {}) => ({ key: "tr-orgs-e", kind: "slot", tag: "Т1", train: true, branch: "dev/tr-orgs-e", exists: true, ahead: 2, behind: 0, dirtyTracked: 0, dirtyUntracked: 0, hasCode: true, fp: "f", deps: [], conflict: [], regress: [],
-    verdict: { tests: "green", build: "notneeded", guards: "none", regress: "none" }, review: null, wagons: W, head: "WV-0002", current: "WV-0002", issued: "WV-0002", wagon: "WV-0002", ...o });
+const tree = (o = {}) => ({
+    key: "tr-orgs-e",
+    kind: "slot",
+    tag: "Т1",
+    train: true,
+    branch: "dev/tr-orgs-e",
+    exists: true,
+    ahead: 2,
+    behind: 0,
+    dirtyTracked: 0,
+    dirtyUntracked: 0,
+    hasCode: true,
+    fp: "f",
+    deps: [],
+    conflict: [],
+    regress: [],
+    verdict: { tests: "green", build: "notneeded", guards: "none", regress: "none" },
+    review: null,
+    wagons: W,
+    head: "WV-0002",
+    current: "WV-0002",
+    issued: "WV-0002",
+    wagon: "WV-0002",
+    ...o,
+});
 
 const AUTO = { plan: "план", impl: "коммитов 2", build: "не нужна", tests: "зелёные" };
 
@@ -71,7 +94,16 @@ test("вагон закоммичен и проверен: тон «на про�
 
 test("между вагонами: вагон влит, следующий — голова очереди, ещё не выдан: «Дальше» — «Запустить вагон», поезд не «влит»", () => {
     const ws = [W[0], { ...W[1], state: "staging", commits: 0 }, { ...W[2], state: "work" }, W[3]];
-    const t = tree({ ahead: 0, hasCode: false, wagons: ws, head: "WV-0003", current: "WV-0003", issued: "WV-0002", wagon: "WV-0002", verdict: { tests: "green", build: "notneeded", guards: "green", regress: "green", merged: true } });
+    const t = tree({
+        ahead: 0,
+        hasCode: false,
+        wagons: ws,
+        head: "WV-0003",
+        current: "WV-0003",
+        issued: "WV-0002",
+        wagon: "WV-0002",
+        verdict: { tests: "green", build: "notneeded", guards: "green", regress: "green", merged: true },
+    });
     const v = view(t, { ...AUTO, guards: "g", review: "r", regress: "r", commit: "c", staging: "влито: abc" });
     assert.equal(v.next.act, "train-wagon");
     assert.match(v.next.text, /Следующий вагон WV-0003/);
@@ -79,14 +111,26 @@ test("между вагонами: вагон влит, следующий — �
     assert.equal(v.wagons[1].label, "В staging → стенд", "вагон дерева после влива — по станциям дерева");
     assert.match(v.wagons[2].label, /следующий/);
     assert.notEqual(slotGroup(t, null, v.next, { inbox: [], reqs: [] }), "merged", "в очереди есть вагоны — поезд не влит");
-    const all = view({ ...t, wagons: ws.map((w) => ({ ...w, state: "staging", commits: 0 })), head: "", current: "" }, { ...AUTO, guards: "g", review: "r", regress: "r", commit: "c", staging: "влито: abc" });
+    const all = view(
+        { ...t, wagons: ws.map((w) => ({ ...w, state: "staging", commits: 0 })), head: "", current: "" },
+        { ...AUTO, guards: "g", review: "r", regress: "r", commit: "c", staging: "влито: abc" },
+    );
     assert.notEqual(all.next.act, "train-wagon");
     assert.equal(slotGroup({ ...t, wagons: all.wagons.map((w) => ({ ...w, state: "staging" })) }, null, all.next, { inbox: [], reqs: [] }), "merged");
 });
 
 test("голова очереди ждёт вагон другого поезда — «ждёт …», выдачи нет", () => {
     const ws = [W[0], { ...W[1], state: "staging", commits: 0 }, { ...W[2], state: "wait", waitFor: ["WV-0099@Т2"] }, W[3]];
-    const t = tree({ ahead: 0, hasCode: false, wagons: ws, head: "WV-0003", current: "", issued: "WV-0002", wagon: "WV-0002", verdict: { tests: "green", build: "notneeded", guards: "green", regress: "green", merged: true } });
+    const t = tree({
+        ahead: 0,
+        hasCode: false,
+        wagons: ws,
+        head: "WV-0003",
+        current: "",
+        issued: "WV-0002",
+        wagon: "WV-0002",
+        verdict: { tests: "green", build: "notneeded", guards: "green", regress: "green", merged: true },
+    });
     const v = view(t, { ...AUTO, guards: "g", review: "r", regress: "r", commit: "c", staging: "влито: abc" });
     assert.deepEqual([v.wagons[2].tone, v.wagons[2].label], ["wait", "ждёт WV-0099@Т2"]);
     assert.notEqual(v.next.act, "train-wagon");

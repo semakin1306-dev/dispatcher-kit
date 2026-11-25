@@ -28,7 +28,7 @@ git(MAIN, "commit", "-q", "-m", "init");
 // Шаги пишут файлы-метки, которые .gitignore проекта прячет: дерево после подготовки остаётся чистым.
 const mark = (name) => `node -e "require('fs').writeFileSync('.prep-${name}','1')"`;
 const demo = JSON.parse(fs.readFileSync(path.join(HERE, "..", "..", "test", "fixtures", "project.demo.json"), "utf8"));
-const writeCfg = (slotPrepare) => fs.writeFileSync(CFG, JSON.stringify({ ...demo, repo: { ...demo.repo, main: MAIN, worktrees: WT, data: path.join(TMP, "data") }, slotPrepare }, null, 2));
+const writeCfg = (slotPrepare, worktrees = WT) => fs.writeFileSync(CFG, JSON.stringify({ ...demo, repo: { ...demo.repo, main: MAIN, worktrees, data: path.join(TMP, "data") }, slotPrepare }, null, 2));
 writeCfg([{ run: mark("always") }, { run: mark("build"), when: "build" }]);
 fs.writeFileSync(REG, JSON.stringify({ active: "e", epics: [{ id: "e", title: "э", status: "open", orch: { branch: "dev/epic-e", path: path.join(TMP, "orch") }, slots: [
     { tag: "П1", slot: "wv0001-api", branch: "dev/wv-0001-api", area: "api", build: true },
@@ -70,6 +70,20 @@ test("повторный запуск на той же папке и ветке 
     const r = up("wv0001-api");
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /подготовка как с --reuse/);
+    // папка слотов в конфиге записана через ссылку (как короткие имена Windows или /var на macOS), git отдаёт путь
+    // раскрытым — это всё равно тот же слот
+    const link = path.join(TMP, "wt-link");
+    fs.symlinkSync(WT, link, "junction");
+    writeCfg([{ run: mark("always") }, { run: mark("build"), when: "build" }], link);
+    try {
+        const l = up("wv0001-api");
+        assert.equal(l.status, 0, l.stdout + l.stderr);
+        assert.match(l.stdout, /подготовка как с --reuse/);
+    }
+    finally {
+        writeCfg([{ run: mark("always") }, { run: mark("build"), when: "build" }]);
+        fs.unlinkSync(link);
+    }
     const d = up("wv0009-new", "--area", "api", "--dry-run");
     assert.equal(d.status, 0);
     assert.match(d.stdout, /шаги {5}node -e .* → node -e /);
@@ -87,10 +101,11 @@ test("функция slotPrepare проекта: получает слот и о
 });
 
 test("упавший шаг — код 1 и журнал; шаг, оставивший правку в дереве, — тоже провал", () => {
-    writeCfg([{ run: "node -e process.exit(3)" }]);
+    // шаг — строка оболочки (cmd на Windows, sh на Linux и macOS): скобки — в кавычках, иначе sh падает на разборе с кодом 2
+    writeCfg([{ run: `node -e "process.exit(3)"` }]);
     const r = up("wv0013-fail", "--area", "web");
     assert.equal(r.status, 1);
-    assert.match(r.stdout, /✖ подготовка: node -e process.exit\(3\) — код 3; журнал/);
+    assert.match(r.stdout, /✖ подготовка: node -e "process\.exit\(3\)" — код 3; журнал/);
     writeCfg([{ run: `node -e "require('fs').writeFileSync('dirty.txt','x')"` }]);
     const d = up("wv0014-dirty", "--area", "web");
     assert.equal(d.status, 1);

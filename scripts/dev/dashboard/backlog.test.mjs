@@ -5,7 +5,29 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { STATUSES, SECTION_PLAN, SECTION_RESEARCH, backlogBashCheck, backlogDecide, backlogSystemPrompt, checkSet, getSection, itemOf, newItemText, nextId, orchBacklogSection, ownerPart, parseItem, researchMessage, RESEARCH_HEAD, setMeta, setSection, setTitle, slugOf, splitShell, } from "./backlog-rules.mjs";
+import {
+    STATUSES,
+    SECTION_PLAN,
+    SECTION_RESEARCH,
+    backlogBashCheck,
+    backlogDecide,
+    backlogSystemPrompt,
+    checkSet,
+    getSection,
+    itemOf,
+    newItemText,
+    nextId,
+    orchBacklogSection,
+    ownerPart,
+    parseItem,
+    researchMessage,
+    RESEARCH_HEAD,
+    setMeta,
+    setSection,
+    setTitle,
+    slugOf,
+    splitShell,
+} from "./backlog-rules.mjs";
 import { createItem, listItems, readItem, updateItem } from "./backlog-store.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), CLI = path.resolve(HERE, "..", "backlog.mjs");

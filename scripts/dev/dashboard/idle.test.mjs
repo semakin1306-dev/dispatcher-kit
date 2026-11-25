@@ -87,13 +87,31 @@ describe("untriedSteps — толкать ли поезд", () => {
 describe("mergedBranches — какие ветки влил прогон", () => {
     test("кнопка «Влить» и поезд", () => {
         assert.deepEqual(mergedBranches({ steps: [{ cmd: "git", args: ["merge", "--no-ff", "dev/wv-0970-x", "-m", "merge: dev/wv-0970-x"] }] }), ["dev/wv-0970-x"]);
-        assert.deepEqual(mergedBranches({ steps: [{ cmd: "git", args: ["merge", "--no-ff", "dev/a", "-m", "m"] }, { cmd: "git", args: ["merge", "--no-ff", "dev/b", "-m", "m"] }] }), ["dev/a", "dev/b"]);
+        assert.deepEqual(
+            mergedBranches({
+                steps: [
+                    { cmd: "git", args: ["merge", "--no-ff", "dev/a", "-m", "m"] },
+                    { cmd: "git", args: ["merge", "--no-ff", "dev/b", "-m", "m"] },
+                ],
+            }),
+            ["dev/a", "dev/b"],
+        );
         const sha = "dab595183b56c355f6df98e57c0f71c2f84e9c82";
         assert.deepEqual(mergedBranches({ steps: [{ cmd: "git", args: ["merge", "--no-ff", sha, "-m", "m"], branch: "dev/tr-x" }] }), ["dev/tr-x"]);
         assert.deepEqual(mergedBranches({ steps: [{ cmd: "git", args: ["merge", "--no-ff", sha, "-m", "m"] }] }), []);
     });
     test("выкат (merge staging в main), перемотка, другие шаги — не ветки волн", () => {
-        assert.deepEqual(mergedBranches({ steps: [{ cmd: "git", args: ["fetch", "origin"] }, { show: "проверка", js: () => { } }, { cmd: "git", args: ["merge", "--no-ff", "staging", "-m", "release"] }, { cmd: "git", args: ["merge", "--ff-only", "origin/staging"] }] }), []);
+        assert.deepEqual(
+            mergedBranches({
+                steps: [
+                    { cmd: "git", args: ["fetch", "origin"] },
+                    { show: "проверка", js: () => {} },
+                    { cmd: "git", args: ["merge", "--no-ff", "staging", "-m", "release"] },
+                    { cmd: "git", args: ["merge", "--ff-only", "origin/staging"] },
+                ],
+            }),
+            [],
+        );
         assert.deepEqual(mergedBranches({}), []);
         assert.deepEqual(mergedBranches(null), []);
     });

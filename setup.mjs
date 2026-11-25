@@ -91,7 +91,12 @@ export function apply({ repo, given, force = false, branches = false, dryRun = f
   const { ask } = planQuestions(loadQuiz(), suggestAnswers(facts, {}), { facts })
   const filled = (v) => Array.isArray(v) ? v.length > 0 : v != null && v !== "" && v !== false && v !== "none"
   const unanswered = ask.filter((q) => !(q.id in human) && !(q.dependsOn && q.dependsOn in human && !filled(human[q.dependsOn]))).map((q) => q.id)
-  if (unanswered.length && !acceptSuggested) throw new Error("нет ответов на вопросы: " + unanswered.join(", ") + "\nЗадайте их человеку и добавьте в файл ответов. Принять предложенное без вопроса — флаг --accept-suggested.")
+  if (unanswered.length && !acceptSuggested)
+    throw new Error(
+      "нет ответов на вопросы: " +
+        unanswered.join(", ") +
+        "\nЗадайте их человеку и добавьте в файл ответов. Принять предложенное без вопроса — флаг --accept-suggested.",
+    )
 
   const { project, settings, problems } = buildProject({ repo: facts.repo, answers: mergeAnswers(suggestions, human), facts })
   if (problems.length) throw new Error("конфиг не собрать:\n" + problems.map((p) => "  • " + p).join("\n"))
@@ -127,12 +132,36 @@ async function main(argv) {
     if (typeof args.answers !== "string") throw new Error("нужен файл ответов: --answers <файл.json>")
     const given = readJsonFile(path.resolve(args.answers))
     const r = apply({ repo: requireRepo(args), given, force: !!args.force, branches: !!args.branches, dryRun: !!args["dry-run"], acceptSuggested: !!args["accept-suggested"] })
-    if (r.dryRun) { console.log("Сухой прогон — ничего не записано. Конфиг был бы таким:\n" + JSON.stringify(r.project, null, 2) + "\n\nПереключатели:\n" + JSON.stringify(r.settings, null, 2)); return 0 }
+    if (r.dryRun) {
+      console.log(
+        "Сухой прогон — ничего не записано. Конфиг был бы таким:\n" +
+          JSON.stringify(r.project, null, 2) +
+          "\n\nПереключатели:\n" +
+          JSON.stringify(r.settings, null, 2),
+      )
+      return 0
+    }
     console.log("Записано:\n" + r.written.map((f) => "  " + f).join("\n"))
     if (r.warnings.length) console.log("\nПредупреждения:\n" + formatIssues(r.warnings))
     for (const b of r.branches) console.log(`Ветка-роль ${b.role} → ${b.want}: ${b.created ? "создана" : b.state === "ok" ? "уже есть" : "не создана (" + b.state + ")"}`)
     const sk = r.skills.filter((x) => x.status !== "skipped")
-    if (sk.length) console.log("\nНавыки агента (" + path.dirname(path.dirname(sk[0].file)) + "): " + sk.map((x) => x.name + (x.status === "written" ? "" : x.status === "same" ? " (без изменений)" : " (НЕ тронут: там чужой навык с этим именем)")).join(", "))
+    if (sk.length)
+      console.log(
+        "\nНавыки агента (" +
+          path.dirname(path.dirname(sk[0].file)) +
+          "): " +
+          sk
+            .map(
+              (x) =>
+                x.name +
+                (x.status === "written"
+                  ? ""
+                  : x.status === "same"
+                    ? " (без изменений)"
+                    : " (НЕ тронут: там чужой навык с этим именем)"),
+            )
+            .join(", "),
+      )
     console.log("\nПроверка установки:\n")
     const d = await runDoctor({})
     console.log(formatDoctor(d))

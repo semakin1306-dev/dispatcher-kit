@@ -18,10 +18,23 @@ export async function graphData(view) {
     const r = await git(MAIN, ["log", "--topo-order", "-n", "90", "--format=%h%x09%p%x09%D%x09%s%x09%cr", ...refs], 60000);
     const commits = (r.out || "").split("\n").filter(Boolean).map((l) => {
         const [sha, ps, d, subject, when] = l.split("\t");
-        return { sha, parents: ps ? ps.split(" ") : [], refs: (d || "").split(", ").map((x) => x.replace(/^HEAD -> /, "").trim()).filter((x) => x && x !== "HEAD" && !x.startsWith("origin/") && !x.startsWith("tag: ")), subject: subject || "", when: when || "" };
+        return {
+            sha,
+            parents: ps ? ps.split(" ") : [],
+            refs: (d || "")
+                .split(", ")
+                .map((x) => x.replace(/^HEAD -> /, "").trim())
+                .filter((x) => x && x !== "HEAD" && !x.startsWith("origin/") && !x.startsWith("tag: ")),
+            subject: subject || "",
+            when: when || "",
+        };
     });
     const lines = (r) => new Set((r.out || "").split("\n").map((x) => x.trim()).filter(Boolean));
-    const [mainR, stagR, ...slotR] = await Promise.all([git(MAIN, ["log", "main", "--first-parent", "--format=%h", "-n", "700"], 60000), git(MAIN, ["log", "staging", "--first-parent", "--format=%h", "-n", "700"], 60000), ...slots.map((t) => git(MAIN, ["log", "staging.." + t.branch, "--format=%h", "-n", "200"], 60000))]);
+    const [mainR, stagR, ...slotR] = await Promise.all([
+        git(MAIN, ["log", "main", "--first-parent", "--format=%h", "-n", "700"], 60000),
+        git(MAIN, ["log", "staging", "--first-parent", "--format=%h", "-n", "700"], 60000),
+        ...slots.map((t) => git(MAIN, ["log", "staging.." + t.branch, "--format=%h", "-n", "200"], 60000)),
+    ]);
     const mainS = lines(mainR), stagS = lines(stagR), slotS = slotR.map(lines);
     for (const c of commits) {
         const si = slotS.findIndex((x) => x.has(c.sha));

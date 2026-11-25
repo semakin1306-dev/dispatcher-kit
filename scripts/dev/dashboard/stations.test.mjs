@@ -269,3 +269,57 @@ test("станции модулей: без модуля выката нет «�
         assert.deepEqual(stagesOf({}, {}, {}).map((x) => x.id), STATIONS.map((x) => x.id));
     } finally { M.setModuleStates({ review: true, release: true, accept: true }) }
 });
+
+test("план волны: файл с номером волны, но не .md — не план; поиск один для слота, вагона и признака «план есть»", async () => {
+    const { planExists, planFileOf, wagonPlanFile } = await import("./stations.mjs");
+    const dir = path.join(TMP, "plan-slot"), waves = path.join(dir, ".claude", "plans", "waves");
+    fs.mkdirSync(waves, { recursive: true });
+    const t = { key: "wv9876-plan", path: dir, wave: "WV-9876" };
+    fs.writeFileSync(path.join(waves, "WV-9876-notes.txt"), "черновик\n");
+    assert.equal(planFileOf(t), null);
+    assert.equal(wagonPlanFile(t, "WV-9876"), null);
+    assert.equal(planExists(t), false, "заметка рядом с планом — не план");
+    fs.writeFileSync(path.join(waves, "WV-9876-plan.md"), "# план\n");
+    assert.equal(planFileOf(t), path.join(waves, "WV-9876-plan.md"));
+    assert.equal(wagonPlanFile(t, "wv-9876"), path.join(waves, "WV-9876-plan.md"));
+    assert.equal(planExists(t), true);
+});
+
+test("влив ветки в staging: точное имя ветки, у поезда — вагон дерева; префикс чужой ветки не совпадает", async () => {
+    const { treeMerge, treeMerges, standFor, prodFor, stagingFor } = await import("./stations.mjs");
+    const { branchOfMerge, trainMergeMessage } = await import("./train-rules.mjs");
+    // Все темы merge-коммитов, которые пишет сама диспетчерская (pipeline.recipe, кнопка «влить всё», поезд проверки) и git.
+    assert.equal(branchOfMerge("merge: dev/wv-0001-a"), "dev/wv-0001-a");
+    assert.equal(branchOfMerge("merge: dev/wv-0010-orders-list — П1"), "dev/wv-0010-orders-list");
+    assert.equal(branchOfMerge(trainMergeMessage("dev/tr-web", "Т1", 4, ["WV-0015", "WV-0016"])), "dev/tr-web");
+    assert.equal(branchOfMerge("Merge branch 'dev/wv-0900-x' into staging"), "dev/wv-0900-x");
+    assert.equal(branchOfMerge("train: dev/wv-0002-b"), "dev/wv-0002-b");
+    assert.equal(branchOfMerge("release: staging -> main"), "");
+    const at = (subject, ct) => ({ sha: String(ct).padStart(40, "0"), ct, subject });
+    const merges = [
+        at("merge: dev/wv-0001-ab", 5),
+        at(trainMergeMessage("dev/tr-x", "Т1", 2, ["WV-0002"]), 4),
+        at(trainMergeMessage("dev/tr-x", "Т1", 1, ["WV-0001"]), 3),
+        at("merge: dev/tr-xy", 2),
+    ];
+    assert.equal(treeMerge({ branch: "dev/wv-0001-a" }, merges), null, "dev/wv-0001-a внутри dev/wv-0001-ab — не влив");
+    assert.equal(treeMerge({ branch: "dev/wv-0001-ab" }, merges).ct, 5);
+    assert.equal(treeMerge({ branch: "dev/tr-x", train: true, wagon: "WV-0001" }, merges).ct, 3, "у поезда — влив своего вагона");
+    assert.equal(treeMerge({ branch: "dev/tr-x", train: true, wagon: "WV-0003" }, merges), null, "вагон ещё не влит");
+    assert.equal(treeMerge({ branch: "staging" }, [at("merge: staging", 1)]), null);
+    assert.deepEqual(treeMerges({ branch: "dev/tr-x" }, merges).map((x) => x.ct), [4, 3], "dev/tr-xy — другая ветка");
+    // Станции «В staging», «На стенде», «В проде» берут тот же влив (чек-листов стенда в тесте нет — загрузку заменяет {}).
+    S.checklists ||= {};
+    const lone = { key: "wv0001-a", branch: "dev/wv-0001-a", ahead: 1, dirtyTracked: 0 }, tail = [at("merge: dev/wv-0001-ab", 5)];
+    assert.match((await stagingFor(lone, tail)).blocks[0].text, /ещё не влита/);
+    assert.deepEqual((await standFor(lone, tail)).blocks.find((b) => b.kind === "kv").items[1], ["слияние ветки в staging", "нет"]);
+    assert.deepEqual((await prodFor(lone, tail)).blocks[0].items[0], ["ветка в main", "не влита даже в staging"]);
+    const wagon3 = { key: "tr-x", branch: "dev/tr-x", train: true, wagon: "WV-0003", ahead: 0, dirtyTracked: 0 };
+    assert.deepEqual((await standFor(wagon3, merges)).blocks.find((b) => b.kind === "kv").items[1], ["слияние ветки в staging", "нет"]);
+});
+
+test("толчок автопоезда: у станции без названия в причине — её id, а не undefined", async () => {
+    const { kickWhy } = await import("./autochain.mjs");
+    assert.equal(kickWhy("проверка простоя", { id: "regress" }), "проверка простоя: поезд стоял на «regress»");
+    assert.equal(kickWhy("проверка простоя", { id: "commit", label: "Коммит" }), "проверка простоя: поезд стоял на «Коммит»");
+});

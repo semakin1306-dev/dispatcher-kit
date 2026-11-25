@@ -17,6 +17,9 @@ import { fileURLToPath } from "node:url"
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, "..", "..")
 const GOLDEN = path.join(ROOT, "test", "fixtures", "prompts-golden.json")
+// Подсказки пишут время местным поясом (окно эпика у ретро): без закреплённого пояса эталон, снятый на одной машине,
+// расходится на раннерах CI в UTC. Node подхватывает смену TZ на ходу, а дат до этой строки ещё никто не создавал.
+process.env.TZ = "UTC"
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dk-prompts-"))
 process.env.DASH_DATA = path.join(TMP, "data")
 process.env.DASH_DRY = "1"
@@ -139,6 +142,22 @@ test("эталон: итоговые подсказки агентам не из
   const want = JSON.parse(fs.readFileSync(GOLDEN, "utf8"))
   assert.deepEqual(Object.keys(got).sort(), Object.keys(want).sort(), "набор случаев эталона")
   for (const k of Object.keys(want)) assert.equal(got[k], want[k], "подсказка «" + k + "» разошлась с эталоном")
+})
+
+// Перечень «что снимает принудительно» в подсказке оркестратора и FORCE_SOFT в relay.mjs уже расходились: подсказка
+// обещала одно, код снимал другое. Сверка в обе стороны — по человеческим названиям станций из FORCE_SOFT_LABELS.
+test("подсказка оркестратора: «ВЛИТЬ ПN ПРИНУДИТЕЛЬНО» снимает ровно станции FORCE_SOFT", () => {
+  assert.deepEqual(Object.keys(R.FORCE_SOFT_LABELS).sort(), [...R.FORCE_SOFT].sort(), "у каждой мягкой станции есть название")
+  const m = /«ВЛИТЬ ПN ПРИНУДИТЕЛЬНО»: это снимает только ([^;]+);/.exec(promptSource("orch-system"))
+  assert.ok(m, "в подсказке есть фраза «…ПРИНУДИТЕЛЬНО»: это снимает только …;»")
+  const said = m[1].split(/,\s*|\s+и\s+/).map((s) => s.trim()).filter(Boolean)
+  assert.deepEqual(said.sort(), Object.values(R.FORCE_SOFT_LABELS).sort())
+})
+
+// Эталон снят в UTC; та же сборка под другим поясом обязана давать тот же текст (пояс закреплён в начале файла).
+test("эталон не зависит от пояса машины: окно ретро — в закреплённом UTC", () => {
+  assert.equal(process.env.TZ, "UTC")
+  assert.match(cases()["retro.prompt"], /окно 01\.01 00:00 → 02\.01 00:00/)
 })
 
 // ── помощник prompt() ──

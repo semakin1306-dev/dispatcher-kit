@@ -278,3 +278,20 @@ test("cherryMerged — вся ветка зависимости в staging по 
     assert.equal(P.cherryMerged({ ok: false, out: "" }), false);
     assert.equal(P.cherryMerged(null), false);
 });
+
+test("trainValid: зелёный поезд без записи своего прогона (или без ветки состава) — «не годен», а не TypeError", async () => {
+    const { S } = await import("./state.mjs");
+    const saved = S.train;
+    try {
+        S.train = { status: "green", green: "j404", runs: [{ id: "j1", keys: [], fps: {}, staging: "" }] };
+        assert.deepEqual(await P.trainValid(), { ok: false, why: "прогона зелёного поезда нет в его записи — проверьте поезд заново" });
+        S.train = { status: "green", green: "j2" };
+        assert.equal((await P.trainValid()).ok, false, "записи прогонов нет совсем");
+        const { stagingTreeSha } = await import("./git.mjs");
+        S.train = { status: "green", green: "j3", runs: [{ id: "j3", keys: ["wv-gone"], fps: {}, staging: stagingTreeSha() }] };
+        assert.deepEqual(await P.trainValid(), { ok: false, why: "wv-gone: слота состава больше нет — проверьте поезд заново" });
+    }
+    finally {
+        S.train = saved;
+    }
+});

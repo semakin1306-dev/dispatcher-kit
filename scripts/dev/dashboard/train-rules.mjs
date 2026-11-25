@@ -380,6 +380,18 @@ export const wavesOfMerge = (subject) => {
     return m ? m[1].split(/[,\s]+/).map(normWave).filter(Boolean) : [];
 };
 
+/**
+ * Ветка, которую влил merge-коммит, по его теме → имя ветки или "". Темы, которые пишет сама диспетчерская:
+ * «merge: <ветка>» (влив слота, pipeline.recipe и кнопка «влить всё»), «merge: <ветка> — поезд Т1#3: WV-…»
+ * (trainMergeMessage), «train: <ветка>» (состав проверки поезда, в staging не попадает); и тема git по умолчанию
+ * «Merge branch '<ветка>' into staging» (влив руками). Сравнивать ветку надо целиком: поиск подстроки находил
+ * dev/wv-0001-a внутри dev/wv-0001-ab.
+ */
+export const branchOfMerge = (subject) => {
+    const s = String(subject || ""), m = /^(?:merge|train): (\S+)/.exec(s) || /^Merge branch '([^']+)'/.exec(s);
+    return m ? m[1] : "";
+};
+
 export const waveTrailer = (wave) => "Wave: " + normWave(wave);
 
 /**

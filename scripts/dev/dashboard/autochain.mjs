@@ -580,6 +580,10 @@ export function jobsForState() {
     return jobList().filter((j) => out.has(j));
 }
 
+// Причина толчка для журнала и автопоезда. Название станции бывает не у всех (станция без label в снимке): тогда — её id,
+// иначе в причину попадало «undefined».
+export const kickWhy = (why, stage) => why + ": поезд стоял на «" + (stage.label || stage.id) + "»";
+
 /**
  * Толчок застрявшим (таймер и события): слоты с непройденными станциями, где ничего не идёт, агент свободен и есть
  * шаг, который автопоезд на этом коде ещё не пробовал. Толчки разнесены по 20 с, чтобы не поднять все прогоны разом.
@@ -614,7 +618,7 @@ export function kickStalled(why) {
         const commitTried = jobList().some((j) => j.tree === x.slot && j.task === 'commit' && FINAL.includes(j.status) && j.fpStart && j.fpStart === t.fp);
         if (!untriedSteps({ ...t, key: x.slot }, need.map((s) => s.id), autoRan, { presets: (PRESETS[x.slot] || []).length, commitTried }).length)
             continue;
-        const w = why + ': поезд стоял на «' + need[0].label + '»';
+        const w = kickWhy(why, need[0]);
         logEvent("chain.kick", { tree: x.slot, why: w });
         setTimeout(() => autoChain(x.slot, w).catch((e) => console.error('толчок поезда:', e.message)), (i++) * 20000);
     }

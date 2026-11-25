@@ -360,6 +360,9 @@ async function agentCommitRun(key) {
     return { code: 200, body: { ok: true, job: publicJob(job), files: work.length } };
 }
 
+// Сколько шаг коммита ждёт конца текущего хода агента и как часто смотрит (объект, а не константы: тест укорачивает срок).
+export const COMMIT_WAIT = { ms: 20 * 60000, step: 2000 };
+
 /**
  * Шаг задачи коммита: агенту — просьба с разрешением на коммит (commitUntil, COMMIT_GRANT_MS), дальше ждём, пока
  * сдвинется HEAD. Подпись пишет агент, диспетчерская только проверяет, что коммит появился.
@@ -374,9 +377,15 @@ export async function commitStep(t, write) {
     let a = agents.get(t.key);
     if (!a || a.dead)
         a = await ensureAgent(t.key);
-    // Просьба не должна попасть в середину чужого хода: ждём конца текущего ответа (до 20 минут).
-    for (let i = 0; a.busy && !a.pinging && i < 600; i++)
-        await new Promise((r) => setTimeout(r, 2000));
+    // Просьба не должна попасть в середину чужого хода: ждём конца текущего ответа (до COMMIT_WAIT.ms).
+    for (const t0 = Date.now(); a.busy && !a.pinging && Date.now() - t0 < COMMIT_WAIT.ms;)
+        await new Promise((r) => setTimeout(r, COMMIT_WAIT.step));
+    // Не дождались — отказ, а не просьба поверх хода: сообщение посреди работы агент смешал бы со своей задачей, а
+    // разрешение на коммит (commitUntil) накрыло бы и его собственные правки. Ошибка шага — красная задача с этой причиной
+    // на странице и в журнале; повторить можно кнопкой или «КОММИТ ПN», когда агент освободится.
+    if (a.busy && !a.pinging)
+        throw new Error("агент " + t.tag + " занят своим ходом дольше " + Math.round(COMMIT_WAIT.ms / 60000) + " мин — просьба о коммите не отправлена;"
+            + " повторите коммит, когда агент допишет ответ");
     a.commitUntil = Date.now() + COMMIT_GRANT_MS;
     deliver(a, commitAsk(t, br, work));
     recordRelay(t.key, "git", work.length, "commit");
@@ -415,8 +424,16 @@ export async function commitStep(t, write) {
 // Строка команды — целиком отдельной строкой (разметка markdown вокруг допускается): упоминание в тексте не исполняется.
 export const ORCH_GIT_RE = /^[\s>*_`-]*(ВЛИТЬ|КОММИТ)\s+([ПТ]\d+)(\s+ПРИНУДИТЕЛЬНО)?[\s.*_`]*$/gim;
 export const OWNER_WORD = { ВЛИТЬ: /вле[йи]|влить|влива|слей|слить|мерж|merge/i, КОММИТ: /коммит|закоммит|commit/i };
-// Что снимает «принудительно»: регресс, ревью, гарды и отметку «готово». Конфликт, незакоммиченное и порядок — нет.
-export const FORCE_SOFT = new Set(["regress", "review", "sec", "done"]);
+// Что снимает «принудительно» — только мягкие проверки влива (id из pipeline.preflightRun → человеческое название):
+// sec — гарды, done — доклад агента «ГОТОВО» по вагону поезда (его снимает и кнопка «Влить всё равно»). Конфликт,
+// незакоммиченное и порядок волн — нет. Названия идут и в подсказку оркестратора (orch-system.md), и в отказ команды;
+// prompts.test.mjs сверяет подсказку с этим списком, чтобы обещание оркестратору не разошлось с кодом.
+export const FORCE_SOFT_LABELS = { regress: "регресс", review: "ревью", sec: "гарды", done: "доклад «ГОТОВО» по вагону поезда" };
+export const FORCE_SOFT = new Set(Object.keys(FORCE_SOFT_LABELS));
+const forceSoftText = () => {
+    const v = Object.values(FORCE_SOFT_LABELS);
+    return v.slice(0, -1).join(", ") + " и " + v[v.length - 1];
+};
 // Слово владельца действует 12 часов от момента, когда он его написал.
 export const OWNER_WORD_TTL_MS = 12 * 3600e3;
 
@@ -884,7 +901,7 @@ async function orchGitRun(a, text, fails, flush = () => { }, turn = "") {
                     "не исполнено: " +
                         bad.map((c) => c.text + (c.detail ? " (" + c.detail + ")" : "")).join("; ") +
                         (fail.some((c) => FORCE_SOFT.has(c.id)) && !force
-                            ? ". Регресс, ревью и гарды снимаются словом владельца «принудительно»."
+                            ? ". " + forceSoftText().replace(/^./, (c) => c.toUpperCase()) + " снимаются словом владельца «принудительно»."
                             : ""),
                     false,
                 );
@@ -1558,8 +1575,9 @@ export async function relayNow(from, to, text, rh, now = false) {
     const tf = treeByKey(from), tt = treeByKey(to);
     let a = agents.get(to), start = "";
     if (!isOrch(to) && tt && tt.kind === "slot") {
-        const prompt = !(a && !a.dead) && !agentSession(to) ? slotPromptText(to) : "";
-        const d = relayToSlot({ folder: !!agentCwd(to), preparing: slotPreparing(to), live: !!(a && !a.dead), session: !!agentSession(to), prompt: !!prompt });
+        // startText, а не prompt: имя prompt занято импортом из prompts.mjs (сборка подсказок из файлов).
+        const startText = !(a && !a.dead) && !agentSession(to) ? slotPromptText(to) : "";
+        const d = relayToSlot({ folder: !!agentCwd(to), preparing: slotPreparing(to), live: !!(a && !a.dead), session: !!agentSession(to), prompt: !!startText });
         if (d.act === "wait")
             return relayWaitPrep(from, to, text, d.why);
         if (d.act === "start" && stubHold(to)) {
@@ -1575,7 +1593,7 @@ export async function relayNow(from, to, text, rh, now = false) {
             return relayWaitPrep(from, to, text, "план волны — заготовка", "когда план будет заполнен");
         }
         if (d.act === "start")
-            start = prompt;
+            start = startText;
     }
     if (!a || a.dead)
         a = await ensureAgent(to);
@@ -2153,6 +2171,22 @@ export function nudgeIdleSlots(now = Date.now(), send = sendWhenFree) {
 
 // Пара «от>кому» → времена автопередач за последний час: защита от пинг-понга двух агентов без человека.
 export const autoRelayLog = new Map();
+export const AUTO_RELAY_WINDOW_MS = 3600e3;
+
+/**
+ * Записать автопередачу пары. Заодно убрать из карты всё старше окна: решения принимаются только по последнему часу,
+ * а пары живут, пока живут слоты и эпики, — без уборки карта росла бы с каждой новой парой до перезапуска сервера.
+ */
+export function noteAutoRelay(pk, at = Date.now()) {
+    for (const [k, v] of autoRelayLog) {
+        const fresh = v.filter((t) => at - t < AUTO_RELAY_WINDOW_MS);
+        if (fresh.length)
+            autoRelayLog.set(k, fresh);
+        else
+            autoRelayLog.delete(k);
+    }
+    autoRelayLog.set(pk, [...(autoRelayLog.get(pk) || []), at]);
+}
 
 /**
  * Автопередача карточки при автопоезде. Стоп, если за час 12+ передач туда и 8+ обратно (пинг-понг) или 15 в одну сторону
@@ -2164,8 +2198,8 @@ export function autoRelay(id, tries = 0) {
     const card = inboxCards().find((x) => x.id === id && x.kind === "relay");
     if (!card)
         return;
-    const pk = card.tree + ">" + card.to, now = Date.now(), log = (autoRelayLog.get(pk) || []).filter((t) => now - t < 3600e3);
-    const back = (autoRelayLog.get(card.to + ">" + card.tree) || []).filter((t) => now - t < 3600e3);
+    const pk = card.tree + ">" + card.to, now = Date.now(), log = (autoRelayLog.get(pk) || []).filter((t) => now - t < AUTO_RELAY_WINDOW_MS);
+    const back = (autoRelayLog.get(card.to + ">" + card.tree) || []).filter((t) => now - t < AUTO_RELAY_WINDOW_MS);
     if (log.length >= 12 && back.length >= 8) {
         card.note = "автопередача остановлена: за час " + log.length + " туда и " + back.length + " обратно между этой парой — похоже на пинг-понг, решите сами";
         saveInbox();
@@ -2177,10 +2211,8 @@ export function autoRelay(id, tries = 0) {
         return;
     }
     inboxSend(id).then((r) => {
-        if (r.code === 200) {
-            log.push(now);
-            autoRelayLog.set(pk, log);
-        }
+        if (r.code === 200)
+            noteAutoRelay(pk, now);
         if (r.code === 409 && !r.body.already && tries < 90)
             setTimeout(() => autoRelay(id, tries + 1), 20000);
     }).catch((e) => console.error("автопередача:", e.message));
@@ -2217,11 +2249,8 @@ export function drainQueued(to) {
     const next = queued[0];
     draining.add(to);
     doRelay(next.tree, next.to, next.text).finally(() => draining.delete(to)).then((r) => {
-        if (r.code === 200) {
-            const pk = next.tree + ">" + next.to, log = autoRelayLog.get(pk) || [];
-            log.push(Date.now());
-            autoRelayLog.set(pk, log);
-        }
+        if (r.code === 200)
+            noteAutoRelay(next.tree + ">" + next.to);
         else if (r.code !== 202) {
             next.queued = 0;
             next.note = "из очереди не ушло: " + ((r.body && r.body.error) || r.code) + " — отправьте кнопкой";
@@ -2290,9 +2319,7 @@ export async function deliverOrchBatch(to, cards) {
         recordRelay(p.c.tree, to, p.c.text.length);
         logEvent("relay.sent", { from: p.c.tree, to, chars: p.c.text.length, hash: h, batched: true, n: parts.length });
         keepCards((x) => x !== p.c);
-        const pk = p.c.tree + ">" + to, log = autoRelayLog.get(pk) || [];
-        log.push(Date.now());
-        autoRelayLog.set(pk, log);
+        noteAutoRelay(p.c.tree + ">" + to);
         const sa = agents.get(p.c.tree);
         if (sa && !sa.dead)
             push(sa, {

@@ -659,7 +659,6 @@ export async function pushMainRetry(w, { push, localSha, remoteSha, cancelled = 
 // ───────────────────────────── порядок вливов: подсказки по парам веток ─────────────────────────────
 
 export const ORDER_DISMISS_FILE = path.join(DATA, "order-dismissed.json");
-export const pairConflict = new Map();
 
 /**
  * Зона файла для подсказок порядка: папка третьего уровня (`apps/api/orders`). Две ветки, правящие одну зону, скорее
@@ -1066,12 +1065,18 @@ export function trainFinished(job) {
 export async function trainValid() {
     if (!S.train || S.train.status !== "green")
         return { ok: false, why: "поезд не зелёный" };
-    const r = S.train.runs.find((x) => x.id === S.train.green);
+    // Записи прогона может не быть (файл поезда обрезан или правлен руками), слот состава могли удалить: это «не годен»
+    // с причиной, а не TypeError посреди влива по кнопке.
+    const r = (S.train.runs || []).find((x) => x.id === S.train.green);
+    if (!r)
+        return { ok: false, why: "прогона зелёного поезда нет в его записи — проверьте поезд заново" };
     if (r.staging !== stagingTreeSha())
         return { ok: false, why: "staging сдвинулся после проверки поезда — проверьте заново" };
-    for (const k of r.keys) {
+    for (const k of r.keys || []) {
         const t = treeByKey(k);
-        if (await codeFp(t.path, true) !== r.fps[k])
+        if (!t)
+            return { ok: false, why: k + ": слота состава больше нет — проверьте поезд заново" };
+        if (await codeFp(t.path, true) !== (r.fps || {})[k])
             return { ok: false, why: t.tag + ": код менялся после проверки поезда" };
     }
     return { ok: true, keys: r.keys };

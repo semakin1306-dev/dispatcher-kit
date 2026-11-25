@@ -32,7 +32,7 @@ import { autoAnswer } from "./auto-owner.mjs";
 import { branchChanges, workChanges } from "./changes.mjs";
 import { ANSI, DATA, DRY, FINAL, logEvent, logPath, settings } from "./config.mjs";
 import { syncAskOf, syncMarkOf } from "./epics.mjs";
-import { wavesOfMerge } from "./train-rules.mjs";
+import { branchOfMerge, wavesOfMerge } from "./train-rules.mjs";
 import { ACC_SPEC_RE, DOC_RE, SPEC_RE, specOnlyOf, buildInput, DIST_TASKS, buildStampOf, codeFp, jobFresh, productFiles, setBuildStamp } from "./fingerprint.mjs";
 import { firstCommitAt, git, stagingTreeSha, untrackedShim, withGitPriority } from "./git.mjs";
 import { addCard, ibId, inboxCards, keepCards } from "./inbox.mjs";
@@ -270,6 +270,20 @@ export async function stagingMerges() {
     return [...fp, ...side.filter((x) => !seen.has(x.sha))].sort((a, b) => b.ct - a.ct);
 }
 
+/** Все вливы ветки дерева (новые первыми): ветка из темы merge-коммита совпадает целиком, а не подстрокой. */
+export const treeMerges = (t, merges) => (t.branch ? merges.filter((x) => branchOfMerge(x.subject) === t.branch) : []);
+
+/**
+ * Влив дерева в staging → запись из stagingMerges или null. У поезда ветка общая на все вагоны, поэтому берётся влив
+ * с номером вагона дерева: прошлые вливы той же ветки — другие вагоны. Одна функция для снимка и станций «В staging»,
+ * «На стенде», «В проде», чтобы страница и вердикт не показывали разные вливы.
+ */
+export function treeMerge(t, merges) {
+    if (!t.branch || ["staging", "main", "HEAD"].includes(t.branch))
+        return null;
+    return treeMerges(t, merges).find((x) => !t.train || wavesOfMerge(x.subject).includes(t.wagon)) || null;
+}
+
 export const STAGING_MERGE_RE = /^(?:merge: (?:dev|hotfix)\/|Merge branch '(?:dev|hotfix)\/[^']+' into staging)/;
 
 export const orchDirOf = (t) => {
@@ -277,12 +291,12 @@ export const orchDirOf = (t) => {
     return (o && o.path) || (TREES[0] && TREES[0].path) || null;
 };
 
-/** Файл плана волны: сначала в папке слота, потом в основной папке, потом в папке эпика оркестратора. */
-export function planFileOf(t) {
-    const num = (t.wave || "").toUpperCase();
-    if (!num)
-        return null;
-    for (const base of [t.path, MAIN, orchDirOf(t)].filter(Boolean)) {
+/**
+ * Файл плана WV-NNNN в первой из папок bases, где он есть: <папка>/.claude/plans/waves/WV-NNNN*.md. Одна функция на все
+ * поиски плана — раньше их было три, и одна из них принимала за план любой файл с номером волны (заметку, картинку).
+ */
+function findPlan(num, bases) {
+    for (const base of bases.filter(Boolean)) {
         try {
             const d = path.join(base, ".claude", "plans", "waves"), f = fs.readdirSync(d).find((x) => x.toUpperCase().startsWith(num) && x.endsWith(".md"));
             if (f)
@@ -293,20 +307,16 @@ export function planFileOf(t) {
     return null;
 }
 
+/** Файл плана волны: сначала в папке слота, потом в основной папке, потом в папке эпика оркестратора. */
+export function planFileOf(t) {
+    const num = (t.wave || "").toUpperCase();
+    return num ? findPlan(num, [t.path, MAIN, orchDirOf(t)]) : null;
+}
+
 /** План вагона поезда: сначала папка эпика — планы вагонов пишет оркестратор, в ветку поезда они не попадают. */
 export function wagonPlanFile(t, wave) {
     const num = String(wave || "").toUpperCase();
-    if (!/^WV-\d{4}$/.test(num))
-        return null;
-    for (const base of [orchDirOf(t), t.path, MAIN].filter(Boolean)) {
-        try {
-            const d = path.join(base, ".claude", "plans", "waves"), f = fs.readdirSync(d).find((x) => x.toUpperCase().startsWith(num) && x.endsWith(".md"));
-            if (f)
-                return path.join(d, f);
-        }
-        catch { }
-    }
-    return null;
+    return /^WV-\d{4}$/.test(num) ? findPlan(num, [orchDirOf(t), t.path, MAIN]) : null;
 }
 
 export function planIsStubOf(t) {
@@ -324,13 +334,8 @@ export function planExists(t) {
     const num = (t.wave || "").toUpperCase();
     if (!num)
         return false;
-    for (const base of [t.path, MAIN, orchDirOf(t)].filter(Boolean)) {
-        try {
-            if (fs.readdirSync(path.join(base, ".claude", "plans", "waves")).some((f) => f.toUpperCase().startsWith(num)))
-                return true;
-        }
-        catch { }
-    }
+    if (planFileOf(t))
+        return true;
     const orchWaves = path.join(orchDirOf(t) || "", ".claude", "plans", "waves");
     try {
         return fs.readdirSync(orchWaves).filter((f) => /^(_EPIC|MASTER).*\.md$/i.test(f))
@@ -357,7 +362,7 @@ export async function withStages(t, merges) {
         await applyTrain(t);
     const auto = {};
     // Влив этой ветки; у поезда — только влив с номером вагона дерева: прошлые вливы той же ветки — другие вагоны.
-    const m = t.branch && !["staging", "main", "HEAD"].includes(t.branch) ? merges.find((x) => x.subject.includes(t.branch) && (!t.train || wavesOfMerge(x.subject).includes(t.wagon))) : null;
+    const m = treeMerge(t, merges);
     if (planExists(t))
         auto.plan = "найден файл плана волны";
     {
@@ -700,18 +705,18 @@ export async function withStages(t, merges) {
     // Влив есть, но впереди staging снова коммиты — волну открыли заново (reopened): станция «В staging» не пройдена.
     const landed = mergeLanded(t, m);
     if (m) {
-        t.merge = { sha: m.sha, ct: m.ct, all: merges.filter((x) => x.subject.includes(t.branch)).map((x) => x.sha) };
+        t.merge = { sha: m.sha, ct: m.ct, all: treeMerges(t, merges).map((x) => x.sha) };
         if (landed)
             auto.staging = `влито: ${m.sha.slice(0, 10)}`;
         else
             t.reopened = { ahead: t.ahead, sha: m.sha.slice(0, 10) };
     }
     if (t.train) {
-        t.trainMerges = merges.filter((x) => x.subject.includes(t.branch)).map((x) => x.sha);
+        t.trainMerges = treeMerges(t, merges).map((x) => x.sha);
         const lastDep = [...jobList()].reverse().find((j) => j.task === "deploy-staging" && j.status === "ok");
         // Вагоны на стенде: все их вливы были до начала последнего удачного выката стенда.
         t.standWaves = lastDep ? (t.wagons || []).map((w) => w.wave).filter((wv) => {
-            const mm = merges.filter((x) => x.subject.includes(t.branch) && x.subject.includes(wv));
+            const mm = treeMerges(t, merges).filter((x) => wavesOfMerge(x.subject).includes(wv));
             return mm.length && mm.every((x) => x.ct <= lastDep.startedAt);
         }) : [];
     }
@@ -1217,8 +1222,9 @@ export function testsFor(t) {
     return { blocks, actions: [{ id: "run-tests", label: "Запустить тесты волны" }] };
 }
 
-export async function stagingFor(t) {
-    const merges = await stagingMerges(), m = t.branch && !["staging", "main", "HEAD"].includes(t.branch) ? merges.find((x) => x.subject.includes(t.branch)) : null;
+// merges — список вливов (тест передаёт свой); по умолчанию — из git.
+export async function stagingFor(t, merges = null) {
+    const m = treeMerge(t, merges || (await stagingMerges()));
     if (!m)
         return {
             blocks: [
@@ -1239,8 +1245,8 @@ export async function stagingFor(t) {
     return { blocks: [{ kind: "kv", items: [["слияние", m.sha.slice(0, 10)], ["когда", new Date(m.ct).toLocaleString("ru-RU")]] }, { kind: "pre", title: "Что вошло", text: st.out.slice(0, 6000) }] };
 }
 
-export async function standFor(t) {
-    const merges = await stagingMerges(), m = t.branch ? merges.find((x) => x.subject.includes(t.branch)) : null;
+export async function standFor(t, merges = null) {
+    const m = treeMerge(t, merges || (await stagingMerges()));
     const dep = [...jobList()].reverse().find((j) => j.task === "deploy-staging" && ["ok", "fail", "running"].includes(j.status));
     const chk = checklistOf(chkKey(t.key, t.branch)), ag = agents.get(t.key), pending = !!(ag && !ag.dead && ag.capture && ag.capture.kind === "stand-checklist");
     const blocks = [{ kind: "kv", items: [["адрес стенда", STAND_URL || "не задан (release.stand.url)"], ["слияние ветки в staging", m ? "есть, " + new Date(m.ct).toLocaleString("ru-RU") : "нет"]] }];
@@ -1261,8 +1267,8 @@ export async function standFor(t) {
     };
 }
 
-export async function prodFor(t) {
-    const merges = await stagingMerges(), m = t.branch ? merges.find((x) => x.subject.includes(t.branch)) : null;
+export async function prodFor(t, merges = null) {
+    const m = treeMerge(t, merges || (await stagingMerges()));
     let inMain = false;
     if (m)
         inMain = (await git(MAIN, ["merge-base", "--is-ancestor", m.sha, "main"])).ok;

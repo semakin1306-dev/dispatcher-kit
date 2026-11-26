@@ -12,7 +12,8 @@ import { runOnce } from "../runtimes/index.mjs";
 import { PROJECT } from "../slots.mjs";
 import { moduleStates } from "../modules-catalog.mjs";
 import { enabled } from "./modules.mjs";
-import { ANSI, DATA, FINAL, logEvent, readLog, settings } from "./config.mjs";
+import { ANSI, DATA, FINAL, logEvent, readLog, settings, short } from "./config.mjs";
+import { reportBlockOf } from "./protocol.mjs";
 import { isOrch, treeByKey } from "./trees.mjs";
 import { codeFp } from "./fingerprint.mjs";
 import { exists, git } from "./git.mjs";
@@ -50,6 +51,17 @@ const planBody = (pf) => {
     }
 };
 
+/**
+ * Ответ автора на замечания ревью → { said — его ответы после замечаний, reply — блок доклада из последнего }. Дальше
+ * уходит только блок: раньше бралось всё, что агент писал после замечаний, с обрезом начала, и ревьюер получал
+ * рассуждения и пересказ инструментов, начатые посреди фразы.
+ */
+function authorReply(t) {
+    const a = agents.get(t.key), items = a ? a.items : [], i = items.map((x) => x.t === "user" && /Ревью|ревьюер/.test(String(x.text || ""))).lastIndexOf(true);
+    const said = i >= 0 ? items.slice(i + 1).filter((x) => x.t === "assistant" && String(x.text || "").trim()) : [];
+    return { said, reply: said.length ? reportBlockOf(said[said.length - 1].text) : "" };
+}
+
 export function reviewContext(t) {
     let plan = "";
     const pf = planFileOf(t);
@@ -71,18 +83,19 @@ export function reviewContext(t) {
                 (!t.train || ((j.wagons || {}).waves || []).includes(t.wagon)),
         );
     if (last) {
-        const a = agents.get(t.key), items = a ? a.items : [], i = items.map((x) => x.t === "user" && /Ревью|ревьюер/.test(String(x.text || ""))).lastIndexOf(true);
-        const reply = i >= 0 ? items.slice(i + 1).filter((x) => x.t === "assistant" && String(x.text || "").trim()).map((x) => x.text).join("\n").trim() : "";
+        const { said, reply } = authorReply(t);
         prev =
             "— Вердикт " +
             last.review.verdict +
             " (" +
             last.id +
             "):\n" +
-            String(last.review.text || "").slice(0, 3500) +
+            short(last.review.text || "", 3500) +
             (reply
-                ? "\n— Ответ автора:\n" + reply.slice(-4000)
-                : "\n— Ответа автора дашборд не видит (агент перезапускался) — суди по коду.");
+                ? "\n— Ответ автора (его доклад):\n" + short(reply, 4000)
+                : said.length
+                  ? "\n— Ответ автора без блока доклада — его ход сюда не передаётся, суди по коду."
+                  : "\n— Ответа автора дашборд не видит (агент перезапускался) — суди по коду.");
     }
     return { plan, prev };
 }
@@ -162,15 +175,20 @@ export function reviewEscalate(t) {
     if (jobList().some((j) => j.tree === t.key && j.task === "review" && !FINAL.includes(j.status)))
         return;
     const last = [...jobList()].reverse().find((j) => j.tree === t.key && j.task === "review" && j.review);
+    // Текст пишет диспетчерская, а не слот: так и подписано. Доводы автора — его доклад, а не «в его последнем ответе»:
+    // чат слота оркестратор не видит.
+    const { reply } = authorReply(t);
     const txt =
-        "Ответ слота " +
+        "[Диспетчерская] Ревью " +
         t.tag +
         " (" +
         t.key +
-        "): ревью дважды вернулось с вопросами, агент разобрал их (согласен с частью, с остальным — нет, доводы в его последнем ответе). Автопоезд третье ревью сам не ставит.\n\nПоследнее ревью (" +
+        ") дважды вернулось с вопросами, агент разобрал их (согласен с частью, с остальным — нет). Автопоезд третье ревью сам не ставит.\n\nПоследнее ревью (" +
         (last ? last.id : "?") +
         "):\n" +
-        String((last && last.review && last.review.text) || "").slice(0, 3000) +
+        short((last && last.review && last.review.text) || "", 3000) +
+        "\n\nДоклад автора после замечаний:\n" +
+        (reply ? short(reply, 4000) : "(блоком доклада автор не ответил — доводы смотри в коде ветки)") +
         "\n\nРеши: принять волну с этими разногласиями — отдельной строкой «ПРИНЯТЬ РЕВЬЮ " +
         t.tag +
         "» (дашборд отметит станцию, автопоезд поставит коммит); или назови пункт, который слот обязан поправить, — блоком slot:" +

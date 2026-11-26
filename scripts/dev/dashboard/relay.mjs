@@ -67,7 +67,7 @@ import {
 import { relayToSlot, rerunByChain, slotIdleNudge, slotIdleText, startHeldByStub } from "./slot-rules.mjs";
 import { autoChain, autoTrainOffFor, nextHint, runTask } from "./autochain.mjs";
 import { workChanges } from "./changes.mjs";
-import { ANSI, DATA, DRY, FINAL, logEvent, logPath, readLog, settings } from "./config.mjs";
+import { ANSI, DATA, DRY, FINAL, logEvent, logPath, readLog, settings, short } from "./config.mjs";
 import { PRESETS, TREES, epicOfKey, epicSlots, isOrch, orchKey, orchOfKey, trainWaveOf, treeByKey, viewEpic } from "./trees.mjs";
 import { DIST_TASKS, codeFp, jobFresh } from "./fingerprint.mjs";
 import { exists, git } from "./git.mjs";
@@ -82,12 +82,12 @@ import { SUITE_FAM, curSnapOf, failingSpecs, inheritedRed, jobCovers, knownRed, 
 import { dropSnap, kick, rebuild, rebuildFresh, snapNow } from "./snapshot.mjs";
 import { bumpVer } from "./events.mjs";
 import { digestSession } from "./digest-ledger.mjs";
-import { DECISION_HELP, FACTS_RULES_FULL, FACTS_RULES_SHORT, reportMessage, resultsMessage } from "./prompt.mjs";
+import { DECISION_HELP, FACTS_RULES_FULL, FACTS_RULES_SHORT, VERDICT_WORDS, reportMessage, resultsMessage, slotStateLine } from "./prompt.mjs";
 import { STAGES_FILE, SUMMARY_FILE, afterSlotTurn, markReviewAccepted, planExists, planFileOf, planIsStubOf, setSummary } from "./stations.mjs";
 import { TASKS, matchAny } from "./tasks.mjs";
 import { enabled } from "./modules.mjs";
 const reviewEnabled = () => enabled("review");
-import { DECISION_RE, TESTS_HEAD_RE, hasDecision, summaryOf, waitsHead } from "./protocol.mjs";
+import { BLOCK_RE, DECISION_RE, FENCE, TESTS_HEAD_RE, hasDecision, isReportBlock, reportBlockOf, summaryOf, waitsHead } from "./protocol.mjs";
 import { slotReset } from "./slot-reset.mjs";
 import { BACKLOG_KEY } from "./backlog-agent.mjs";
 import { backlogAfterTurn } from "./backlog.mjs";
@@ -105,8 +105,11 @@ const guardIds = () => [...GUARD_TASKS].filter((id) => TASKS[id]);
 // обычно — сводка раннера без самой ошибки.
 export const FAIL_LINE = /(^\s*●\s|^\s*FAIL\s|✗|\berror TS\d+|\bAssertionError\b|\bTypeError\b|\bReferenceError\b|^\s*Error:|Expected:|Received:|НОВЫЕ ошибки|ELIFECYCLE|Cannot find module)/i;
 
-/** Выжимка лога для агента: до 4 блоков вокруг строк ошибки (2 строки до, 22 после) и хвост; не длиннее 9000 знаков. */
-export function failureExcerpt(text) {
+/**
+ * Выжимка лога для агента: до 4 блоков вокруг строк ошибки (2 строки до, 22 после) и хвост; не длиннее max знаков.
+ * Обрез — только здесь и с пометкой: справка и итоги прогонов раньше дорезали выжимку ещё раз, посреди строки и молча.
+ */
+export function failureExcerpt(text, max = 9000) {
     const lines = text.replace(ANSI, "").split(/\r?\n/).map((l) => l.trimEnd());
     const blocks = [];
     let i = 0;
@@ -122,12 +125,10 @@ export function failureExcerpt(text) {
     const tail = lines.filter((l) => l.trim()).slice(-25).join("\n");
     let out = blocks.length ? "── причина (блоки с ошибками из лога) ──\n" + blocks.join("\n   ⋯\n") + "\n\n" : "── в логе не нашлось явных строк ошибки; ниже хвост ──\n";
     out += "── хвост лога ──\n" + tail;
-    return out.length > 9000 ? out.slice(0, 9000) + "\n… (обрезано)" : out;
+    return out.length > max ? out.slice(0, max) + "\n… (обрезано: всего " + out.length + " знаков)" : out;
 }
 
-export const FENCE = "`".repeat(3);
-// Блок кода ```язык … ```: язык «slot:П4» у оркестратора — адресат передачи, «text» у слота — доклад оркестратору.
-export const BLOCK_RE = new RegExp(FENCE + "([^\\n`]*)\\n([\\s\\S]*?)" + FENCE, "g");
+export { BLOCK_RE, FENCE };
 
 export function lastAnswer(a) {
     const x = lastAnswerItem(a);
@@ -322,7 +323,8 @@ export function gateFeedback({ tree, task, input = "", by, why, fp = "" }, now =
         ". " +
         gateHint(String(why), tag);
     logEvent("gate.notice", { to, tree, task, input });
-    _orchSteps.send(to, msg);
+    // Предмет сведения — слот и прогон: в копилке оркестратора новый отказ по тому же прогону заменит прежний.
+    _orchSteps.send(to, msg, { tree, what: task + "|" + input });
     return msg;
 }
 
@@ -479,9 +481,10 @@ export const ORCH_STEP_MS = Number(process.env.DASH_ORCH_STEP_MS) || 120000;
 
 // Внешние шаги команд оркестратора одним объектом: тесты подменяют их (проверку влива, постановку задачи, отправку) и
 // проверяют разбор команд без git и без агентов.
-export const _orchSteps = { preflight, recipe: (action, o) => recipe(action, o), agentCommit: (k) => agentCommit(k), reset: (o) => slotReset(o), enqueue: (o) => enqueue(o), send: (key, msg) => {
+export const _orchSteps = { preflight, recipe: (action, o) => recipe(action, o), agentCommit: (k) => agentCommit(k), reset: (o) => slotReset(o), enqueue: (o) => enqueue(o),
+    send: (key, msg, about) => {
         if (!DRY)
-            sendWhenFree(key, msg);
+            sendWhenFree(key, msg, about);
     },
     queueChecks: (key, need, direct) => mergeQueueChecks(key, need, direct) };
 
@@ -544,13 +547,13 @@ export function mergeRedOf(key, t) {
     for (const g of guardIds()) {
         const sec = [...jobList()].reverse().find((j) => j.tree === key && j.task === g && ["ok", "fail"].includes(j.status));
         if (sec && sec.status === "fail" && sec.fpEnd && sec.fpEnd === t.fp && realFail(sec)) {
-            red.sec = "гард «" + TASKS[g].label + "» красный на этом коде (" + sec.id + (sec.summary ? ": " + String(sec.summary).slice(0, 200) : "") + ")";
+            red.sec = "гард «" + TASKS[g].label + "» красный на этом коде (" + sec.id + (sec.summary ? ": " + short(sec.summary, 200) : "") + ")";
             break;
         }
     }
     if (t.verdict && t.verdict.regress === "fail") {
         const rg = (t.stages || []).find((x) => x.id === "regress");
-        red.regress = "регресс красный на этом коде" + (rg && rg.hint ? " (" + String(rg.hint).slice(0, 300) + ")" : "");
+        red.regress = "регресс красный на этом коде" + (rg && rg.hint ? " (" + short(rg.hint, 300) + ")" : "");
     }
     if (t.review && t.review.fresh && t.review.verdict && t.review.verdict !== "ЗА")
         red.review = "ревью «" + t.review.verdict + "» на этом коде — замечания к правке";
@@ -754,7 +757,8 @@ async function mergeWaitOne(key, w0) {
         const a = agents.get(orch);
         if (a)
             push(a, { id: "mwd-" + key + "-" + job.id, t: "status", text: "«ВЛИТЬ " + tag + "» по ожиданию: проверки зелёные — вливаю " + tt.branch + " в staging (" + job.id + ")." });
-        return _orchSteps.send(orch, "[Диспетчерская] Влито по ожиданию: «ВЛИТЬ " + tag + "» — проверки позеленели, " + tt.branch + " вливается в staging (" + job.id + ").");
+        return _orchSteps.send(orch, "[Диспетчерская] Влито по ожиданию: «ВЛИТЬ " + tag + "» — проверки позеленели, " + tt.branch + " вливается в staging (" + job.id + ").",
+            { tree: key });
     }
     if (d.act === "red") {
         upd({ state: "red", redFp: fp, why: d.why, need: d.need });
@@ -806,7 +810,7 @@ async function orchResetRun(a, text, fails, flush = () => { }, turn = "") {
             logEvent("orch.command", { tree: a.key, cmd: "СБРОСИТЬ", target: tag, ok, detail: String(s).slice(0, 200) });
             cmdDeadlock(a.key, "СБРОСИТЬ " + tag, s, ok);
             if (!ok)
-                fails.push("«СБРОСИТЬ " + tag + "»: " + String(s).slice(0, 400));
+                fails.push("«СБРОСИТЬ " + tag + "»: " + short(s, 400));
             return push(a, { id: "orst-" + once.replace(/\W/g, ""), t: "status", text: "«" + line + "»: " + s });
         };
         const t = TREES.find((x) => x.kind === "slot" && x.epic === epicOfKey(a.key) && x.tag.toLowerCase() === tag.toLowerCase());
@@ -853,7 +857,7 @@ async function orchGitRun(a, text, fails, flush = () => { }, turn = "") {
             logEvent("orch.command", { tree: a.key, cmd: op + (force ? " ПРИНУДИТЕЛЬНО" : ""), target: m[2], ok, detail: String(s).slice(0, 200) });
             cmdDeadlock(a.key, op + " " + m[2], s, ok);
             if (!ok)
-                fails.push("«" + op + " " + m[2] + "»: " + String(s).slice(0, 400));
+                fails.push("«" + op + " " + m[2] + "»: " + short(s, 400));
             return push(a, { id: "ogit-" + once.replace(/\W/g, ""), t: "status", text: "«" + m[0].replace(/[*_`>]/g, "").trim().replace(/^-\s*/, "") + "»: " + s });
         };
         const t = TREES.find((x) => x.kind === "slot" && x.epic === epicOfKey(a.key) && x.tag.toLowerCase() === m[2].toLowerCase());
@@ -1060,7 +1064,7 @@ export function inboxAfterTurn(a) {
         }
         // Доклад слота — первый блок ```text: одна передача на ход. Нужна ли она оркестратору (есть ли для него дело, новое ли
         // это) — решает relayDecision; «ЖДУ» и «Принял» без дела остаются в чате слота.
-        else if ((lang === "text" || lang === "") && body.length > 40 && !inboxCards().some((x) => x.kind === "relay" && x.tree === key)) {
+        else if (isReportBlock(lang, body) && !inboxCards().some((x) => x.kind === "relay" && x.tree === key)) {
             const lr = lastRelay.get(key), t = snapNow() && snapNow().trees.find((x) => x.key === key);
             const lastUser = [...a.items].reverse().find((x) => x.t === "user");
             const rd = relayDecision({ body, prev: lr, cur: t ? { fp: t.fp, sha: t.last && t.last.sha } : null, sync: !!lastUser && isSyncAsk(lastUser.text) });
@@ -1155,6 +1159,43 @@ export function saveRelayFacts() {
     S.relayFactsTimer = setTimeout(() => saveJson(RELAY_FACTS_FILE, Object.fromEntries(lastRelay)), 500);
 }
 
+/**
+ * Факты для вводной новой сессии оркестратора (prompt.mjs orchPrimer): строки слотов эпика по снимку, открытые вопросы
+ * владельцу и тупики правил, ожидания влива по его слову и сообщения владельца, на которые старая сессия не ответила, —
+ * целиком. Зовётся до остановки старой сессии: неотвеченное ищется в её ленте a. Ответы старой сессии сюда не берутся:
+ * обрывки рассуждений новая сессия читала как действующие решения, а решения живут в файлах плана эпика.
+ */
+export function orchPrimerFacts(orch, a) {
+    const ep = epicOfKey(orch), snap = snapNow(), cards = inboxCards();
+    const slots = TREES.filter((t) => !isOrch(t.key) && t.epic === ep), tagOf = (k) => (treeByKey(k) || {}).tag || k;
+    const keys = new Set([orch, ...slots.map((t) => t.key)]);
+    const lines = slots.map((t0) => {
+        const t = (snap && snap.trees.find((x) => x.key === t0.key)) || { ...t0, branch: t0.plannedBranch, exists: exists(t0.path), verdict: null };
+        const ag = agents.get(t0.key), st = ag && !ag.dead ? (ag.busy ? "busy" : "idle") : agentSession(t0.key) ? "session" : "";
+        const extra = [];
+        if (cards.some((c) => c.kind === "relay" && c.tree === t0.key && c.to === orch))
+            extra.push("его доклад тебе ждёт отправки — придёт следующим сообщением");
+        if (cards.some((c) => c.kind === "relay" && c.tree === orch && c.to === t0.key))
+            extra.push("твоя передача ему ждёт отправки");
+        return slotStateLine({ ...t, tag: t0.tag, key: t0.key }, st, extra);
+    });
+    const questions = [
+        ...cards.filter((c) => c.kind === "ownerq" && keys.has(c.tree)).map((c) => ({ who: c.tree === orch ? "твой" : tagOf(c.tree), text: c.text })),
+        ...cards.filter((c) => c.kind === "deadlock" && (keys.has(c.tree) || c.to === orch)).map((c) => ({ who: "тупик правил", text: c.what + ": " + c.why })),
+    ];
+    const waits = mergeWaits().filter((w) => w.orch === orch).map((w) => "ВЛИТЬ " + (w.tag || tagOf(w.key)) + " — слово владельца в силе до " + hhmmOf(w.until) + "; " +
+        (w.state === "red" ? "на паузе: " + (w.why || "красное на этом коде") : "ждёт зелёного: нет «" + (w.need || []).map((id) => MERGE_LABEL[id] || id).join("», «") + "»") + ".");
+    const owner = [];
+    for (let i = a.items.length - 1; i >= 0; i--) {
+        const x = a.items[i];
+        if (x.t === "assistant" && x.text && !x.live)
+            break;
+        if (x.t === "user" && x.owner && x.text)
+            owner.unshift(x.text);
+    }
+    return { slots: lines, questions, waits, owner };
+}
+
 /** Забыть, что видел оркестратор эпика: после ротации его сессии новая сессия должна получить справки целиком. */
 export function forgetRelayFacts(epicId) {
     for (const k of [...lastRelay.keys()])
@@ -1182,17 +1223,7 @@ export async function slotFacts(key, record = true) {
     if (!t || !t.exists)
         return "";
     const prev = lastRelay.get(key);
-    const v = t.verdict || {}, fwdp = (p) => String(p).replace(/\\/g, "/");
-    const W = {
-        ok: "зелёная на текущем коде",
-        green: "зелёные на текущем коде",
-        fail: "КРАСНЫЕ",
-        stale: "были на ДРУГОМ коде, файлы менялись после прогона",
-        nobuild: "зелёные, но без сборки на этом коде",
-        none: "НЕ ПРОГОНЯЛИСЬ",
-        notneeded: "не нужны",
-        requested: "попросили перепрогнать",
-    };
+    const v = t.verdict || {}, fwdp = (p) => String(p).replace(/\\/g, "/"), W = VERDICT_WORDS;
     const [st, df] = await Promise.all([git(t.path, ["status", "--porcelain"], 60000, true), git(t.path, ["diff", "--name-only", "staging...HEAD"])]);
     const dirty = (st.out || "").split("\n").filter((l) => l.trim() && !l.startsWith("??")).map((l) => l.slice(3));
     const added = (st.out || "").split("\n").filter((l) => l.startsWith("??")).map((l) => l.slice(3));
@@ -1218,7 +1249,7 @@ export async function slotFacts(key, record = true) {
                 j.id +
                 ", лог " +
                 fwdp(logPath(j.id)) +
-                (j.summary ? " — " + j.summary.slice(0, 160) : "");
+                (j.summary ? " — " + short(j.summary, 160) : "");
     const ses = digestSession({ to: orchOfKey(key), kind: "facts", seed: key + "|" + (t.fp || "") + "|" + (t.last ? t.last.sha : ""), settings, record });
     // Место правил сверки держим меткой: полные или короткие правила зависят от того, целиком ли справка, а это известно
     // только после factsDelta ниже. Правила — в начале, чтобы начало сообщения не плавало между передачами.
@@ -1285,7 +1316,7 @@ export async function slotFacts(key, record = true) {
     if (!pf)
         out.push("", "ТЗ волны: файла плана " + (t.wave || "") + " не нашлось.");
     else if (d.plan)
-        out.push("", "ТЗ волны — " + fwdp(pf) + (d.full ? "" : " (изменилось с прошлой справки)") + (planBody.length > 2500 ? " (начало, целиком — по пути)" : "") + ":", planBody.slice(0, 2500));
+        out.push("", "ТЗ волны — " + fwdp(pf) + (d.full ? "" : " (изменилось с прошлой справки)") + (planBody.length > 2500 ? " (начало, целиком — по пути)" : "") + ":", short(planBody, 2500));
     else
         out.push("", "ТЗ волны — " + fwdp(pf) + ": без изменений с прошлой справки.");
     try {
@@ -1335,7 +1366,7 @@ export async function slotFacts(key, record = true) {
             out.push("", "Причина красного — " + j.label + (j.input ? " " + j.input : "") + " (" + j.id + "): та же, что в прошлой справке; лог " + fwdp(logPath(j.id)) + ".");
             continue;
         }
-        out.push("", "Причина красного — " + j.label + (j.input ? " " + j.input : "") + " (" + j.id + "):", FENCE + "text", ses.log(j.id, (raw) => failureExcerpt(raw).slice(0, 1800), 1800), FENCE);
+        out.push("", "Причина красного — " + j.label + (j.input ? " " + j.input : "") + " (" + j.id + "):", FENCE + "text", ses.log(j.id, (raw) => failureExcerpt(raw, 1800), 1800), FENCE);
     }
     out[out.indexOf("@@RULES@@")] = d.full ? FACTS_RULES_FULL : FACTS_RULES_SHORT;
     if (record) {
@@ -1370,6 +1401,48 @@ export function unresolvedFails(key) {
             by.set(j.task + "|" + (j.input || ""), j);
     return [...by.values()].filter((j) => j.status === "fail" && !onlyStagingRed(j.id));
 }
+
+// Слот → когда ему последний раз ответили «доклад не передан»: агент, который снова ответил без блока, второй просьбы
+// сразу не получает — иначе два хода подряд без блока дали бы пинг-понг диспетчерской с агентом.
+const noBlockSeen = new Map();
+const NO_BLOCK_EVERY_MS = 10 * 60e3;
+
+/** Решение «передать», а блока доклада в ответе нет: не передавать ничего, агенту — просьба оформить блоком, в журнал — событие. */
+function noBlock(a, to, note, now = Date.now()) {
+    const key = a.key, again = now - (noBlockSeen.get(key) || 0) < NO_BLOCK_EVERY_MS;
+    logEvent("relay.noblock", { tree: key, to: to.key, asked: !again });
+    if (!again) {
+        noBlockSeen.set(key, now);
+        _orchSteps.send(key, prompt("relay-no-block", { to: to.tag }));
+    }
+    return note("доклад " + to.tag + " не передан: в ответе нет блока ```text" + (again ? " (просьба оформить блоком уже отправлена)" : " — агенту отправлена просьба оформить его блоком"));
+}
+
+/**
+ * Кто отправил передачу — подпись в начале сообщения адресату. Подписи только здесь: раньше любая передача, и
+ * автоматическая, подписывалась «кнопкой дашборда», и агент принимал решение автоматики за слово человека.
+ * owner — кнопка человека на странице; agent — решение самого отправителя («ДАЛЬШЕ: …»); auto — автоматика диспетчерской
+ * (автопоезд, очередь, передача после подготовки слота).
+ */
+export const RELAY_VIA = Object.freeze({ owner: "кнопкой владельца", agent: "по решению самого отправителя", auto: "диспетчерской автоматически" });
+
+/**
+ * Заголовок передачи: от кого и как передано. Начало «Ответ слота» у доклада оркестратору держим неизменным — по нему
+ * loops.mjs orchWake узнаёт доклад и будит оркестратора. from, to — деревья (key, tag, branch).
+ */
+export function relayHead(via, { from, to }) {
+    if (!Object.hasOwn(RELAY_VIA, via))
+        throw new Error("передача: неизвестное происхождение «" + via + "»");
+    const v = RELAY_VIA[via];
+    if (isOrch(to.key))
+        return prompt("relay-head-orch", { tag: from.tag, key: from.key, via: v });
+    if (isOrch(from.key))
+        return prompt("relay-head-slot", { via: v });
+    return prompt("relay-head-peer", { tag: from.tag, key: from.key, branch: from.branch || from.plannedBranch || "?", via: v });
+}
+
+/** Сообщение передачи целиком: заголовок происхождения, блок и (оркестратору) справка диспетчерской — и ничего больше. */
+export const relayMessage = ({ via, from, to, body, facts = "" }) => [relayHead(via, { from, to }), body, facts].filter(Boolean).join("\n\n");
 
 /**
  * Исполнить решение слота из последних строк ответа: ПЕРЕПРОГОН — перезапустить упавшее (при автопоезде — через него,
@@ -1422,22 +1495,30 @@ export async function applyDecision(a, text) {
         const ep = epicOfKey(key), to = word.startsWith("СЛОТУ") ? TREES.find((x) => (x.epic === ep && x.tag === m[2]) || x.key === m[2]) : treeByKey(orchOfKey(key));
         if (!to || to.key === key)
             return note("адресат «" + (m[2] || "") + "» не найден — передайте вручную");
+        // Карточки нет, когда блока не было или relayDecision счёл доклад «нечего передавать». Явное решение агента сильнее
+        // этого фильтра: фильтр отсеивает доклады, которые слот не адресовал, а «ДАЛЬШЕ: ОРКЕСТРАТОРУ» — адресовал. Но уходит
+        // только блок: остальной ответ — рассуждения и пересказ инструментов, и обрезок его конца адресат читал как доклад.
         let card = inboxCards().find((x) => x.kind === "relay" && x.tree === key);
         if (!card) {
-            const body = text.replace(DECISION_RE, "").trim().slice(-6000);
+            const body = reportBlockOf(text);
+            if (!body)
+                return noBlock(a, to, note);
             card = { id: ibId(), kind: "relay", tree: key, text: body, at: Date.now() };
             addCard(card);
         }
+        noBlockSeen.delete(key);
         card.to = to.key;
         card.toTag = to.tag;
         saveInbox();
-        const r = await doRelay(key, to.key, card.text).catch((e) => ({ code: 500, body: { error: e.message } }));
+        const r = await doRelay(key, to.key, card.text, false, false, "agent").catch((e) => ({ code: 500, body: { error: e.message } }));
         return note(
             r.code === 200
                 ? "передано " + to.tag + " само, по решению слота"
                 : r.code === 202
                   ? "в очереди к " + to.tag + ": уйдёт само, когда он допишет ответ"
-                  : "не передано " + to.tag + " (" + (r.body && r.body.error) + "): карточка ждёт кнопку",
+                  : r.body && r.body.already
+                    ? "не передано " + to.tag + ": " + r.body.error + " — повторно не шлю"
+                    : "не передано " + to.tag + " (" + (r.body && r.body.error) + "): карточка ждёт кнопку",
         );
     }
 }
@@ -1484,8 +1565,9 @@ export function markRelaySent(h) {
  * Передать блок агенту → { code, body }: 200 — передан, 202 — в очереди (адресат отвечает, пачка к оркестратору,
  * папка слота готовится), 409 — уже передан или передаётся, 404/400 — нет адресата или текст не годится.
  * force — передать повторно уже переданный; now — без пачки и без ожидания подготовки к перезапуску.
+ * via — кто отправил (RELAY_VIA): по умолчанию автоматика — «кнопкой» подписывает только тот, кто передал признак кнопки.
  */
-export async function doRelay(from, to, text, force, now = !!force) {
+export async function doRelay(from, to, text, force, now = !!force, via = "auto") {
     text = String(text || "").trim();
     if (to === "orchestrator")
         to = orchOfKey(from) || to;
@@ -1513,7 +1595,7 @@ export async function doRelay(from, to, text, force, now = !!force) {
         if (x.kind === "relay" && x.tree === from && x.to === to && relayHash(from, to, x.text) === rh)
             x.sending = Date.now();
     try {
-        return await relayNow(from, to, text, rh, now);
+        return await relayNow(from, to, text, rh, now, via);
     }
     finally {
         relayFlight.delete(rh);
@@ -1526,13 +1608,15 @@ export async function doRelay(from, to, text, force, now = !!force) {
 export const relayFlight = new Set();
 
 /** Адресат ещё не готов (папка слота готовится, план — заготовка): карточка ждёт, relayAfterPrep отправит её сама. */
-function relayWaitPrep(from, to, text, why, until = "когда подготовка кончится") {
+function relayWaitPrep(from, to, text, why, until = "когда подготовка кончится", via = "auto") {
     const tt = treeByKey(to);
     let card = inboxCards().find((x) => x.kind === "relay" && x.tree === from && x.to === to && relayNorm(x.text) === relayNorm(text));
     if (!card) {
         card = { id: ibId(), kind: "relay", tree: from, to, toTag: tt.tag, text, at: Date.now() };
         addCard(card);
     }
+    // Происхождение едет с карточкой: отложенная передача уходит потом с той же подписью, что при отправке.
+    card.via = via;
     if (!card.waitPrep)
         logEvent("relay.waitprep", { from, to, why });
     card.waitPrep = card.waitPrep || Date.now();
@@ -1552,7 +1636,7 @@ export function relayAfterPrep() {
         delete x.waitPrep;
         x.note = "";
         saveInbox();
-        doRelay(x.tree, x.to, x.text).then((r) => {
+        doRelay(x.tree, x.to, x.text, false, false, x.via).then((r) => {
             if (r.code >= 400 && r.code !== 409) {
                 x.note = "после подготовки не ушло: " + ((r.body && r.body.error) || r.code) + " — отправьте кнопкой";
                 saveInbox();
@@ -1571,7 +1655,7 @@ const stubHold = (to) => {
  * Доставка передачи (doRelay уже проверил адресата и повторы). Слоту без агента и сессии — сначала стартовый промпт,
  * передача — следом из очереди. Оркестратору доклады копятся ORCH_GATHER_MS и уходят пачкой, со справкой о слоте.
  */
-export async function relayNow(from, to, text, rh, now = false) {
+export async function relayNow(from, to, text, rh, now = false, via = "auto") {
     const tf = treeByKey(from), tt = treeByKey(to);
     let a = agents.get(to), start = "";
     if (!isOrch(to) && tt && tt.kind === "slot") {
@@ -1579,7 +1663,7 @@ export async function relayNow(from, to, text, rh, now = false) {
         const startText = !(a && !a.dead) && !agentSession(to) ? slotPromptText(to) : "";
         const d = relayToSlot({ folder: !!agentCwd(to), preparing: slotPreparing(to), live: !!(a && !a.dead), session: !!agentSession(to), prompt: !!startText });
         if (d.act === "wait")
-            return relayWaitPrep(from, to, text, d.why);
+            return relayWaitPrep(from, to, text, d.why, undefined, via);
         if (d.act === "start" && stubHold(to)) {
             const sa = agents.get(from);
             if (sa && !sa.dead && isOrch(from))
@@ -1590,7 +1674,7 @@ export async function relayNow(from, to, text, rh, now = false) {
                         tt.tag +
                         ": план волны — заготовка, агент слота не запущен. Заполните план (источник, решения, станции, манифест) — передача уйдёт сама.",
                 });
-            return relayWaitPrep(from, to, text, "план волны — заготовка", "когда план будет заполнен");
+            return relayWaitPrep(from, to, text, "план волны — заготовка", "когда план будет заполнен", via);
         }
         if (d.act === "start")
             start = startText;
@@ -1614,6 +1698,8 @@ export async function relayNow(from, to, text, rh, now = false) {
             card = { id: ibId(), kind: "relay", tree: from, to, toTag: tt.tag, text, at: Date.now() };
             addCard(card);
         }
+        // drainQueued и пачка подпишут передачу по карточке: кто отправил, тот и остаётся отправителем после очереди.
+        card.via = via;
         if (!card.queued)
             card.queued = Date.now();
         if (gather)
@@ -1678,23 +1764,7 @@ export async function relayNow(from, to, text, rh, now = false) {
     }
     if (a.busy && !a.pinging)
         return queueIt();
-    const msg =
-        (isOrch(to)
-            ? "Ответ слота " + tf.tag + " (" + from + "), передан кнопкой дашборда:\n\n"
-            : isOrch(from)
-              ? "Сообщение от оркестратора (передано кнопкой дашборда):\n\n"
-              : "Уточнение от соседнего слота " +
-                tf.tag +
-                " (" +
-                from +
-                ", ветка " +
-                (tf.branch || "?") +
-                "), передано диспетчерской. Ответь ему, если нужно, тем же способом: блок ```text и строка «ДАЛЬШЕ: СЛОТУ " +
-                tf.tag +
-                "».\n\n") +
-        text +
-        (facts ? "\n\n" + facts : "");
-    deliver(a, msg);
+    deliver(a, relayMessage({ via, from: tf, to: tt, body: text, facts }));
     if (!isOrch(to)) {
         try {
             const rq = parseRunRequests(text);
@@ -1713,7 +1783,7 @@ export async function relayNow(from, to, text, rh, now = false) {
     saveInbox();
     const r = recordRelay(from, to, text.length);
     markRelaySent(rh);
-    logEvent("relay.sent", { from, to, chars: text.length, hash: rh, batched: false, now });
+    logEvent("relay.sent", { from, to, chars: text.length, hash: rh, batched: false, now, via });
     return { code: 200, body: { ok: true, relay: r, hash: rh, to: agentPublic(to) } };
 }
 
@@ -1726,7 +1796,7 @@ export async function relayNow(from, to, text, rh, now = false) {
 export function resultsText(ids, { to = "", record = true } = {}) {
     const js = ids.map((id) => jobList().find((j) => j.id === id)).filter(Boolean), key = to || (js[0] && js[0].tree) || "";
     const ses = digestSession({ to: key, kind: "results", seed: js.map((j) => j.id).join(","), settings, record });
-    const legacy = (raw) => failureExcerpt(raw).slice(0, 3500);
+    const legacy = (raw) => failureExcerpt(raw, 3500);
     const word = { ok: "ЗЕЛЁНЫЙ", fail: "УПАЛ", skipped: "НЕТ ТЕСТОВ (шаблон не совпал ни с одним сьютом)" };
     const lines = js.map(
         (j) =>
@@ -2248,7 +2318,7 @@ export function drainQueued(to) {
     }
     const next = queued[0];
     draining.add(to);
-    doRelay(next.tree, next.to, next.text).finally(() => draining.delete(to)).then((r) => {
+    doRelay(next.tree, next.to, next.text, false, false, next.via).finally(() => draining.delete(to)).then((r) => {
         if (r.code === 200)
             noteAutoRelay(next.tree + ">" + next.to);
         else if (r.code !== 202) {
@@ -2296,7 +2366,7 @@ export async function deliverOrchBatch(to, cards) {
             lr.wait = waitsHead(c.text);
             lr.asks = slotAsks(c.text);
         }
-        parts.push({ c, tf, body: "Ответ слота " + tf.tag + " (" + c.tree + "), передан диспетчерской:\n\n" + c.text + (facts ? "\n\n" + facts : "") });
+        parts.push({ c, tf, body: relayMessage({ via: c.via || "auto", from: tf, to: tt || { key: to }, body: c.text, facts }) });
     }
     saveRelayFacts();
     if (!parts.length)
@@ -2317,7 +2387,7 @@ export async function deliverOrchBatch(to, cards) {
         const h = relayHash(p.c.tree, to, p.c.text);
         markRelaySent(h);
         recordRelay(p.c.tree, to, p.c.text.length);
-        logEvent("relay.sent", { from: p.c.tree, to, chars: p.c.text.length, hash: h, batched: true, n: parts.length });
+        logEvent("relay.sent", { from: p.c.tree, to, chars: p.c.text.length, hash: h, batched: true, n: parts.length, via: p.c.via || "auto" });
         keepCards((x) => x !== p.c);
         noteAutoRelay(p.c.tree + ">" + to);
         const sa = agents.get(p.c.tree);
@@ -2339,8 +2409,11 @@ export async function deliverOrchBatch(to, cards) {
     saveInbox();
 }
 
-/** Кнопка «отправить» у карточки: красное staging — оркестратору, старт слота, передача, итоги прогонов. */
-export async function inboxSend(id, now = false) {
+/**
+ * Отправить карточку: красное staging — оркестратору, старт слота, передача, итоги прогонов. Зовут кнопка страницы
+ * (via "owner") и автопередача автопоезда (по умолчанию — автоматика): от этого зависит подпись передачи.
+ */
+export async function inboxSend(id, now = false, via = "auto") {
     const it = inboxCards().find((x) => x.id === id);
     if (!it)
         return { code: 404, body: { error: "карточки уже нет: обновите страницу" } };
@@ -2365,7 +2438,7 @@ export async function inboxSend(id, now = false) {
         return r;
     }
     if (it.kind === "relay")
-        return doRelay(it.tree, it.to, it.text, false, now);
+        return doRelay(it.tree, it.to, it.text, false, now, via);
     if (it.kind === "result")
         return sendBatch(it.tree);
     return { code: 400, body: { error: "у этой карточки нет отправки" } };

@@ -15,12 +15,14 @@
 // Инварианты: каждая команда сначала проверяет всё и только потом пишет (die до записи); --dry-run ничего не пишет;
 // эпики другого репозитория (поле repo) — только для истории, команды к ним не применяются (noForeign);
 // имена слотов уникальны во всём реестре — папка слота <WT>/<слот> общая для всех эпиков.
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { EPIC_CLI, MAIN, PROJECT, WT, fwd, loadEpics, saveEpics, isForeignEpic } from "./slots.mjs";
+import { OWN, ownerOf, orchDirName, registeredDirs, slotDirName } from "./ownership.mjs";
 import { areaList, areaOf, areaPresets, slotAreaFields } from "./areas.mjs";
 import { DATA, PORT } from "./dashboard/config.mjs";
 import { PALETTE, moveSlot, removeSlot, findSlot, waveOf } from "./dashboard/slot-move-rules.mjs";
@@ -441,7 +443,7 @@ else if (cmd === "add" || cmd === "new") {
             ...(s.presets ? { presets: s.presets } : {}),
         };
     });
-    const orchBranch = req.orchBranch || "dev/epic-" + req.id, orchPath = fwd(req.orchPath || path.join(WT, "epic-" + req.id));
+    const orchBranch = req.orchBranch || "dev/epic-" + req.id, orchPath = fwd(req.orchPath || path.join(WT, orchDirName(req.id)));
     const epic = { id: req.id, title: req.title, status: "open", orch: { branch: orchBranch, path: orchPath }, slots };
     if (flag("--dry-run")) {
         console.log(JSON.stringify(epic, null, 2));
@@ -484,7 +486,7 @@ else if (cmd === "add-slot") {
     if (!wave)
         die("не удалось определить номер волны");
     const num = String(wave).padStart(4, "0"), slug = (val("--slug") || translit(title)).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28) || "wave";
-    const slotName = val("--slot") || "wv" + num + "-" + slug.split("-").slice(0, 2).join("-"), branch = val("--branch") || "dev/wv-" + num + "-" + slug;
+    const slotName = val("--slot") || slotDirName(num, slug), branch = val("--branch") || "dev/wv-" + num + "-" + slug;
     const taken = new Set(reg.epics.flatMap((x) => x.slots.map((z) => z.slot)));
     if (taken.has(slotName))
         die("имя слота занято: " + slotName);
@@ -916,9 +918,16 @@ else if (cmd === "close") {
         process.exit(2);
     }
     if (flag("--remove-worktrees")) {
+        // То же правило «что моё», что у уборки папок (ownership.mjs): папка оркестратора, заданная вне папки слотов
+        // (orchPath), или основная папка проекта не снимаются — их мог завести не эпик.
+        const own = { wtRoot: WT, main: MAIN, known: registeredDirs(reg.epics, WT) };
         for (const [name, p] of [...e.slots.map((s) => [s.slot, path.join(WT, s.slot)]), ["orchestrator", op]]) {
             if (!exists(p))
                 continue;
+            if (ownerOf(p, own) !== OWN.SLOT) {
+                console.log("· папка не из папки слотов диспетчерской — оставлена (" + name + "): " + p);
+                continue;
+            }
             const r = git(MAIN, "worktree", "remove", p);
             console.log(r.status === 0 ? "✓ папка убрана: " + p : "✗ папка осталась (" + (r.stderr || "").trim().split("\n")[0] + "): " + p);
         }

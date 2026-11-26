@@ -77,7 +77,7 @@ import { loadReviewNotes } from "./review.mjs"
 import { loadTrains } from "./trains.mjs"
 import { loadSlotDone } from "./slot-done.mjs"
 import { RETRO_AUTO_MS, loadRetro, retroAuto } from "./retro.mjs"
-import { KEEP_DEFAULT, hygieneRefresh } from "./worktree-hygiene.mjs"
+import { hygieneRefresh } from "./worktree-hygiene.mjs"
 import { flushRuns, killTree, loadRuns, procs, pumpAll, requeueInterrupted, runsSeen, save } from "./runner.mjs"
 import { kick, rebuildFresh, snapNow, startSnapshotLoop } from "./snapshot.mjs"
 import { loadStationMarks, loadSummaries, planExists } from "./stations.mjs"
@@ -254,9 +254,7 @@ if (!DRY) { setTimeout(rotateLogs, 60000).unref(); setInterval(rotateLogs, 24 * 
 // лишние папки слотов — считаем (страница предлагает убрать); сама уборка — только кнопкой
 if (!DRY) {
     const hy = () =>
-        hygieneRefresh(openEpics(), {
-            keep: Array.isArray(settings.keepWorktrees) ? settings.keepWorktrees : KEEP_DEFAULT,
-        }).catch((e) => console.error("папки слотов:", e.message))
+        hygieneRefresh({ keep: settings.keepWorktrees }).catch((e) => console.error("папки слотов:", e.message))
     setTimeout(hy, 180000).unref()
     setInterval(hy, 6 * 3600e3).unref()
 }

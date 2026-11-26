@@ -108,8 +108,8 @@ import { STATIONS, markStage, redCache, stationInfo, wagonPlanFile } from "./sta
 import { UI_SHARED } from "./ui-shared.mjs";
 import { INPUT_RE, TASKS, buildCache, stepOfTask } from "./tasks.mjs";
 import { specAware } from "./parsers.mjs";
-import { PRESETS, TREES, applyEpics, epicById, isOrch, openEpics, orchKey, orchOfKey, treeByKey, viewEpic } from "./trees.mjs";
-import { KEEP_DEFAULT, hygieneNow, hygieneRefresh, hygieneRun } from "./worktree-hygiene.mjs";
+import { PRESETS, TREES, applyEpics, epicById, epicSlots, isOrch, openEpics, orchKey, orchOfKey, treeByKey, viewEpic } from "./trees.mjs";
+import { hygieneNow, hygieneRefresh, hygieneRun } from "./worktree-hygiene.mjs";
 import { slotReset } from "./slot-reset.mjs";
 import { tgPublic, tgSettingsChanged } from "./tg.mjs";
 import { pipelineAction, wordGrants } from "./owner-word.mjs";
@@ -161,6 +161,31 @@ export function projectPublic() {
         runtime: { id: PROJECT.agent.runtime, caps: caps(), models: [...new Set(Object.values(PROJECT.agent.models).filter(Boolean))].map((id) => ({ id, label: id })) },
         modules: modulesPublic(),
         stations: { tests: PROJECT.stations.tests, guards: PROJECT.stations.guards },
+    };
+}
+/**
+ * Сводка проекта (/api/summary). idle — нет живых агентов, идущих и ждущих прогонов: такой процесс можно остановить без
+ * потерь (очередь и сессии на диске). rssMB — память самого процесса диспетчерской, без агентов и прогонов.
+ */
+export function projectSummary() {
+    const live = [...agents.values()].filter((a) => !a.dead), jobs = jobList();
+    const running = jobs.filter((j) => j.status === "running").length, queued = jobs.filter((j) => ["queued", "waiting"].includes(j.status)).length;
+    const asks = inboxCards().filter((x) => x.kind === "ownerq").length + live.reduce((n, a) => n + (a.pending ? a.pending.size : 0), 0);
+    return {
+        project: { name: PROJECT.name, file: PROJECT.file, mode: PROJECT.mode, upStaging: UP_STAGING },
+        pid: process.pid,
+        rssMB: Math.round(process.memoryUsage().rss / 1048576),
+        uptimeS: Math.round(process.uptime()),
+        booting: !snapNow(),
+        drain: !!drainState(),
+        dry: DRY,
+        epics: openEpics().length,
+        slots: epicSlots().filter((x) => !x.archived).length,
+        agents: { live: live.length, busy: live.filter((a) => a.busy).length },
+        jobs: { running, queued },
+        waitingOwner: asks,
+        limits: { slots: PROJECT.limits.slots, shared: PROJECT.limits.shared ? PROJECT.limits.shared.slots : null },
+        idle: !live.length && !running && !queued,
     };
 }
 /** Задачи проекта для страницы: подпись, группа, ввод, разбор вывода, гейт. */
@@ -368,6 +393,10 @@ export async function api(req, res, url) {
             tg: enabled("tg") ? tgPublic() : null,
         });
     }
+    // Сводка проекта: лёгкая, без снимка git и без токена. Её опрашивает хаб дома (scripts/dev/hub) — состояние процесса,
+    // простаивает ли он (по ней хаб останавливает проект «по требованию») и сколько памяти держит.
+    if (req.method === "GET" && url.pathname === "/api/summary")
+        return send(res, 200, projectSummary());
     if (req.method === "GET" && url.pathname === "/api/monitor")
         return send(res, 200, {
             now: Date.now(),
@@ -1156,7 +1185,8 @@ export async function api(req, res, url) {
     }
     if (url.pathname === "/api/relay") {
         logEvent("relay.button", { from: String(b.from || ""), to: String(b.to || ""), force: b.force === true });
-        const r = await doRelay(String(b.from || ""), String(b.to || ""), String(b.text || ""), b.force === true);
+        // Маршрут зовёт только кнопка страницы над блоком в чате: передача подписывается «кнопкой владельца».
+        const r = await doRelay(String(b.from || ""), String(b.to || ""), String(b.text || ""), b.force === true, b.force === true, "owner");
         return send(res, r.code, r.body);
     }
     if (url.pathname === "/api/annot") {
@@ -1182,7 +1212,7 @@ export async function api(req, res, url) {
         if (op === "send") {
             const it = inboxCards().find((x) => x.id === id);
             logEvent("relay.button", { id, kind: it ? it.kind : "", from: it ? it.tree || "" : "", to: it ? it.to || "" : "" });
-            const r = await inboxSend(id, true);
+            const r = await inboxSend(id, true, "owner");
             return send(res, r.code, r.body);
         }
         if (op === "dismiss") {
@@ -1232,24 +1262,26 @@ export async function api(req, res, url) {
         return send(res, 200, { ok: true, settings });
     }
     if (url.pathname === "/api/hygiene") {
-        const keep = Array.isArray(settings.keepWorktrees) ? settings.keepWorktrees : KEEP_DEFAULT;
+        const keep = settings.keepWorktrees;
         if (b.op === "run") {
             if (hygieneNow.running)
                 return send(res, 409, { error: "уборка уже идёт" });
             hygieneNow.running = true;
-            const p = await hygieneRefresh(openEpics(), { keep });
+            const p = await hygieneRefresh({ keep });
             logEvent("hygiene.run", { extra: p.extra.length, by: BY_PAGE });
             hygieneRun(p).then((r) => {
                 logEvent("hygiene.done", { removed: r.removed, branches: r.branches, stashed: r.stashed, failed: r.failed });
-                return hygieneRefresh(openEpics(), { keep });
+                return hygieneRefresh({ keep });
             }).catch((e) => console.error("уборка папок:", e.message)).finally(() => {
                 hygieneNow.running = false;
                 kick();
             });
             return send(res, 200, { ok: true, message: "Убираю " + p.extra.length + " лишних папок слотов: незакоммиченное — в git stash, невлитые ветки остаются. Займёт несколько минут." });
         }
-        const p = await hygieneRefresh(openEpics(), { keep });
-        return send(res, 200, { total: p.total, extra: p.extra.map((w) => ({ path: w.p, branch: w.br, ahead: w.ahead })) });
+        const p = await hygieneRefresh({ keep });
+        // Чужие копии (вне папки слотов или не по правилу имён) — только чтобы показать: уборка их не трогает.
+        const view = (w) => ({ path: w.p, branch: w.br, ahead: w.ahead });
+        return send(res, 200, { total: p.total, extra: p.extra.map(view), foreign: p.foreign.map((w) => ({ ...view(w), why: w.own })) });
     }
     if (url.pathname === "/api/agent-commit") {
         const r = await agentCommit(String(b.tree || ""));

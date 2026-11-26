@@ -185,7 +185,9 @@ describe("уплотнение runs.jsonl", () => {
 
 test("вне store.mjs нет прямой записи JSON файлов состояния", () => {
     // исключения: сухая проверка журналов пишет свой отчёт; файл секрета пишется с правами 0600 (store.mjs прав не ставит)
-    const allowed = [/^loops\.check\.mjs:/, /^secrets\.mjs:.*mode: 0o600/];
+    // место агента (agent-places.mjs) создаётся флагом wx — «только если файла нет»; запись через переименование
+    // (store.mjs) молча перезаписала бы место другого процесса
+    const allowed = [/^loops\.check\.mjs:/, /^secrets\.mjs:.*mode: 0o600/, /^agent-places\.mjs:.*flag: "wx"/];
     const bad = [];
     for (const f of fs.readdirSync(HERE).filter((x) => x.endsWith(".mjs") && x !== "store.mjs" && !x.endsWith(".test.mjs"))) {
         fs.readFileSync(path.join(HERE, f), "utf8").split("\n").forEach((l, i) => {

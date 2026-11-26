@@ -3,14 +3,16 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { execFileSync } from "node:child_process"
-import { validateProject } from "../scripts/dev/project.mjs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
+import { fwd, loadProject, validateProject } from "../scripts/dev/project.mjs"
 import { MODULE_IDS } from "../scripts/dev/modules-catalog.mjs"
 import { toId, hostKind, gitFacts, stackFacts, ciFacts, servicesFacts, whichBin, detectFacts, suggestAnswers, suggestTasks, suggestAreas } from "./detect.mjs"
-import { loadQuiz, planQuestions, buildProject, mergeAnswers, ANSWER_IDS } from "./build.mjs"
-import { runDoctor, formatDoctor, roleBranchState, ensureRoleBranches } from "./doctor.mjs"
-import { detect, apply, parseArgs } from "../setup.mjs"
+import { loadQuiz, planQuestions, buildProject, mergeAnswers, ANSWER_IDS, SHARED_IDS } from "./build.mjs"
+import { runDoctor, formatDoctor, formatHomeDoctor, roleBranchState, ensureRoleBranches, runHomeDoctor } from "./doctor.mjs"
+import { addProject, apply, detect, listProjects, parseArgs, removeProject } from "../setup.mjs"
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const tmp = (name = "dk-setup-") => fs.mkdtempSync(path.join(os.tmpdir(), name))
 const write = (root, rel, text) => {
   const f = path.join(root, rel)
@@ -403,4 +405,109 @@ test("навыки: путь дома вместо заглушки, повто�
     assert.match(skillsDir("codex", {}).split(path.sep).join("/"), /\/\.agents\/skills$/)
     assert.match(skillsDir("claude", {}).split(path.sep).join("/"), /\/\.claude\/skills$/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ── дом: второй и следующие проекты (setup.mjs add) ──
+
+const homeEnv = (root) => {
+  const env = { ...process.env, ...fakeAgent(), DISPATCHER_HOME: path.join(root, "kit", "dispatcher.home.json"), DISPATCHER_SKILLS_DIR: path.join(root, "skills") }
+  delete env.DISPATCHER_PROJECT
+  return env
+}
+const readJson = (f) => JSON.parse(fs.readFileSync(f, "utf8"))
+
+test("add: первый add создаёт дом, прежний конфиг входит в него ссылкой; новый — в projects/<id>/ без общего; doctor дома зелёный", async () => {
+  const { root, repo } = makeRepo()
+  const env = homeEnv(root), kit = path.join(root, "kit"), legacy = path.join(kit, "dispatcher.project.json")
+  // прежняя установка одного проекта
+  const r0 = detect({ repo, env, file: legacy })
+  apply({ repo, given: humanFor(r0), env, file: legacy, branches: true })
+  const legacyText = fs.readFileSync(legacy, "utf8")
+
+  const repo2 = makeRepo().repo
+  assert.throws(() => addProject({ repo: repo2, env }), /проект `demo-shop` уже в доме.*--id/s, "имя совпало с прежним проектом — нужен --id")
+  const plan = addProject({ repo: repo2, id: "blog", env })
+  assert.deepEqual([plan.id, plan.port, plan.homeCreated, plan.adopted], ["blog", 4802, true, "demo-shop"])
+  assert.equal(plan.file, fwd(path.join(kit, "projects", "blog", "dispatcher.project.json")))
+  for (const id of SHARED_IDS) assert.ok(!plan.ask.some((q) => q.id === id) && !plan.known.some((q) => q.id === id), "общее не спрашивается: " + id)
+  assert.ok(!fs.existsSync(env.DISPATCHER_HOME), "план ничего не пишет")
+
+  const done = addProject({ repo: repo2, id: "blog", env, given: humanFor(plan), branches: true })
+  for (const f of [plan.file, env.DISPATCHER_HOME]) assert.ok(done.written.includes(fwd(f)), f)
+  const home = readJson(env.DISPATCHER_HOME)
+  assert.deepEqual(home.projects, [
+    { id: "demo-shop", file: "dispatcher.project.json", port: 4801 },
+    { id: "blog", file: "projects/blog/dispatcher.project.json", port: 4802 },
+  ])
+  assert.equal(home.shared.agent.runtime, "claude"); assert.equal(home.shared.limits.slots, readJson(legacy).limits.slots)
+  assert.equal(fs.readFileSync(legacy, "utf8"), legacyText, "прежний конфиг не тронут")
+  const cfg = readJson(plan.file)
+  assert.ok(!cfg.agent && !cfg.limits && !cfg.machines, "общее — в доме, не в конфиге проекта")
+  assert.equal(cfg.modules.tg, false)
+  assert.ok(fs.existsSync(path.join(kit, "projects", "blog", "project", "answers.json")), "ответы — рядом со своим конфигом")
+  const p = loadProject({ file: plan.file, fresh: true, env })
+  assert.equal(p.agent.runtime, "claude"); assert.equal(p.limits.shared.slots, home.shared.limits.slots)
+
+  const d = await runHomeDoctor({ file: env.DISPATCHER_HOME, env })
+  assert.equal(d.ok, true, formatHomeDoctor(d))
+  assert.deepEqual(d.projects.map((x) => [x.id, x.ok]), [["demo-shop", true], ["blog", true]])
+  assert.match(formatHomeDoctor(d), /── проект blog \(порт 4802\) ──/)
+
+  assert.throws(() => addProject({ repo: repo2, id: "blog", env, given: {} }), /уже в доме.*--force/s)
+  assert.throws(() => addProject({ repo: repo2, id: "blog2", env, given: {} }), /уже в доме проектом `blog`/)
+  const repo3 = makeRepo({ develop: false }).repo
+  const tinyPlan = addProject({ repo: repo3, id: "tiny", env })
+  const light = addProject({ repo: repo3, id: "tiny", light: true, env, given: { ...humanFor(tinyPlan), "git.integration": "main", "git.production": "" }, branches: true })
+  assert.equal(readJson(light.file).mode, "light"); assert.equal(light.port, 4803)
+  const tiny = (await runHomeDoctor({ file: env.DISPATCHER_HOME, env, only: "tiny" })).projects[0]
+  assert.match(tiny.checks.find((c) => c.id === "config").detail, /в разработке/)
+
+  assert.deepEqual(listProjects({ env }).map((x) => [x.id, x.ok, x.mode]), [["demo-shop", true, "full"], ["blog", true, "full"], ["tiny", true, "light"]])
+  removeProject({ id: "blog", env })
+  assert.deepEqual(readJson(env.DISPATCHER_HOME).projects.map((x) => x.id), ["demo-shop", "tiny"])
+  assert.ok(fs.existsSync(plan.file), "снятие с дома не удаляет конфиг")
+  assert.throws(() => removeProject({ id: "nope", env }), /нет проекта `nope`/)
+})
+
+test("doctor дома: общие папки и бот в нескольких проектах — ошибки; неизвестный --project и сломанный дом — ошибки", async () => {
+  const { root, repo } = makeRepo(), repo2 = makeRepo().repo
+  const env = homeEnv(root), kit = path.join(root, "kit")
+  const fileA = path.join(kit, "projects", "a", "dispatcher.project.json"), fileB = path.join(kit, "projects", "b", "dispatcher.project.json")
+  apply({ repo, given: humanFor(detect({ repo, env, file: fileA })), env, file: fileA, branches: true })
+  apply({ repo: repo2, given: humanFor(detect({ repo: repo2, env, file: fileB })), env, file: fileB, branches: true })
+  const a = readJson(fileA), b = readJson(fileB)
+  b.repo.worktrees = a.repo.worktrees; a.modules.tg = b.modules.tg = true
+  fs.writeFileSync(fileA, JSON.stringify(a)); fs.writeFileSync(fileB, JSON.stringify(b))
+  const projects = [{ id: "a", file: "projects/a/dispatcher.project.json", port: 4801 }, { id: "b", file: "projects/b/dispatcher.project.json", port: 4802 }]
+  fs.writeFileSync(env.DISPATCHER_HOME, JSON.stringify({ schema: 1, projects }))
+  const d = await runHomeDoctor({ file: env.DISPATCHER_HOME, env })
+  assert.equal(d.ok, false)
+  const errs = d.checks.filter((c) => c.level === "error").map((c) => c.title + ": " + c.detail)
+  assert.ok(errs.some((t) => /Одна папка слотов/.test(t) && /a, b/.test(t)), errs.join("\n"))
+  assert.ok(errs.some((t) => /Одна папка данных/.test(t)), "папка данных по умолчанию — внутри папки слотов")
+  assert.ok(errs.some((t) => /Модуль `tg` в нескольких проектах/.test(t)))
+  const one = await runHomeDoctor({ file: env.DISPATCHER_HOME, env, only: "zzz" })
+  assert.match(one.checks.find((c) => c.id === "home.project").detail, /нет проекта `zzz`/)
+  fs.writeFileSync(env.DISPATCHER_HOME, "{")
+  assert.equal((await runHomeDoctor({ file: env.DISPATCHER_HOME, env })).checks.find((c) => c.id === "home").level, "error")
+})
+
+test("без дома — как прежде: apply пишет dispatcher.project.json в папку диспетчерской, doctor — прежний отчёт; в доме apply отсылает к add", () => {
+  const { root, repo } = makeRepo()
+  const kit = path.join(root, "kit"), env = homeEnv(root)
+  delete env.NODE_TEST_CONTEXT
+  const cli = (...args) => spawnSync(process.execPath, [path.join(ROOT, "setup.mjs"), ...args], { cwd: root, env, encoding: "utf8", windowsHide: true })
+  const answers = path.join(root, "answers.json")
+  fs.writeFileSync(answers, JSON.stringify(humanFor(detect({ repo, env: homeEnv(root), file: path.join(kit, "dispatcher.project.json") }))))
+  const r = cli("apply", "--repo", repo, "--answers", answers, "--branches")
+  assert.ok(fs.existsSync(path.join(kit, "dispatcher.project.json")), r.stdout + r.stderr)
+  assert.ok(!fs.existsSync(env.DISPATCHER_HOME), "дом сам не появляется")
+  const d = JSON.parse(cli("doctor", "--json").stdout)
+  assert.deepEqual(Object.keys(d).sort(), ["checks", "modules", "ok"])
+  assert.equal(d.ok, true, JSON.stringify(d.checks.filter((c) => c.level === "error")))
+  fs.writeFileSync(env.DISPATCHER_HOME, JSON.stringify({ schema: 1, projects: [{ id: "demo-shop", file: "dispatcher.project.json", port: 4801 }] }))
+  const refused = cli("apply", "--repo", repo, "--answers", answers)
+  assert.equal(refused.status, 1); assert.match(refused.stderr, /командой add/)
+  const hd = JSON.parse(cli("doctor", "--json").stdout)
+  assert.deepEqual(hd.projects.map((p) => [p.id, p.ok]), [["demo-shop", true]])
 })

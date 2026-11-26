@@ -8,6 +8,7 @@
 //                                                             open --orch без --slots — только окно оркестратора
 // Слот можно назвать «П4», «P4» или «4» (кириллица в консоли теряется). Окна открывает команда `code` редактора.
 // Не запускает тестов и агентов, не коммитит. Код возврата: 0 — всё в порядке; 1 — шаг упал; 2 — неверные аргументы.
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";

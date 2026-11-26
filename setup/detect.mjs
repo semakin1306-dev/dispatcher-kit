@@ -346,6 +346,7 @@ export function suggestAnswers(facts, prev = {}) {
 
   a["project.name"] = high(stack.name && !stack.name.startsWith("@") ? stack.name : path.basename(facts.repo), stack.name ? "имя из package.json" : "имя папки")
   a["repo.worktrees"] = high(facts.repo + "-wt", "соседняя папка")
+  a["mode"] = high("full", "лёгкий режим — флагом --light у `setup.mjs add`")
 
   if (git.isRepo && git.remotes.length) {
     const origin = git.remotes.find((r) => r.name === "origin")

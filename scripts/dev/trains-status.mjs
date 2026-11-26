@@ -3,6 +3,7 @@
 // журнал событий. Навык trains-status зовёт этот скрипт и пересказывает, что едет, что стоит и почему, что ждёт
 // человека.
 //   node scripts/dev/trains-status.mjs [--epic <id>] [--json] [--since 60]   (since — минут журнала, по умолчанию 90)
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { DATA, PORT } from "./dashboard/config.mjs";

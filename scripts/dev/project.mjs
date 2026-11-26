@@ -7,11 +7,16 @@
 // Три шага: validateProject (сырой JSON → ошибки и предупреждения человеческим языком) → normalizeProject (умолчания,
 // абсолютные пути) → loadProject (чтение с диска, кеш). Проверка не бросает исключений: настройке нужен полный список
 // ошибок разом, а не первая.
+//
+// Дом (dispatcher.home.json, необязателен) — несколько проектов на одной диспетчерской: общее (агент по умолчанию, машины,
+// общий предел агентов, порт хаба) и список проектов-ссылок на конфиги того же формата. Знает о доме только этот файл:
+// конфиг проекта из дома загружается уже с общим, ядро сервера получает обычный нормализованный проект.
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { MODULE_IDS } from "./modules-catalog.mjs"
+import { canonPath, insidePath, samePath } from "./paths.mjs"
 
 /** Дом диспетчерской — её собственный репозиторий. */
 export const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -22,10 +27,12 @@ export const PARSERS = ["exit-code", "jest", "vitest", "go-test", "pytest"]
 /** Функции, которые проект может дать кодом в dispatcher.project.mjs. Список закрытый. */
 export const CODE_HOOKS = ["buildSteps", "slotPrepare", "remoteCmd", "parseOutput"]
 export const SLOT_PREPARE_WHEN = ["always", "build"]
+/** Режим проекта. `light` — маленький репозиторий без поездов, стенда и прода; в разработке, пока ведётся как `full`. */
+export const PROJECT_MODES = ["full", "light"]
 
-const ID_RE = /^[a-z][a-z0-9-]{0,39}$/
+export const ID_RE = /^[a-z][a-z0-9-]{0,39}$/
 const REMOTE_RE = /^[A-Za-z0-9._-]+$/
-const TOP_KEYS = ["schema", "name", "repo", "agent", "areas", "deny", "protected", "slotPrepare", "tasks", "stations", "machines", "release", "accept", "ci", "modules", "limits"]
+const TOP_KEYS = ["schema", "name", "mode", "repo", "agent", "areas", "deny", "protected", "slotPrepare", "tasks", "stations", "machines", "release", "accept", "ci", "modules", "limits"]
 
 /**
  * Запреты для агента слота, которые действуют в любом проекте: история и ветки меняются только диспетчерской,
@@ -60,15 +67,19 @@ export class ProjectConfigError extends Error {
 export const DEMO_PROJECT = path.join(HOME, "test", "fixtures", "project.demo.json")
 
 /**
- * Где лежит конфиг: переменная DISPATCHER_PROJECT, иначе dispatcher.project.json в доме диспетчерской.
- * Под `node --test` без заданной переменной берётся демо-проект: тесты диспетчерской не читают конфиг настоящего
- * проекта и не могут задеть его папки.
+ * Где лежит конфиг: переменная DISPATCHER_PROJECT; под `node --test` без неё — демо-проект (тесты диспетчерской не
+ * читают конфиг настоящего проекта и не могут задеть его папки); есть дом — проект дома (homeEntryFor); иначе
+ * dispatcher.project.json рядом с файлом дома, то есть в папке диспетчерской.
  */
-export function projectFile(env = process.env) {
+export function projectFile(env = process.env, { cwd = process.cwd() } = {}) {
   if (env.DISPATCHER_PROJECT) return path.resolve(env.DISPATCHER_PROJECT)
   if (env.NODE_TEST_CONTEXT) return DEMO_PROJECT
-  return path.join(HOME, "dispatcher.project.json")
+  const entry = homeEntryFor(env, { cwd })
+  return entry ? entry.file : legacyProjectFile(env)
 }
+
+/** Конфиг единственного проекта (установка без дома): dispatcher.project.json в папке файла дома. */
+export const legacyProjectFile = (env = process.env) => path.join(homeDir(env), "dispatcher.project.json")
 
 /** `~` → домашняя папка; относительный путь — от папки конфига. Результат абсолютный, с прямыми слэшами. */
 export function expandPath(p, baseDir = HOME) {
@@ -107,18 +118,17 @@ export function validateProject(raw) {
   const W = (p, message) => warnings.push({ path: p, message })
   if (!isObj(raw)) { E("", "конфиг должен быть объектом JSON"); return { errors, warnings } }
 
-  if (raw.schema === undefined) E("schema", "нет номера схемы — ожидается `\"schema\": " + SCHEMA + "`")
-  else if (!Number.isInteger(raw.schema)) E("schema", "номер схемы — целое число")
-  else if (raw.schema > SCHEMA) E("schema", `конфиг новее диспетчерской (схема ${raw.schema}, диспетчерская понимает ${SCHEMA}) — обновите диспетчерскую`)
-  else if (raw.schema < 1) E("schema", "номер схемы начинается с 1")
+  validateSchema(raw, E)
 
   for (const k of Object.keys(raw)) if (!TOP_KEYS.includes(k)) W(k, "неизвестный ключ — не используется")
   if (raw.name !== undefined && !isStr(raw.name)) E("name", "название проекта — непустая строка")
+  if (raw.mode !== undefined) {
+    if (!PROJECT_MODES.includes(raw.mode)) E("mode", "режим проекта — один из: " + PROJECT_MODES.join(", "))
+    else if (raw.mode === "light") W("mode", "лёгкий режим в разработке: пока проект ведётся как полный")
+  }
 
   const optObj = (key) => { const v = raw[key]; if (v === undefined) return null; if (!isObj(v)) { E(key, "ожидается объект"); return null } return v }
-  const optStr = (obj, p, key) => { if (obj[key] !== undefined && obj[key] !== "" && !isStr(obj[key])) E(p + "." + key, "ожидается строка") }
-  const optList = (obj, p, key) => { if (obj[key] !== undefined && !isStrList(obj[key])) E(p + "." + key, "ожидается список непустых строк") }
-  const optBool = (obj, p, key) => { if (obj[key] !== undefined && typeof obj[key] !== "boolean") E(p + "." + key, "ожидается true или false") }
+  const { optStr, optList, optBool } = checkers(E)
 
   // repo
   if (!isObj(raw.repo)) E("repo", "нет раздела `repo` — где лежит проект и какие у него ветки")
@@ -137,17 +147,7 @@ export function validateProject(raw) {
 
   // agent
   const agent = optObj("agent")
-  if (agent) {
-    if (agent.runtime !== undefined && !RUNTIMES.includes(agent.runtime)) E("agent.runtime", "рантайм агента — один из: " + RUNTIMES.join(", "))
-    optStr(agent, "agent", "bin"); optStr(agent, "agent", "proxy"); optBool(agent, "agent", "network")
-    if (agent.models !== undefined) {
-      if (!isObj(agent.models)) E("agent.models", "ожидается объект { orch, slot, review }")
-      else for (const [k, v] of Object.entries(agent.models)) {
-        if (!["orch", "slot", "review"].includes(k)) W("agent.models." + k, "неизвестная роль — не используется")
-        else if (typeof v !== "string") E("agent.models." + k, "имя модели — строка (пустая = умолчание рантайма)")
-      }
-    }
-  }
+  if (agent) validateAgent(agent, "agent", E, W)
 
   // tasks — раньше областей и станций: на них ссылаются
   const taskIds = new Set()
@@ -216,25 +216,7 @@ export function validateProject(raw) {
 
   // machines
   const machines = optObj("machines")
-  const servedLanes = new Set(); let anyServesAll = !machines || !machines.local || machines.local.lanes === undefined
-  if (machines) for (const [id, m] of Object.entries(machines)) {
-    const p = "machines." + id
-    if (!ID_RE.test(id)) { E(p, "id машины — строчная латиница, цифры и дефис, с буквы"); continue }
-    if (!isObj(m)) { E(p, "ожидается объект"); continue }
-    optStr(m, p, "label"); optStr(m, p, "ssh"); optStr(m, p, "dir"); optList(m, p, "prepare")
-    if (id === "local" && isStr(m.ssh)) E(p + ".ssh", "`local` — эта машина, поля `ssh` у неё нет; удалённой машине дайте другой id")
-    if (id !== "local" && !isStr(m.ssh)) E(p + ".ssh", "у удалённой машины обязателен ssh-хост (как в ~/.ssh/config)")
-    if (isStr(m.ssh) && !isStr(m.dir)) E(p + ".dir", "у удалённой машины обязательна рабочая папка `dir`")
-    if (m.workers !== undefined && !(Number.isInteger(m.workers) && m.workers >= 1)) E(p + ".workers", "число воркеров — целое от 1")
-    if (m.lanes !== undefined) {
-      if (!isStrList(m.lanes) || !m.lanes.every((l) => ID_RE.test(l))) E(p + ".lanes", "дорожки — список id (строчная латиница, цифры, дефис)")
-      else m.lanes.forEach((l) => servedLanes.add(l))
-    } else anyServesAll = true
-    if (m.services !== undefined) {
-      if (!Array.isArray(m.services)) E(p + ".services", "ожидается список служб { name, up, down?, check? }")
-      else m.services.forEach((s, i) => { if (!isObj(s) || !isStr(s.name) || !isStr(s.up)) E(`${p}.services[${i}]`, "служба — объект с `name` и командой запуска `up`") })
-    }
-  }
+  const { servedLanes, anyServesAll } = validateMachines(machines, "machines", E)
   if (isObj(tasks) && !anyServesAll) for (const [id, t] of Object.entries(tasks)) {
     const lane = isObj(t) && isStr(t.lane) ? t.lane : "main"
     if (!servedLanes.has(lane)) W("tasks." + id + ".lane", `дорожку \`${lane}\` не обслуживает ни одна машина — задача не запустится`)
@@ -262,9 +244,67 @@ export function validateProject(raw) {
     else if (typeof v !== "boolean") E("modules." + id, "ожидается true или false")
   }
   const limits = optObj("limits")
-  if (limits && limits.slots !== undefined && !(Number.isInteger(limits.slots) && limits.slots >= 1 && limits.slots <= 20)) E("limits.slots", "число параллельных слотов — целое от 1 до 20")
+  if (limits) validateLimits(limits, "limits", E)
 
   return { errors, warnings }
+}
+
+// Проверки, общие для конфига проекта и раздела `shared` дома: одинаковые ключи — одинаковые правила и тексты.
+
+function validateSchema(raw, E, what = "конфиг") {
+  if (raw.schema === undefined) E("schema", "нет номера схемы — ожидается `\"schema\": " + SCHEMA + "`")
+  else if (!Number.isInteger(raw.schema)) E("schema", "номер схемы — целое число")
+  else if (raw.schema > SCHEMA) E("schema", `${what} новее диспетчерской (схема ${raw.schema}, диспетчерская понимает ${SCHEMA}) — обновите диспетчерскую`)
+  else if (raw.schema < 1) E("schema", "номер схемы начинается с 1")
+}
+
+const checkers = (E) => ({
+  optStr: (obj, p, key) => { if (obj[key] !== undefined && obj[key] !== "" && !isStr(obj[key])) E(p + "." + key, "ожидается строка") },
+  optList: (obj, p, key) => { if (obj[key] !== undefined && !isStrList(obj[key])) E(p + "." + key, "ожидается список непустых строк") },
+  optBool: (obj, p, key) => { if (obj[key] !== undefined && typeof obj[key] !== "boolean") E(p + "." + key, "ожидается true или false") },
+})
+
+function validateAgent(agent, p, E, W) {
+  const { optStr, optBool } = checkers(E)
+  if (agent.runtime !== undefined && !RUNTIMES.includes(agent.runtime)) E(p + ".runtime", "рантайм агента — один из: " + RUNTIMES.join(", "))
+  optStr(agent, p, "bin"); optStr(agent, p, "proxy"); optBool(agent, p, "network")
+  if (agent.models !== undefined) {
+    if (!isObj(agent.models)) E(p + ".models", "ожидается объект { orch, slot, review }")
+    else for (const [k, v] of Object.entries(agent.models)) {
+      if (!["orch", "slot", "review"].includes(k)) W(p + ".models." + k, "неизвестная роль — не используется")
+      else if (typeof v !== "string") E(p + ".models." + k, "имя модели — строка (пустая = умолчание рантайма)")
+    }
+  }
+}
+
+/** → { servedLanes, anyServesAll }: какие дорожки обслуживают машины (для предупреждения о задачах без машины). */
+function validateMachines(machines, p0, E) {
+  const { optStr, optList } = checkers(E)
+  const servedLanes = new Set(); let anyServesAll = !machines || !machines.local || machines.local.lanes === undefined
+  if (machines) for (const [id, m] of Object.entries(machines)) {
+    const p = p0 + "." + id
+    if (!ID_RE.test(id)) { E(p, "id машины — строчная латиница, цифры и дефис, с буквы"); continue }
+    if (!isObj(m)) { E(p, "ожидается объект"); continue }
+    optStr(m, p, "label"); optStr(m, p, "ssh"); optStr(m, p, "dir"); optList(m, p, "prepare")
+    if (id === "local" && isStr(m.ssh)) E(p + ".ssh", "`local` — эта машина, поля `ssh` у неё нет; удалённой машине дайте другой id")
+    if (id !== "local" && !isStr(m.ssh)) E(p + ".ssh", "у удалённой машины обязателен ssh-хост (как в ~/.ssh/config)")
+    if (isStr(m.ssh) && !isStr(m.dir)) E(p + ".dir", "у удалённой машины обязательна рабочая папка `dir`")
+    if (m.workers !== undefined && !(Number.isInteger(m.workers) && m.workers >= 1)) E(p + ".workers", "число воркеров — целое от 1")
+    if (m.lanes !== undefined) {
+      if (!isStrList(m.lanes) || !m.lanes.every((l) => ID_RE.test(l))) E(p + ".lanes", "дорожки — список id (строчная латиница, цифры, дефис)")
+      else m.lanes.forEach((l) => servedLanes.add(l))
+    } else anyServesAll = true
+    if (m.services !== undefined) {
+      if (!Array.isArray(m.services)) E(p + ".services", "ожидается список служб { name, up, down?, check? }")
+      else m.services.forEach((s, i) => { if (!isObj(s) || !isStr(s.name) || !isStr(s.up)) E(`${p}.services[${i}]`, "служба — объект с `name` и командой запуска `up`") })
+    }
+  }
+  return { servedLanes, anyServesAll }
+}
+
+function validateLimits(limits, p, E) {
+  if (limits.slots !== undefined && !(Number.isInteger(limits.slots) && limits.slots >= 1 && limits.slots <= 20))
+    E(p + ".slots", "число параллельно работающих агентов слотов — целое от 1 до 20")
 }
 
 function validateParser(parser, p, E) {
@@ -330,7 +370,7 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
 
   const rel = raw.release || {}
   return {
-    schema: raw.schema, name: raw.name || path.basename(main), file: file ? fwd(file) : "",
+    schema: raw.schema, name: raw.name || path.basename(main), file: file ? fwd(file) : "", mode: raw.mode || "full",
     repo: { main, worktrees, data, sparse: !!r.sparse, remote: r.remote || "origin", upstream: { staging: r.upstream.staging, main: r.upstream.main || null } },
     agent: {
       runtime, bin: agentBinPath(raw.agent && raw.agent.bin, baseDir), proxy: (raw.agent && raw.agent.proxy) || "", network: !!(raw.agent && raw.agent.network),
@@ -352,7 +392,8 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
     accept: { run: (raw.accept && raw.accept.run) || "", specGlob: (raw.accept && raw.accept.specGlob) || "", standUrl: (raw.accept && raw.accept.standUrl) || "" },
     ci: { kind: (raw.ci && raw.ci.kind) || "", runners: (raw.ci && raw.ci.runners) || "", files: (raw.ci && raw.ci.files) || [] },
     modules: { ...(raw.modules || {}) },
-    limits: { slots: (raw.limits && raw.limits.slots) || 3 },
+    // shared — общий предел нескольких проектов дома (места-файлы в папке хаба); без дома null
+    limits: { slots: (raw.limits && raw.limits.slots) || 3, shared: null },
   }
 }
 
@@ -364,37 +405,226 @@ export const formatIssues = (issues) => issues.map((i) => "  • " + (i.path ? "
 const cache = new Map()
 
 /**
- * Прочитать, проверить и нормализовать конфиг проекта.
- * @throws {ProjectConfigError} файла нет (`missing`), он не JSON (`json`) или не прошёл проверку (`invalid`)
+ * Прочитать, проверить и нормализовать конфиг проекта. Конфиг, на который ссылается дом, получает общее из дома
+ * (withHomeShared) и общий предел агентов `limits.shared`.
+ * @throws {ProjectConfigError} файла нет (`missing`), он не JSON (`json`), не прошёл проверку (`invalid`) или сломан дом (`home`)
  */
-export function loadProject({ file = projectFile(), fresh = false } = {}) {
-  const abs = path.resolve(file)
-  if (!fresh && cache.has(abs)) return cache.get(abs)
-  let text
-  try { text = fs.readFileSync(abs, "utf8") } catch {
-    throw new ProjectConfigError(
-      `Проект не настроен: нет файла ${fwd(abs)}.\nОткройте папку диспетчерской в агенте — он проведёт настройку по SETUP.md, — или запустите \`node setup.mjs detect --repo <путь к проекту>\`.`,
-      { code: "missing", file: abs },
-    )
-  }
-  let raw
-  try { raw = JSON.parse(text.replace(/^\uFEFF/, "")) } catch (e) {
-    throw new ProjectConfigError(`Конфиг проекта ${fwd(abs)} не читается как JSON: ${e.message}`, { code: "json", file: abs })
-  }
+export function loadProject({ file = projectFile(), fresh = false, env = process.env } = {}) {
+  const abs = path.resolve(file), hf = homeFile(env), key = abs + "\n" + hf
+  if (!fresh && cache.has(key)) return cache.get(key)
+  const raw = readJsonConfig(abs, "Конфиг проекта", () =>
+    `Проект не настроен: нет файла ${fwd(abs)}.\nОткройте папку диспетчерской в агенте — он проведёт настройку по SETUP.md, — или запустите \`node setup.mjs detect --repo <путь к проекту>\`.`)
   const { errors, warnings } = validateProject(raw)
   if (errors.length)
     throw new ProjectConfigError(
       `В конфиге проекта ${fwd(abs)} ошибки:\n${formatIssues(errors)}\nПроверка целиком — \`node setup.mjs doctor\`.`,
       { code: "invalid", issues: errors, file: abs },
     )
-  const project = normalizeProject(raw, { baseDir: path.dirname(abs), file: abs })
+  const home = hf && fs.existsSync(hf) ? loadHome({ file: hf }) : null
+  const entry = home ? homeEntryOf(home, abs) : null
+  const project = normalizeProject(entry ? withHomeShared(raw, home, entry) : raw, { baseDir: path.dirname(abs), file: abs })
+  if (entry && home.shared.limits.slots) project.limits.shared = { slots: home.shared.limits.slots, dir: fwd(path.join(home.hub.data, "places")) }
   project.warnings = warnings
-  cache.set(abs, project)
+  cache.set(key, project)
   return project
 }
 
+/** Прочитать JSON конфига: нет файла — `missing` с текстом missingText(), не JSON — `json`. */
+function readJsonConfig(abs, what, missingText) {
+  let text
+  try { text = fs.readFileSync(abs, "utf8") } catch { throw new ProjectConfigError(missingText(), { code: "missing", file: abs }) }
+  let raw
+  try { raw = JSON.parse(text.replace(/^\uFEFF/, "")) } catch (e) {
+    throw new ProjectConfigError(`${what} ${fwd(abs)} не читается как JSON: ${e.message}`, { code: "json", file: abs })
+  }
+  return raw
+}
+
 /** Сбросить кеш (тесты; настройка после перезаписи файла). */
-export const forgetProject = () => cache.clear()
+export const forgetProject = () => { cache.clear(); homeCache.clear() }
+
+// ───────────────────────────── дом: несколько проектов ─────────────────────────────
+//
+// dispatcher.home.json: { schema, hub: { port, data, idleStopMin }, shared: { agent, machines, limits },
+// projects: [{ id, file, port, start }] }. Проекты — списком, а не объектом по id: повтор ключа в объекте JSON молча
+// теряется при разборе, а в списке его видно и о нём можно сказать. Относительные пути — от папки файла дома.
+
+export const HOME_FILE_NAME = "dispatcher.home.json"
+/** Порт хаба по умолчанию — прежний порт страницы: для человека адрес не меняется. */
+export const HUB_PORT = 4777
+/** Первый порт, который `setup add` предлагает процессу проекта. */
+export const CORE_PORT_FROM = 4801
+/** Когда хаб поднимает процесс проекта: always — при своём запуске; lazy — по первому запросу, без дел — останавливает. */
+export const HOME_START = ["always", "lazy"]
+const HOME_KEYS = ["schema", "hub", "shared", "projects"]
+const SHARED_KEYS = ["agent", "machines", "limits"]
+
+/**
+ * Файл дома: DISPATCHER_HOME, иначе dispatcher.home.json в папке диспетчерской. Под `node --test` без переменной дома
+ * нет — тесты не видят дом владельца, как не видят и его конфиг проекта. Пустая строка — дома нет.
+ */
+export function homeFile(env = process.env) {
+  if (env.DISPATCHER_HOME) return path.resolve(env.DISPATCHER_HOME)
+  if (env.NODE_TEST_CONTEXT) return ""
+  return path.join(HOME, HOME_FILE_NAME)
+}
+export const homeDir = (env = process.env) => { const f = homeFile(env); return f ? path.dirname(f) : HOME }
+/** Есть ли дом: только тогда команды и проверка работают с несколькими проектами. */
+export const homeExists = (env = process.env) => { const f = homeFile(env); return !!f && fs.existsSync(f) }
+
+const isPort = (v) => Number.isInteger(v) && v >= 1024 && v <= 65535
+
+/**
+ * Проверить сырой файл дома. Пути проектов сверяются после разрешения от baseDir: `./a/x.json` и `a/x.json` — один файл.
+ * @returns {{errors:{path:string,message:string}[], warnings:{path:string,message:string}[]}}
+ */
+export function validateHome(raw, { baseDir = HOME } = {}) {
+  const errors = [], warnings = []
+  const E = (p, message) => errors.push({ path: p, message })
+  const W = (p, message) => warnings.push({ path: p, message })
+  if (!isObj(raw)) { E("", "файл дома должен быть объектом JSON"); return { errors, warnings } }
+  validateSchema(raw, E, "файл дома")
+  for (const k of Object.keys(raw)) if (!HOME_KEYS.includes(k)) W(k, "неизвестный ключ — не используется; допустимы: " + HOME_KEYS.join(", "))
+  const { optStr } = checkers(E)
+
+  let hubPort = HUB_PORT
+  if (raw.hub !== undefined) {
+    if (!isObj(raw.hub)) E("hub", "ожидается объект { port, data, idleStopMin }")
+    else {
+      if (raw.hub.port !== undefined) { if (isPort(raw.hub.port)) hubPort = raw.hub.port; else E("hub.port", "порт хаба — целое от 1024 до 65535") }
+      optStr(raw.hub, "hub", "data")
+      if (raw.hub.idleStopMin !== undefined && !(typeof raw.hub.idleStopMin === "number" && raw.hub.idleStopMin > 0))
+        E("hub.idleStopMin", "через сколько минут без дел останавливать проект с `start: \"lazy\"` — положительное число")
+    }
+  }
+
+  if (raw.shared !== undefined) {
+    const s = raw.shared
+    if (!isObj(s)) E("shared", "ожидается объект { agent, machines, limits }")
+    else {
+      for (const k of Object.keys(s)) if (!SHARED_KEYS.includes(k)) W("shared." + k, "неизвестный ключ — не используется; общее в доме: " + SHARED_KEYS.join(", "))
+      for (const k of SHARED_KEYS) if (s[k] !== undefined && !isObj(s[k])) E("shared." + k, "ожидается объект")
+      if (isObj(s.agent)) validateAgent(s.agent, "shared.agent", E, W)
+      if (isObj(s.machines)) validateMachines(s.machines, "shared.machines", E)
+      if (isObj(s.limits)) validateLimits(s.limits, "shared.limits", E)
+    }
+  }
+
+  if (!Array.isArray(raw.projects) || !raw.projects.length) {
+    E("projects", "нужен список проектов [{ id, file, port }] — хотя бы один")
+    return { errors, warnings }
+  }
+  const seen = { id: new Map(), port: new Map([[hubPort, "`hub.port`"]]), file: new Map() }
+  const once = (kind, value, p, what) => {
+    if (seen[kind].has(value)) E(p, `${what} уже занят: ${seen[kind].get(value)}`)
+    else seen[kind].set(value, "`" + p + "`")
+  }
+  raw.projects.forEach((e, i) => {
+    const p = `projects[${i}]`
+    if (!isObj(e)) { E(p, "проект — объект { id, file, port, start? }"); return }
+    for (const k of Object.keys(e)) if (!["id", "file", "port", "start"].includes(k)) W(p + "." + k, "неизвестный ключ — не используется")
+    if (!isStr(e.id) || !ID_RE.test(e.id)) E(p + ".id", "id проекта — строчная латиница, цифры и дефис, с буквы")
+    else once("id", e.id, p + ".id", "id `" + e.id + "`")
+    if (!isStr(e.file)) E(p + ".file", "путь к конфигу проекта (dispatcher.project.json) обязателен")
+    else once("file", canonPath(expandPath(e.file, baseDir)), p + ".file", "этот конфиг")
+    if (!isPort(e.port)) E(p + ".port", "порт процесса проекта — целое от 1024 до 65535")
+    else once("port", e.port, p + ".port", "порт " + e.port)
+    if (e.start !== undefined && !HOME_START.includes(e.start)) E(p + ".start", "когда запускать — один из: " + HOME_START.join(", "))
+  })
+  return { errors, warnings }
+}
+
+/** Привести проверенный дом к полному виду: пути абсолютные, умолчания проставлены. Звать после validateHome без ошибок. */
+export function normalizeHome(raw, { file }) {
+  const dir = path.dirname(path.resolve(file)), hub = raw.hub || {}, s = raw.shared || {}
+  const agent = { ...(s.agent || {}) }
+  // путь к агенту в доме — от папки дома: в конфиге проекта он разрешался бы от папки проекта
+  if (agent.bin) agent.bin = agentBinPath(agent.bin, dir)
+  return {
+    schema: raw.schema, file: fwd(path.resolve(file)), dir: fwd(dir),
+    hub: { port: hub.port || HUB_PORT, data: expandPath(hub.data || ".hub", dir), idleStopMin: hub.idleStopMin || 30 },
+    shared: { agent, machines: { ...(s.machines || {}) }, limits: { slots: (s.limits && s.limits.slots) || null } },
+    projects: raw.projects.map((e) => ({ id: e.id, file: expandPath(e.file, dir), port: e.port, start: e.start || "always" })),
+  }
+}
+
+const homeCache = new Map()
+
+/**
+ * Прочитать, проверить и нормализовать дом. Кеш — по времени изменения файла: `setup add` дописывает дом, и
+ * следующее чтение в том же процессе видит новый проект без явного сброса.
+ * @throws {ProjectConfigError} code `missing` | `json` | `home`
+ */
+export function loadHome({ file = homeFile() } = {}) {
+  const abs = path.resolve(file)
+  let mtime = -1
+  try { mtime = fs.statSync(abs).mtimeMs } catch { /* нет файла — скажет чтение ниже */ }
+  const hit = homeCache.get(abs)
+  if (hit && hit.mtime === mtime) return hit.home
+  const raw = readJsonConfig(abs, "Файл дома", () => `Дома нет: нет файла ${fwd(abs)}. Второй проект добавляет \`node setup.mjs add --repo <путь>\`.`)
+  const { errors, warnings } = validateHome(raw, { baseDir: path.dirname(abs) })
+  if (errors.length)
+    throw new ProjectConfigError(`В файле дома ${fwd(abs)} ошибки:\n${formatIssues(errors)}\nПроверка целиком — \`node setup.mjs doctor\`.`, { code: "home", issues: errors, file: abs })
+  const home = normalizeHome(raw, { file: abs })
+  home.warnings = warnings
+  homeCache.set(abs, { mtime, home })
+  return home
+}
+
+/** Запись проекта дома, чей конфиг — этот файл; null — файл в дом не входит. */
+export const homeEntryOf = (home, file) => home.projects.find((e) => samePath(e.file, file)) || null
+
+/**
+ * Какой проект дома выбран: DISPATCHER_PROJECT_ID (его ставит `--project <id>` команд через select-project.mjs), иначе
+ * проект, в чьей основной папке или папке слотов стоит cwd, иначе единственный. Дома нет — null.
+ * @throws {ProjectConfigError} `unknown-project` — нет такого id; `ambiguous` — проектов несколько, выбрать не по чему
+ */
+export function homeEntryFor(env = process.env, { cwd = process.cwd() } = {}) {
+  if (!homeExists(env)) return null
+  const home = loadHome({ file: homeFile(env) }), ids = home.projects.map((e) => e.id)
+  const want = String(env.DISPATCHER_PROJECT_ID || "").trim()
+  if (want) {
+    const e = home.projects.find((x) => x.id === want)
+    if (!e) throw new ProjectConfigError(`В доме ${home.file} нет проекта \`${want}\`; есть: ${ids.join(", ")}.`, { code: "unknown-project", file: home.file })
+    return e
+  }
+  let best = null, bestLen = -1
+  for (const e of home.projects) {
+    let p
+    try { p = loadProject({ file: e.file, env }) } catch { continue } // сломанный конфиг по папке не выбрать — его покажет doctor
+    for (const root of [p.repo.main, p.repo.worktrees]) {
+      const len = canonPath(root).length
+      if (len > bestLen && insidePath(cwd, root)) { best = e; bestLen = len }
+    }
+  }
+  if (best) return best
+  if (home.projects.length === 1) return home.projects[0]
+  throw new ProjectConfigError(
+    `В доме ${home.file} несколько проектов: ${ids.join(", ")}. Укажите проект: \`--project <id>\` в команде или переменная DISPATCHER_PROJECT_ID.`,
+    { code: "ambiguous", issues: ids.map((id) => ({ path: id, message: "проект дома" })), file: home.file },
+  )
+}
+
+/**
+ * Сырой конфиг проекта с общим из дома. Агент: ключи проекта перекрывают общие, модели — по ролям. Машины: общие плюс
+ * свои; удалённой общей машине папка `dir` достаётся с окончанием `/<id проекта>` — иначе два проекта делили бы один
+ * клон на машине, и уборка папок прогонов одного (ключи слотов `wv0001-…` в проектах совпадают) снесла бы папки другого.
+ * Свой предел `limits.slots` проекта, если не задан, — общий.
+ */
+export function withHomeShared(raw, home, entry) {
+  const sh = home.shared, out = { ...raw }
+  if (Object.keys(sh.agent).length) {
+    const pa = raw.agent || {}, models = { ...(sh.agent.models || {}), ...(pa.models || {}) }
+    out.agent = { ...sh.agent, ...pa, ...(Object.keys(models).length ? { models } : {}) }
+  }
+  const machines = {}
+  for (const [id, m] of Object.entries(sh.machines)) machines[id] = m.ssh ? { ...m, dir: fwd(m.dir).replace(/\/+$/, "") + "/" + entry.id } : { ...m }
+  for (const [id, m] of Object.entries(raw.machines || {})) machines[id] = { ...(machines[id] || {}), ...m }
+  if (Object.keys(machines).length) out.machines = machines
+  const slots = (raw.limits && raw.limits.slots) || sh.limits.slots
+  if (slots) out.limits = { ...(raw.limits || {}), slots }
+  return out
+}
 
 /**
  * Код-надстройка проекта: dispatcher.project.mjs рядом с конфигом. Необязательна.

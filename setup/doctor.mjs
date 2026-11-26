@@ -1,9 +1,11 @@
 // doctor.mjs — проверка установки: конфиг, git и ветки проекта, папки, бинарник агента, задачи, машины, модули.
+// В доме (runHomeDoctor) — ещё сам файл дома и то, что проекты дома не делят.
 // Только читает. Каждая проверка — { id, level, title, detail, fix }; level: ok | warn | error | info.
 import fs from "node:fs"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
-import { loadProject, loadProjectCode, formatIssues, isBareCommand, projectFile, ProjectConfigError } from "../scripts/dev/project.mjs"
+import { loadHome, loadProject, loadProjectCode, formatIssues, homeFile, isBareCommand, projectFile, ProjectConfigError } from "../scripts/dev/project.mjs"
+import { canonPath } from "../scripts/dev/paths.mjs"
 import { moduleStates } from "../scripts/dev/modules-catalog.mjs"
 import { whichBin } from "./detect.mjs"
 
@@ -102,25 +104,30 @@ function dirState(dir) {
  * @param net проверять ли ssh до удалённых машин (ходит в сеть)
  * @returns {Promise<{ok:boolean, checks:object[], project:object|null, modules:object[]}>}
  */
+const nodeCheck = () => {
+  const major = Number(process.versions.node.split(".")[0])
+  return {
+    id: "node",
+    level: major >= MIN_NODE ? "ok" : "error",
+    title: "Node.js",
+    detail: `версия ${process.versions.node}` + (major >= MIN_NODE ? "" : `, нужна ${MIN_NODE} или новее`),
+  }
+}
+
 export async function runDoctor({
   file = projectFile(),
   net = false,
   env = process.env,
   platform = process.platform,
+  node = true, // проверка дома печатает версию Node один раз, а не у каждого проекта
 } = {}) {
   const checks = []
   const add = (c) => checks.push(c)
-  const major = Number(process.versions.node.split(".")[0])
-  add({
-    id: "node",
-    level: major >= MIN_NODE ? "ok" : "error",
-    title: "Node.js",
-    detail: `версия ${process.versions.node}` + (major >= MIN_NODE ? "" : `, нужна ${MIN_NODE} или новее`),
-  })
+  if (node) add(nodeCheck())
 
   let project = null
   try {
-    project = loadProject({ file, fresh: true })
+    project = loadProject({ file, fresh: true, env })
   } catch (e) {
     if (!(e instanceof ProjectConfigError)) throw e
     add({
@@ -370,20 +377,90 @@ export async function runDoctor({
   return { ok: !checks.some((c) => c.level === "error"), checks, project, modules }
 }
 
+/**
+ * Проверка дома: сам файл дома, каждый проект (как runDoctor) и то, что проекты не делят: папки, порты, клон на
+ * удалённой машине, бот Телеграма и рабочий стол Windows (в первой редакции — не больше чем в одном проекте).
+ * only — проверить один проект по id.
+ * @returns {Promise<{ok:boolean, checks:object[], projects:object[], home:object|null}>}
+ */
+export async function runHomeDoctor({ file = homeFile(), net = false, env = process.env, platform = process.platform, only = "" } = {}) {
+  const checks = [nodeCheck()], projects = []
+  const add = (c) => checks.push(c)
+  let home
+  try { home = loadHome({ file }) } catch (e) {
+    if (!(e instanceof ProjectConfigError)) throw e
+    add({ id: "home", level: "error", title: "Дом", detail: e.message, fix: "исправьте dispatcher.home.json и запустите проверку снова" })
+    return { ok: false, checks, projects, home: null }
+  }
+  add({
+    id: "home",
+    level: home.warnings.length ? "warn" : "ok",
+    title: "Дом",
+    detail: `${home.file}: проектов ${home.projects.length}, хаб — порт ${home.hub.port}, данные хаба ${home.hub.data}` + (home.warnings.length ? "\n" + formatIssues(home.warnings) : ""),
+  })
+  add({
+    id: "home.limit",
+    level: "info",
+    title: "Общий предел агентов слотов",
+    detail: home.shared.limits.slots ? `${home.shared.limits.slots} на все проекты (\`shared.limits.slots\`)` : "не задан — у каждого проекта только свой `limits.slots`",
+  })
+  const list = only ? home.projects.filter((e) => e.id === only) : home.projects
+  if (only && !list.length) add({ id: "home.project", level: "error", title: "Проект", detail: `в доме нет проекта \`${only}\`; есть: ${home.projects.map((e) => e.id).join(", ")}` })
+  for (const e of list) projects.push({ id: e.id, port: e.port, start: e.start, file: e.file, ...(await runDoctor({ file: e.file, net, env, platform, node: false })) })
+
+  // что проекты дома не делят
+  const loaded = projects.filter((p) => p.project)
+  const clash = (title, keyOf) => {
+    const by = new Map()
+    for (const p of loaded) for (const k of keyOf(p.project)) { if (!by.has(k)) by.set(k, []); by.get(k).push(p.id) }
+    for (const [k, ids] of by) if (ids.length > 1) add({ id: "home.clash", level: "error", title, detail: `${k} — у проектов ${ids.join(", ")}`, fix: "у каждого проекта дома свои папки и места" })
+  }
+  clash("Одна основная папка у нескольких проектов", (p) => [canonPath(p.repo.main)])
+  clash("Одна папка слотов у нескольких проектов", (p) => [canonPath(p.repo.worktrees)])
+  clash("Одна папка данных у нескольких проектов", (p) => [canonPath(p.repo.data)])
+  clash("Один клон на удалённой машине у нескольких проектов", (p) => Object.values(p.machines).filter((m) => m.ssh).map((m) => m.ssh + ":" + m.dir))
+  for (const [mod, why] of [["tg", "бот опрашивает Телеграм один на токен"], ["win-desktop", "окна и монитор — одни на машину"]]) {
+    const on = loaded.filter((p) => p.modules.some((m) => m.id === mod && m.on)).map((p) => p.id)
+    if (on.length > 1) {
+      const fix = "оставьте модуль включённым в одном проекте (`modules." + mod + "`)"
+      add({ id: "home.module." + mod, level: "error", title: `Модуль \`${mod}\` в нескольких проектах`, detail: `${on.join(", ")}: ${why}`, fix })
+    }
+  }
+  const ok = !checks.some((c) => c.level === "error") && projects.every((p) => p.ok)
+  return { ok, checks, projects, home }
+}
+
 const MARK = { ok: "✔", warn: "!", error: "✖", info: "·" }
 
-/** Отчёт текстом. */
-export function formatDoctor({ ok, checks, modules }) {
+function checkLines(checks) {
   const lines = []
   for (const c of checks) {
     lines.push(`${MARK[c.level] || "?"} ${c.title}: ${c.detail}`)
     if (c.fix && c.level !== "ok") lines.push(`    → ${c.fix}`)
   }
+  return lines
+}
+
+const verdict = (ok, checks) => {
+  const errors = checks.filter((c) => c.level === "error").length, warns = checks.filter((c) => c.level === "warn").length
+  return ok ? `Готово: ошибок нет${warns ? ", предупреждений " + warns : ""}.` : `Ошибок: ${errors}${warns ? ", предупреждений " + warns : ""} — исправьте и запустите проверку снова.`
+}
+
+/** Отчёт текстом. */
+export function formatDoctor({ ok, checks, modules }) {
+  const lines = checkLines(checks)
   if (modules.length) {
     lines.push("", "Модули:")
     for (const m of modules) lines.push(`  ${m.on ? "вкл " : "выкл"} ${m.id.padEnd(12)} ${m.title}${m.on ? "" : " — " + m.why}`)
   }
-  const errors = checks.filter((c) => c.level === "error").length, warns = checks.filter((c) => c.level === "warn").length
-  lines.push("", ok ? `Готово: ошибок нет${warns ? ", предупреждений " + warns : ""}.` : `Ошибок: ${errors}${warns ? ", предупреждений " + warns : ""} — исправьте и запустите проверку снова.`)
+  lines.push("", verdict(ok, checks))
+  return lines.join("\n")
+}
+
+/** Отчёт проверки дома: общее, затем каждый проект своим разделом, итог — по всему дому. */
+export function formatHomeDoctor({ ok, checks, projects }) {
+  const lines = checkLines(checks)
+  for (const p of projects) lines.push("", `── проект ${p.id} (порт ${p.port}${p.start === "lazy" ? ", по требованию" : ""}) ──`, formatDoctor(p))
+  lines.push("", "Дом: " + verdict(ok, [...checks, ...projects.flatMap((p) => p.checks)]))
   return lines.join("\n")
 }

@@ -91,7 +91,11 @@ function cases() {
   put("prompt.factsShort", P.FACTS_RULES_SHORT)
   put("prompt.review", P.reviewPrompt({ br: "dev/wv-0001-first", plan: "ПЛАН", prev: "ПРОШЛОЕ" }))
   put("prompt.review.bare", P.reviewPrompt({ br: "dev/wv-0001-first" }))
-  put("prompt.orchPrimer", P.orchPrimer({ ep: "ep-g", orchDir: "/orch", prevId: "0123456789ab", ctx: 123456, asked: ["вопрос 1", "вопрос 2"], said: ["ответ"] }))
+  put("prompt.orchPrimer", P.orchPrimer({ ep: "ep-g", orchDir: "/orch", prevId: "0123456789ab", ctx: 123456,
+    slots: [P.slotStateLine({ key: "wv-g1", tag: "П1", branch: "dev/wv-0001-first", exists: true, ahead: 2, verdict: { build: "ok", tests: "fail", guards: "green" } }, "busy"),
+      P.slotStateLine({ key: "tr-g", tag: "Т1", branch: "dev/tr-g", exists: true, train: true, wagon: "WV-0003", verdict: { merged: true } }, "session"),
+      P.slotStateLine({ key: "wv-g2", tag: "П2", branch: "dev/wv-0002-second", exists: false }, "", ["твоя передача ему ждёт отправки"])],
+    questions: [{ who: "П1", text: "вопрос 1" }], waits: ["ВЛИТЬ П1 — слово владельца в силе до 12:00; ждёт зелёного: нет «регресс»."], owner: ["слово владельца"] }))
   put("prompt.orchPrimer.bare", P.orchPrimer({ ep: "ep-g", orchDir: "/orch" }))
   put("backlog.system", BR.backlogSystemPrompt({ dir: "/bl", cwd: "/cwd", main: "/main", cli: "/backlog.mjs" }))
   put("backlog.orch", BR.orchBacklogSection({ dir: "/bl", cli: "/backlog.mjs" }))
@@ -107,6 +111,13 @@ function cases() {
   put("relay.trainNote", R.trainCommitNote("Т1", "WV-0003"))
   put("relay.trainNote.noWave", R.trainCommitNote("Т1", ""))
   put("relay.failHint", R.ORCH_FAIL_HINT)
+  const RT = { orch: { key: "orchestrator@ep-g" }, p1: { key: "wv-g1", tag: "П1", plannedBranch: "dev/wv-0001-first" }, p2: { key: "wv-g2", tag: "П2" } }
+  for (const via of Object.keys(R.RELAY_VIA)) {
+    put("relay.head.toOrch." + via, R.relayHead(via, { from: RT.p1, to: RT.orch }))
+    put("relay.head.toSlot." + via, R.relayHead(via, { from: RT.orch, to: RT.p1 }))
+    put("relay.head.toPeer." + via, R.relayHead(via, { from: RT.p1, to: RT.p2 }))
+  }
+  put("relay.noBlock", prompt("relay-no-block", { to: "ОРК" }))
   put("deadlock", DL.deadlockText({ what: "ВЛИТЬ П1", why: "причина", n: 3, since: 0, now: 180000 }))
   const w = { tag: "П1", wave: "WV-0001", title: "Первая" }
   put("accept.ask.manual", AR.acceptAskText(w, { standUrl: "https://stand" }))

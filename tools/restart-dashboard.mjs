@@ -18,6 +18,14 @@ import { DRAIN_PAUSE_MS, drainRetry, pageToken } from "../scripts/dev/dashboard/
 import { DATA, PORT } from "../scripts/dev/dashboard/config.mjs"
 import { portOpen, portPid } from "./port-pid.mjs"
 import { killPosixTree } from "../scripts/dev/dashboard/proc-tree.mjs"
+import { homeEntryOf, homeExists, homeFile, loadHome, projectFile } from "../scripts/dev/project.mjs"
+
+// Процесс проекта дома ведёт хаб (scripts/dev/hub/server.mjs): перезапуск отсюда столкнулся бы с ним на порту, а
+// остановка по порту 4777 сняла бы сам хаб. Упавший процесс проекта хаб поднимает сам.
+if (homeExists() && homeEntryOf(loadHome({ file: homeFile() }), projectFile())) {
+  console.log("Проект ведёт хаб дома: перезапуск — остановите хаб (Ctrl+C в его окне) и запустите снова: node scripts/dev/hub/server.mjs")
+  process.exit(3)
+}
 
 const DIR = process.env.DASH_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const B = "http://127.0.0.1:" + PORT, force = process.argv.includes("--force"), sleep = (ms) => new Promise((r) => setTimeout(r, ms))

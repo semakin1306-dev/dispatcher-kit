@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // backlog.mjs — команда бэклога для оркестратора и человека: list, show, add, set (отказ — только с причиной), triage
 // (карточки ретро последнего закрытого эпика без решения; есть такие — код 1), prompt.
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fwd, loadEpics } from "./slots.mjs";

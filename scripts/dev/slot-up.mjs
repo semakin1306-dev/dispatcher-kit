@@ -17,6 +17,7 @@
 //
 // Код возврата: 0 — все выбранные шаги выполнены; 1 — хоть один упал; 2 — неверные аргументы, ничего не сделано.
 // «Пропущено» печатается отдельно от «выполнено»: молчаливый пропуск читался бы как покрытие.
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

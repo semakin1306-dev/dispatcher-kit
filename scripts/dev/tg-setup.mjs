@@ -9,6 +9,7 @@
 // Ключи: --data <папка данных> (по умолчанию — из конфига проекта или DASH_DATA), --proxy <http://хост:порт> (как DASH_TG_PROXY),
 // --wait <сек> (сколько ждать /start, 300), --store file|dpapi (куда класть токен).
 // Пока бот диспетчерской включён (settings.tgBot), getUpdates читает он — утилита увидит 409: выключите «Telegram» на странице.
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import fs from "node:fs";
 import path from "node:path";
 

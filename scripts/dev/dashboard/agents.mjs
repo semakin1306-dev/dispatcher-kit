@@ -18,7 +18,7 @@ import os from "node:os"
 import path from "node:path"
 import { ownerSaid } from "./orchlog.mjs"
 import { EPIC_CLI, EPIC_FILE, HOME, MAIN, PERSONA_PATH, PROJECT, REMOTE, WT, fwd } from "../slots.mjs"
-import { ORCH_ROTATE_TOKENS, orchWake, rotateDue } from "./loops.mjs"
+import { ORCH_ROTATE_TOKENS, heldLive, heldPut, orchWake, rotateDue } from "./loops.mjs"
 import { execFile, killTree, spawn } from "./spawner.mjs"
 import { readJson, saveJson } from "./store.mjs"
 import { S } from "./state.mjs"
@@ -42,12 +42,13 @@ import { bashAllowed as policyBashAllowed, bashDenyWhy as policyBashDenyWhy, dec
 import { enabled } from "./modules.mjs"
 import { proxyEnv, runtime } from "../runtimes/index.mjs"
 import { installSlotHooks, writeSlotWave } from "../hooks/commit-msg.mjs"
+import { evictable, holdersText, releasePlace, takePlace } from "./agent-places.mjs"
 
 // Агенты — нижний слой: их импортируют почти все модули. Что агент зовёт наверх (перехват ответа, разбор хода, заметки ревью,
 // память машины, снимок) — поздней привязкой: те модули сами импортируют этот.
 const { captureReply } = late("accept.mjs", ["captureReply"])
 const { memInfo } = late("monitor.mjs", ["memInfo"])
-const { forgetRelayFacts, inboxAfterTurn } = late("relay.mjs", ["forgetRelayFacts", "inboxAfterTurn"])
+const { forgetRelayFacts, inboxAfterTurn, orchPrimerFacts } = late("relay.mjs", ["forgetRelayFacts", "inboxAfterTurn", "orchPrimerFacts"])
 const { recentNotes } = late("review.mjs", ["recentNotes"])
 const { snapNow } = late("snapshot.mjs", ["snapNow"])
 
@@ -186,22 +187,36 @@ const HELD_MAX = 20
 export function loadOrchHeld() { S.orchHeld = readJson(ORCH_HELD_FILE, {}) || {} }
 const saveHeld = () => { if (!DRY) saveJson(ORCH_HELD_FILE, S.orchHeld || {}) }
 /**
- * Отложить сведение оркестратору до его следующего хода. Повтор того же текста не копится; длинное обрезается, а копилка
- * держит последние HELD_MAX — иначе попутный блок раздул бы следующее сообщение. why — вид сведения (в журнал).
+ * Отложить сведение оркестратору до его следующего хода. about — предмет сведения: { tree — слот, what — уточнение
+ * (задача|ввод), kind — вид, если не по тексту }. Новое о том же предмете
+ * заменяет старое (loops.mjs heldPut); длинное обрезается с пометкой, копилка держит последние HELD_MAX — иначе
+ * попутный блок раздул бы следующее сообщение.
  */
-export function holdForOrch(key, text, why = "") {
+export function holdForOrch(key, text, about = {}) {
   if (!S.orchHeld) S.orchHeld = {}
-  const list = S.orchHeld[key] || (S.orchHeld[key] = []), t = String(text || "").trim()
-  if (!t || list.some((x) => x.text === t)) return
-  list.push({ at: Date.now(), text: t.length > 1500 ? t.slice(0, 1500) + " …" : t }); if (list.length > HELD_MAX) list.splice(0, list.length - HELD_MAX)
-  logEvent("orch.held", { key, kind: why, chars: t.length, brief: brief(t) }); saveHeld()
+  const t = String(text || "").trim(); if (!t) return
+  // Вид и «устаревает с вливом» — по тексту из одной таблицы (loops.mjs ORCH_MSG), а не со слов зовущего.
+  const w = orchWake(t), { tree = "", what = "" } = about || {}, kind = (about && about.kind) || w.kind
+  const item = { at: Date.now(), text: short(t, 1500), kind, ...(tree ? { tree, what, untilMerge: w.untilMerge } : {}) }
+  S.orchHeld[key] = heldPut(S.orchHeld[key], item, HELD_MAX)
+  logEvent("orch.held", { key, kind, tree: tree || undefined, chars: t.length, brief: brief(t) }); saveHeld()
 }
-// Забрать копилку одним блоком «Попутно: …» и сразу очистить (и на диске): сведение уходит ровно один раз.
-function takeHeld(key) {
-  const list = S.orchHeld && S.orchHeld[key]; if (!list || !list.length) return ""
+/** Слот для проверки копилки при выдаче: нет в эпиках — null; иначе влит ли он по снимку (снимка нет — не влит). */
+const heldSlotOf = (tree) => {
+  if (!treeByKey(tree)) return null
+  const snap = snapNow(), t = snap && (snap.trees || []).find((x) => x.key === tree)
+  return { merged: !!(t && t.verdict && t.verdict.merged && !(t.ahead > 0)) }
+}
+// Забрать копилку одним блоком «Попутно: …» и сразу очистить (и на диске): сведение уходит ровно один раз. Устаревшее
+// к этому моменту (слота нет, слот влит) не уходит вовсе — оркестратор принял бы его за действующее.
+function takeHeld(key, slotOf = heldSlotOf) {
+  const all = S.orchHeld && S.orchHeld[key]; if (!all || !all.length) return ""
   delete S.orchHeld[key]; saveHeld()
+  const { keep, drop } = heldLive(all, slotOf)
+  if (drop.length) logEvent("orch.held.drop", { key, n: drop.length, trees: [...new Set(drop.map((x) => x.tree))].join(",") })
+  if (!keep.length) return ""
   const hhmm = (at) => new Date(at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
-  return "── Попутно: сведения диспетчерской, накопленные без отдельного хода (решения не требовали) ──\n" + list.map((x) => "- " + hhmm(x.at) + " " + x.text.replace(/\n+/g, " ")).join("\n")
+  return "── Попутно: сведения диспетчерской, накопленные без отдельного хода (решения не требовали) ──\n" + keep.map((x) => "- " + hhmm(x.at) + " " + x.text.replace(/\n+/g, " ")).join("\n")
 }
 
 export const agentSession = (key) => sessions()[key]
@@ -374,9 +389,9 @@ export function onAgentMsg(a, ev) {
     }
     case "limits": a.limits = { limit: ev.limit, util: ev.util, status: ev.status, resetsAt: ev.resetsAt, at: Date.now() }; return
     case "stderr": a.lastErr = short(ev.text, 300); return
-    case "error": a.dead = true; a.busy = false; push(a, { id: "err-" + a.rev, t: "status", text: "Не удалось запустить агента: " + ev.message, bad: true }); return
+    case "error": a.dead = true; a.busy = false; releaseShared(a.key); push(a, { id: "err-" + a.rev, t: "status", text: "Не удалось запустить агента: " + ev.message, bad: true }); return
     case "exit": {
-      a.dead = true; a.busy = false; a.pending.clear()
+      a.dead = true; a.busy = false; a.pending.clear(); releaseShared(a.key)
       if (a.stopping) markMid(a.key, 0) // остановил человек или простой — не возобновлять; при перезапуске диспетчерской событие не доходит, отметка остаётся
       logEvent("agent.end", { key: a.key, code: ev.code ?? null, stopping: !!a.stopping })
       const ok = ev.code === 0 || a.stopping
@@ -463,6 +478,41 @@ export const slotPreparing = (key) => jobList().some((j) => j.tree === key && j.
 /** Параметры процесса по роли: агент бэклога — без автоприёма правок и без пользовательских настроек рантайма. */
 const roleOpts = (key) => isBacklogKey(key) ? backlogAgentOpts() : { acceptEdits: true, userSettings: true }
 
+// ── предел агентов слотов (agent-places.mjs): свой `limits.slots` и общий для проектов дома `limits.shared` ──
+const SHARED = PROJECT.limits.shared
+/** Снять место общего предела, которое держит агент key этого процесса. */
+const releaseShared = (key) => { if (SHARED) try { releasePlace(SHARED.dir, { key }) } catch { /* папка мест недоступна — место снимет следующий счёт */ } }
+
+/**
+ * Место под агента слота key. Предел занят — уступает молчащий агент слота этого проекта (останавливается, сессия
+ * сохраняется); молчащих нет — исключение с причиной: кто занят и где поднять предел. Вызывающие (передачи, кнопка
+ * запуска) обращаются с ним как с отказом по памяти: передача остаётся в очереди и уйдёт, когда место освободится.
+ */
+function makeRoom(key) {
+  const live = () => [...agents.values()].filter((x) => !x.dead && !x.stopping && x.key !== key && slotAgentKey(x.key) && (x.rt || x.ready))
+  const yieldPlace = (a, why) => {
+    push(a, { id: "yield-" + a.rev, t: "status", text: "Остановлен: место под агента " + key + " (" + why + "). Сессия сохранена — следующее сообщение продолжит её." })
+    logEvent("agent.yield", { key: a.key, for: key, why })
+    releaseShared(a.key); stopAgent(a)
+  }
+  const own = live(), limit = PROJECT.limits.slots
+  if (own.length >= limit) {
+    const a = evictable(own)
+    if (!a) throw new Error(`предел агентов слотов проекта — ${limit} (\`limits.slots\`), все в работе: ${own.map((x) => x.key).join(", ")}. Агент запустится, когда один из них закончит ход`)
+    yieldPlace(a, "предел проекта " + limit)
+  }
+  if (!SHARED) return
+  let r = takePlace(SHARED.dir, SHARED.slots, { project: PROJECT.name, key })
+  if (!r.ok) {
+    const a = evictable(live())
+    if (a) { yieldPlace(a, "общий предел дома " + SHARED.slots); r = takePlace(SHARED.dir, SHARED.slots, { project: PROJECT.name, key }) }
+  }
+  if (!r.ok) {
+    const why = `общий предел агентов слотов нескольких проектов — ${SHARED.slots} (\`shared.limits.slots\`), места заняты: ${holdersText(r.holders)}`
+    throw new Error(why + ". Агент запустится, когда место освободится")
+  }
+}
+
 /**
  * Запустить процесс агента для ключа (resume — продолжить прошлую сессию). Живой или ещё запускающийся агент — как есть.
  * Отказ: сухой режим, у слота нет папки, свободной памяти меньше ~1,5 ГБ (процесс агента не поместится и уронит машину).
@@ -476,6 +526,7 @@ export async function startAgent(key, { resume = false, model = "" } = {}) {
   const rt = runtime()
   let mem = null; try { mem = await memInfo() } catch { /* монитора машины нет — без проверки памяти */ }
   if (mem && mem.freeCommitGB < 1.5) throw new Error(`мало памяти для агента: свободно ${mem.freeCommitGB.toFixed(1)} ГБ лимита выделения (нужно ~1,5)`)
+  if (slotAgentKey(key)) makeRoom(key)
   const prevS = sessions()[key]
   const sid = resume && !process.env.DASH_TEST_NO_RESUME ? (prevS && prevS.id) || (rt.latestSession(cwd) || {}).id || null : null // DASH_TEST_NO_RESUME — пробы не трогают настоящие сессии
   model = modelFor(key, model)
@@ -503,7 +554,10 @@ export async function startAgent(key, { resume = false, model = "" } = {}) {
     if (slotAgentKey(key)) ensureSlotHooks(a)
     a.rt = rt.start({ cwd, model, resume: sid, systemPrompt: agentSystemPrompt(key), ...roleOpts(key), env: proxyEnv() }, { spawn, kill: killTree, onEvent: (ev) => onAgentMsg(a, ev) })
     a.proc = a.rt.proc || null
-  } catch (e) { a.dead = true; a.busy = false; a.lastErr = e.message; push(a, { id: "err-" + a.rev, t: "status", text: "Не удалось запустить агента: " + e.message, bad: true }); ready(); throw e }
+  } catch (e) {
+    a.dead = true; a.busy = false; a.lastErr = e.message; releaseShared(key)
+    push(a, { id: "err-" + a.rev, t: "status", text: "Не удалось запустить агента: " + e.message, bad: true }); ready(); throw e
+  }
   push(a, {
     id: "start-" + a.rev,
     t: "status",
@@ -719,19 +773,21 @@ export const agentPublic = (key) => {
 // ───────────────────────────── оркестратор: ротация и сообщения ─────────────────────────────
 
 // Контекст оркестратора растёт, и каждый ход перечитывает его целиком. Перешёл порог ORCH_ROTATE_TOKENS — перед следующим
-// сообщением старая сессия закрывается (она сохранена), новая получает вводную: память — файлы плана эпика и последние ответы.
+// сообщением старая сессия закрывается (она сохранена), новая получает вводную: память — файлы плана эпика, плюс факты диспетчерской о слотах и слове владельца.
 export async function rotateOrchIfDue(a) {
   if (DRY || !a || !isOrch(a.key) || !a.rotateDue || a.busy) return a
   const key = a.key, prevId = a.sessionId, ctx = a.ctxTok, model = a.model
-  const said = a.items.filter((x) => x.t === "assistant" && x.text && !x.live).slice(-3).map((x) => x.text.slice(0, 1500))
-  const asked = a.items.filter((x) => x.t === "user" && x.owner && x.text).slice(-2).map((x) => x.text.slice(0, 800))
+  // Факты — до остановки: неотвеченное слово владельца ищется в ленте старой сессии. Без фактов вводная всё равно уйдёт:
+  // память новой сессии — файлы плана эпика.
+  let facts = {}
+  try { facts = orchPrimerFacts(key, a) } catch (e) { logEvent("orch.rotate.facts.error", { key, error: String(e.message || e).slice(0, 160) }) }
   stopAgent(a)
   for (let i = 0; i < 50 && !a.dead; i++) await sleep(100)
   if (!a.dead) { a.rotateDue = false; return a } // не остановился — продолжаем старую сессию, попробуем на следующем пороге
   const b = await startAgent(key, { resume: false, model })
   b.ctxTok = 0; b.rotateDue = false; logEvent("orch.rotate", { key, ctxTok: ctx || 0, prevId: prevId || null })
   try { forgetRelayFacts(epicOfKey(key)) } catch { /* справки сбросятся сами */ }
-  b.primer = orchPrimer({ ep: epicOfKey(key), orchDir: fwd(agentCwd(key) || ""), prevId, ctx, asked, said })
+  b.primer = orchPrimer({ ep: epicOfKey(key), orchDir: fwd(agentCwd(key) || ""), prevId, ctx, ...facts })
   push(b, {
     id: "rotd-" + b.rev,
     t: "status",
@@ -745,8 +801,11 @@ export async function rotateOrchIfDue(a) {
   return b
 }
 
-/** Сообщение с вводной сессии и (у оркестратора) накопленными сведениями — в начале. */
-export const withPrimer = (a, msg) => { const held = isOrch(a.key) ? takeHeld(a.key) : "", p = a.primer || ""; a.primer = null; return [p, held, msg].filter(Boolean).join("\n\n────────\n\n") }
+/** Сообщение с вводной сессии и (у оркестратора) накопленными сведениями — в начале. slotOf — для тестов (см. takeHeld). */
+export const withPrimer = (a, msg, slotOf = heldSlotOf) => {
+  const held = isOrch(a.key) ? takeHeld(a.key, slotOf) : "", p = a.primer || ""; a.primer = null
+  return [p, held, msg].filter(Boolean).join("\n\n────────\n\n")
+}
 
 /** Сообщение диспетчерской агенту: в ленту, в журнал эпика и ходом агенту. opt.owner — от имени владельца (по умолчанию — автоответ). */
 export function deliver(a, msg, kind = "msg", opt = {}) {
@@ -758,12 +817,18 @@ export function deliver(a, msg, kind = "msg", opt = {}) {
   try { agentSend(a, msg) } catch (e) { a.busy = false; throw e }
 }
 
-/** Сообщение агенту, когда он освободится. Оркестратору сведения, не требующие решения, — попутно со следующим сообщением. */
+/**
+ * Сообщение агенту, когда он освободится. Оркестратору сведения, не требующие решения, — попутно со следующим сообщением;
+ * about — предмет сведения ({ tree, what }) для копилки: по нему новое заменяет старое, а устаревшее не уезжает.
+ */
+export function sendWhenFree(key, text, about = null) {
+  if (isOrch(key) && !orchWake(text).wake) return holdForOrch(key, text, about || {})
+  deliverWhenFree(key, text)
+}
 // Ждём освобождения опросом раз в 15 с, не дольше 480 попыток (~2 ч): занятый агент не теряет сообщение, а зависший
-// не копит таймеры бесконечно. Решение «будить ли оркестратора» — только при первой попытке.
-export function sendWhenFree(key, text, tries = 0) {
-  if (!tries && isOrch(key)) { const w = orchWake(text); if (!w.wake) return holdForOrch(key, text, w.kind) }
+// не копит таймеры бесконечно.
+function deliverWhenFree(key, text, tries = 0) {
   const a = agents.get(key)
-  if (a && !a.dead && a.busy) { if (tries < 480) setTimeout(() => sendWhenFree(key, text, tries + 1), 15000); return }
+  if (a && !a.dead && a.busy) { if (tries < 480) setTimeout(() => deliverWhenFree(key, text, tries + 1), 15000); return }
   ensureAgent(key).then((ag) => deliver(ag, text)).catch((e) => console.error("сообщение → " + key + ":", e.message))
 }

@@ -60,10 +60,46 @@ export function reviewPrompt({ br, plan = "", prev = "" }) {
     prev ? "ПРОШЛЫЙ КРУГ РЕВЬЮ и ответ автора:\n" + prev : ""].filter(Boolean).join("\n\n")
 }
 
-/** Вводная новой сессии оркестратора после ротации: память и порядок — первыми, номер сессии и токены — в конце. */
-export function orchPrimer({ ep, orchDir, prevId = "", ctx = 0, asked = [], said = [] }) {
+/** Слова станций слота (verdict снимка): справка о слоте и вводная новой сессии говорят о станциях одинаково. */
+export const VERDICT_WORDS = {
+  ok: "зелёная на текущем коде",
+  green: "зелёные на текущем коде",
+  fail: "КРАСНЫЕ",
+  stale: "были на ДРУГОМ коде, файлы менялись после прогона",
+  nobuild: "зелёные, но без сборки на этом коде",
+  none: "НЕ ПРОГОНЯЛИСЬ",
+  notneeded: "не нужны",
+  requested: "попросили перепрогнать",
+}
+
+/**
+ * Строка о слоте для вводной оркестратора — по снимку диспетчерской, а не по словам агентов.
+ * t — дерево снимка (tag, key, branch, exists, ahead, verdict, train, wagon); agent — "busy" | "idle" | "session" | "".
+ */
+export function slotStateLine(t, agent = "", extra = []) {
+  const v = t.verdict || {}, w = (x) => VERDICT_WORDS[x] || x || "?"
+  const head = (t.tag || "?") + " " + t.key + " (ветка " + (t.branch || "?") + (t.train ? ", поезд" + (t.wagon ? ", вагон " + t.wagon : "") : "") + "): "
+  if (!t.exists) return head + "папки слота нет (не подготовлен или убран)" + (extra.length ? "; " + extra.join("; ") : "") + "."
+  const st = !t.verdict ? ["станций в снимке диспетчерской ещё нет"]
+    : v.merged && !(t.ahead > 0) ? ["влита в staging"]
+    : [t.ahead ? "впереди staging " + t.ahead + " коммит(а)" : "впереди staging коммитов нет",
+      "сборка — " + w(v.build) + ", тесты волны — " + w(v.tests) + ", гарды — " + w(v.guards) + (v.regress ? ", регресс — " + w(v.regress) : "")]
+  const ag = { busy: "агент отвечает", idle: "агент запущен и ждёт", session: "агент не запущен, сессия есть" }[agent] || "агента нет"
+  return head + [...st, ag, ...extra].join("; ") + "."
+}
+
+/**
+ * Вводная новой сессии оркестратора после ротации: память и порядок — первыми, номер сессии и токены — в конце.
+ * Всё ниже правил — факты диспетчерской на момент ротации: строки слотов, открытые вопросы владельцу ({ who, text }),
+ * ожидания влива по слову владельца и сообщения владельца, на которые прошлая сессия не ответила, — целиком.
+ * Ответов прошлой сессии здесь нет намеренно: их обрывки новая сессия читала как действующие решения.
+ */
+export function orchPrimer({ ep, orchDir, prevId = "", ctx = 0, slots = [], questions = [], waits = [], owner = [] }) {
+  const list = (head, xs) => (xs.length ? head + "\n" + xs.join("\n") : "")
   return [prompt("orch-primer", { ep, orchDir }),
-    "Прошлая сессия: " + String(prevId || "?").slice(0, 8) + ", " + Math.round((ctx || 0) / 1000) + " тыс. токенов контекста.",
-    asked.length ? "Последние сообщения владельца:\n" + asked.map((x) => "— " + x).join("\n") : "",
-    said.length ? "Твои последние ответы в прошлой сессии (для связности; решения — в файлах плана):\n" + said.map((x) => "— " + x).join("\n\n") : ""].filter(Boolean).join("\n\n")
+    list("Слоты эпика:", slots.map((x) => "- " + x)),
+    list("Открытые вопросы владельцу (ещё без ответа):", questions.map((q) => "- " + q.who + ": " + q.text)),
+    list("Слово владельца, ещё не исполненное:", waits.map((x) => "- " + x)),
+    list("Сообщения владельца, на которые прошлая сессия не ответила (целиком):", owner.map((x) => "— " + x)),
+    "Прошлая сессия: " + String(prevId || "?").slice(0, 8) + ", " + Math.round((ctx || 0) / 1000) + " тыс. токенов контекста."].filter(Boolean).join("\n\n")
 }

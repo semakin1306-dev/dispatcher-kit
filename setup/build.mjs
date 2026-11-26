@@ -3,7 +3,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { SCHEMA } from "../scripts/dev/project.mjs"
+import { PROJECT_MODES, SCHEMA } from "../scripts/dev/project.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const QUIZ_FILE = path.join(HERE, "quiz.json")
@@ -11,7 +11,7 @@ export const loadQuiz = (file = QUIZ_FILE) => JSON.parse(fs.readFileSync(file, "
 
 /** Ответы, которые сборка читает. Сверяется с quiz.json тестом в обе стороны: вопрос без сборки и сборка без вопроса — ошибка. */
 export const ANSWER_IDS = [
-  "project.name", "repo.worktrees",
+  "project.name", "mode", "repo.worktrees",
   "git.remote", "git.integration", "git.production", "git.pushDeploys",
   "areas", "tasks", "slotPrepare", "deny.edit", "deny.commands",
   "ci.kind", "ci.runners",
@@ -20,6 +20,12 @@ export const ANSWER_IDS = [
   "agent.runtime", "agent.models", "agent.proxy", "agent.network",
   "autonomy", "modules.tg", "modules.optional",
 ]
+
+/**
+ * Ответы, которые у проекта дома общие: машины, предел агентов, агент по умолчанию. `setup.mjs add` их не спрашивает —
+ * они в dispatcher.home.json. Бот Телеграма в первой редакции живёт в одном проекте: у добавленного он выключен.
+ */
+export const SHARED_IDS = ["machines.localWorkers", "limits.slots", "machines.remote", "agent.runtime", "agent.models", "agent.proxy", "agent.network", "modules.tg"]
 
 const filled = (v) => Array.isArray(v) ? v.length > 0 : v != null && v !== "" && v !== false && v !== "none" // «none» (нет CI) — тоже пусто: зависимые вопросы не нужны
 
@@ -87,8 +93,9 @@ export function buildProject({ repo, answers, facts = null }) {
   const remoteMachines = A("machines.remote", [])
   const services = A("tests.services", [])
   const optional = A("modules.optional", ["review", "backlog"])
-  const autonomy = A("autonomy", "manual")
+  const autonomy = A("autonomy", "manual"), mode = A("mode", "full")
   if (!AUTONOMY[autonomy]) problems.push("`autonomy` — один из: " + Object.keys(AUTONOMY).join(", "))
+  if (!PROJECT_MODES.includes(mode)) problems.push("`mode` — один из: " + PROJECT_MODES.join(", "))
   if (!Array.isArray(remoteMachines)) problems.push("`machines.remote` — список машин")
   if (!Array.isArray(services)) problems.push("`tests.services` — список служб")
   if (!Array.isArray(optional)) problems.push("`modules.optional` — список id модулей")
@@ -103,6 +110,7 @@ export function buildProject({ repo, answers, facts = null }) {
   const project = {
     schema: SCHEMA,
     name: need("project.name", "название проекта"),
+    ...(mode === "light" ? { mode } : {}), // полный режим — умолчание: прежние конфиги не меняются
     repo: {
       main: repo,
       worktrees: A("repo.worktrees", repo + "-wt"),
@@ -150,6 +158,19 @@ export function buildProject({ repo, answers, facts = null }) {
   // Стартовые переключатели поведения: всё, что действует без человека, включается только выбранным режимом автономии.
   const settings = { ...(AUTONOMY[autonomy] || AUTONOMY.manual), fullPermissions: false, autoResults: true, tgBot: project.modules.tg }
   return { project, settings, problems }
+}
+
+/**
+ * Конфиг проекта дома: без общего — агента, предела и машин (их даёт дом, project.mjs withHomeShared). Своё у проекта
+ * на машинах — только службы тестов этой машины. remoteMachines — есть ли у дома удалённые машины (модуль `machines`).
+ */
+export function forHome(project, { remoteMachines = false } = {}) {
+  const out = { ...project }
+  delete out.agent; delete out.limits; delete out.machines
+  const services = project.machines && project.machines.local && project.machines.local.services
+  if (services && services.length) out.machines = { local: { services } }
+  out.modules = { ...project.modules, machines: !!remoteMachines, tg: false }
+  return out
 }
 
 /** Ответы из предложений (то, что определилось) поверх которых ложатся ответы человека. */

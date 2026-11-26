@@ -4,6 +4,7 @@
 //   node scripts/dev/dash-log.mjs jNNN [--grep шаблон] [--ctx 2] [--from N] [--to M] [--max 6000] [--digest]
 //   node scripts/dev/dash-log.mjs --epic <id> [--hours 48] [--types a,b] [--limit 300] [--json]
 // Логи и журнал — в папке данных диспетчерской (DASH_DATA, иначе из конфига проекта).
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { loadEpics } from "./slots.mjs";

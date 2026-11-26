@@ -7,10 +7,10 @@ import { test, after } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
-import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { freePort, installFakeClaude } from "./fixtures/fake-runtime.mjs"
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "dk-e2e-"))
@@ -33,7 +33,7 @@ const ENV = { ...process.env }
 delete ENV.NODE_TEST_CONTEXT
 for (const k of ["DASH_DATA", "DASH_PORT", "DASH_DRY", "DASH_EPIC_FILE", "DISPATCHER_MAIN", "DISPATCHER_WT"]) delete ENV[k]
 Object.assign(ENV, {
-  DISPATCHER_PROJECT: CONFIG, DISPATCHER_SKILLS_DIR: path.join(TMP, "skills"), FAKE_CLAUDE_LOG: path.join(TMP, "fake-claude.log"),
+  DISPATCHER_PROJECT: CONFIG, DISPATCHER_HOME: path.join(TMP, "no-home.json"), DISPATCHER_SKILLS_DIR: path.join(TMP, "skills"), FAKE_CLAUDE_LOG: path.join(TMP, "fake-claude.log"),
   GIT_AUTHOR_NAME: "e2e", GIT_AUTHOR_EMAIL: "e2e@example.com", GIT_COMMITTER_NAME: "e2e", GIT_COMMITTER_EMAIL: "e2e@example.com",
   PATH: BIN + path.delimiter + process.env.PATH,
 })
@@ -46,27 +46,7 @@ const sh = (cmd, args, cwd = TMP, env = ENV) => {
 const git = (cwd, ...args) => sh("git", args, cwd).trim()
 const node = (...args) => sh(process.execPath, args, HOME)
 
-/** Поддельный claude: на Windows — claude.cmd с cli.js рядом (так адаптер запускает обёртку npm), иначе — исполняемый скрипт. */
-function fakeClaude() {
-  fs.mkdirSync(BIN, { recursive: true })
-  const src = fs.readFileSync(path.join(HOME, "test", "fixtures", "fake-claude.mjs.tpl"), "utf8")
-  if (process.platform === "win32") {
-    const cli = path.join(BIN, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
-    fs.mkdirSync(path.dirname(cli), { recursive: true })
-    fs.writeFileSync(path.join(BIN, "package.json"), '{"type":"module"}\n')
-    fs.writeFileSync(path.join(path.dirname(cli), "package.json"), '{"type":"module"}\n')
-    fs.writeFileSync(cli, src)
-    const cmd = path.join(BIN, "claude.cmd")
-    fs.writeFileSync(cmd, "@echo off\r\nnode \"%~dp0node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n")
-    return cmd
-  }
-  const f = path.join(BIN, "claude")
-  fs.writeFileSync(f, src.replace(/^#!.*\n/, "#!" + process.execPath + "\n"))
-  fs.chmodSync(f, 0o755)
-  return f
-}
-
-const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)) }) })
+const fakeClaude = () => installFakeClaude(BIN)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 test("сквозной прогон: настройка → сервер → эпик и слот → задача → агент → коммит → влив в staging", { timeout: 420000 }, async (t) => {

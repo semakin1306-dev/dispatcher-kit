@@ -10,6 +10,7 @@
 // _workspaces/prompts/<метка>-<слот>.txt (персона инженера слота + раздел слота из брифа эпика). В папку слота —
 // файл запретов агента (git его игнорирует). Запреты в настройках сессии исполняются инструментом агента, а не уговором
 // в промпте; это не граница ОС и не защита от человека.
+import "./select-project.mjs"; // первым: выбор проекта дома (--project) до загрузки slots.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

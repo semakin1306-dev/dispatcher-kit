@@ -40,7 +40,8 @@ describe("префикс не плавает", () => {
     assert.doesNotMatch(REVIEW_RULES, /wv-\d{4}|\d{2}\.\d{2}/i)
   })
   test("вводная оркестратора: номер старой сессии и токены — не в начале", () => {
-    const a = orchPrimer({ ep: "e1", orchDir: "/w/o", prevId: "aaaaaaaa-1", ctx: 512000 }), b = orchPrimer({ ep: "e1", orchDir: "/w/o", prevId: "bbbbbbbb-2", ctx: 640000, asked: ["влей"] })
+    const a = orchPrimer({ ep: "e1", orchDir: "/w/o", prevId: "aaaaaaaa-1", ctx: 512000 })
+    const b = orchPrimer({ ep: "e1", orchDir: "/w/o", prevId: "bbbbbbbb-2", ctx: 640000, owner: ["влей"], slots: ["П1 x (ветка y): влита в staging; агента нет."] })
     assert.ok(commonPrefix(a, b) > a.indexOf("Прошлая сессия:") - 1)
   })
   test("постоянные тексты — без меток слотов, дат и sha", () => {

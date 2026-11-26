@@ -27,7 +27,7 @@ describe("orchWake — будить или копить (на настоящих
         assert.equal(wake("[Диспетчерская] Влито по ожиданию: «ВЛИТЬ П2» — проверки позеленели, dev/wv-1104 вливается в staging (j4700).").wake, false);
     });
     test("требует решения — будит: доклад слота, пачка, отказ команды, тупик, перезапуск, слот без агента, пауза влива, новая сессия", () => {
-        for (const t of ["Ответ слота П5 (wv1107-demo), передан кнопкой дашборда: WV-1107 (слот wv1107-demo): ГОТОВО",
+        for (const t of ["Ответ слота П5 (wv1107-demo), передан диспетчерской автоматически: WV-1107 (слот wv1107-demo): ГОТОВО",
             "Доклады слотов пачкой (3): диспетчерская собрала их в одно сообщение, чтобы не тратить ход на каждый.",
             "[Диспетчерская] Команды не исполнены:\n- «ВЛИТЬ П2»: не исполнено: в ветке есть что вливать",
             deadlockText({ what: "ВЛИТЬ П4", why: "конфликт", n: 3, since: 0, now: 5 * MIN }),
@@ -60,6 +60,35 @@ describe("сведение копится и уезжает попутно с н
         assert.equal(S.orchHeld[ORCH], undefined, "уехало — копилка пуста");
         assert.equal(A.withPrimer(a, "второе"), "второе", "второй раз не повторяется");
         assert.equal(A.withPrimer({ key: "wv1", primer: "" }, "слоту"), "слоту", "у слота копилки нет");
+    });
+});
+
+describe("копилка «Попутно»: сведение — о предмете, устаревшее не уезжает", () => {
+    const ORCH = "orchestrator@e9";
+    const gate = (tag, why) => "[Диспетчерская] Ворота не пустили прогон, который ты поставил строкой ПРОГНАТЬ: «Линтер» у " + tag + " — " + why + ".";
+    test("новое сведение о том же предмете (слот + вид + задача) заменяет старое; о другой задаче — копится рядом", () => {
+        S.orchHeld = {};
+        A.sendWhenFree(ORCH, gate("П2", "дважды красный на этом же коде (j1, j2)"), { tree: "wv2", what: "lint|" });
+        A.sendWhenFree(ORCH, gate("П2", "зелёный на этом же коде (j3)"), { tree: "wv2", what: "lint|" });
+        A.sendWhenFree(ORCH, gate("П2", "уже зелёный (j4)").replace("Линтер", "Типы"), { tree: "wv2", what: "typecheck|" });
+        const held = S.orchHeld[ORCH].map((x) => x.text);
+        assert.equal(held.length, 2, held.join("\n"));
+        assert.doesNotMatch(held.join("\n"), /дважды красный/, "устаревшее «красный» заменено свежим «зелёный»");
+        assert.match(held[0] + held[1], /зелёный на этом же коде \(j3\)/);
+    });
+    test("при выдаче выбрасываются сведения о слоте, которого нет, и об уже влитом; «влито» о влитом — остаётся", () => {
+        S.orchHeld = {};
+        A.holdForOrch(ORCH, gate("П7", "зелёный (j7)"), { kind: "gate", tree: "gone", what: "lint|" });
+        A.holdForOrch(ORCH, gate("П2", "зелёный (j8)"), { kind: "gate", tree: "wv2", what: "lint|" });
+        A.holdForOrch(ORCH, "[Диспетчерская] Влито по ожиданию: «ВЛИТЬ П2» — проверки позеленели.", { kind: "merged", tree: "wv2" });
+        A.holdForOrch(ORCH, gate("П3", "зелёный (j9)"), { kind: "gate", tree: "wv3", what: "lint|" });
+        const state = { wv2: { merged: true }, wv3: { merged: false } };
+        const msg = A.withPrimer({ key: ORCH, primer: "" }, "Ответ слота П3 (wv3): ГОТОВО", (tree) => state[tree] || null);
+        assert.doesNotMatch(msg, /П7/, "слота больше нет");
+        assert.doesNotMatch(msg, /j8/, "отказ ворот по влитому слоту устарел");
+        assert.match(msg, /Влито по ожиданию/);
+        assert.match(msg, /j9/);
+        assert.equal(S.orchHeld[ORCH], undefined, "копилка пуста после выдачи");
     });
 });
 

@@ -14,6 +14,7 @@
 // - менять очередь (перевод, снятие, порядок) можно только у вагонов в депо: у начатого уже есть коммиты со своим номером;
 // - принадлежность коммита вагону — строка «Wave: WV-NNNN» в подписи; влив поезда несёт номера вагонов в теме merge-коммита.
 import { EPIC_CLI, PROJECT } from "../slots.mjs";
+import { TRAIN_PREFIX } from "../ownership.mjs";
 import { areaList, areaPresets, slotAreaFields, trainAreasOf } from "../areas.mjs";
 import { prompt } from "../prompts.mjs";
 
@@ -45,7 +46,7 @@ export const waveArg = (x) => (/^\s*\d{3,4}\s*$/.test(String(x || "")) ? "WV-" +
 const tagNum = (t) => Number((/\d+/.exec(String(t || "")) || [0])[0]);
 const slug = (s, n) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, n);
 /** Имя слота поезда: tr-<область>[полоса]-<эпик>; вторая полоса той же области — с номером. Это и имя папки, и ветка dev/<имя>. */
-export const trainSlotName = (area, epicId, lane = 1) => ("tr-" + slug(area, 12) + (lane > 1 ? String(lane) : "") + "-" + slug(epicId, 26)).replace(/-+$/, "");
+export const trainSlotName = (area, epicId, lane = 1) => (TRAIN_PREFIX + slug(area, 12) + (lane > 1 ? String(lane) : "") + "-" + slug(epicId, 26)).replace(/-+$/, "");
 export const MAX_TRAINS = 10;
 /** Метка нового поезда: Т1, Т2, … — следующая после наибольшей (снятые поезда не освобождают номер в середине). */
 export const nextTrainTag = (epic) => "Т" + (Math.max(0, ...(epic.slots || []).filter(isTrain).map((z) => tagNum(z.tag))) + 1);

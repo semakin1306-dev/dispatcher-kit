@@ -15,7 +15,7 @@ export const MAX_LINE = 200
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const ALLOW_FILE = path.join(ROOT, "test", "fixtures", "long-lines-allow.txt")
 // Не код конструктора: своё у установки (как в .gitignore), зависимости, инструменты переноса.
-const SKIP = new Set([".git", "node_modules", ".import", "project", "dispatcher.project.mjs"])
+const SKIP = new Set([".git", "node_modules", ".import", "project", "projects", ".hub", "dispatcher.project.mjs"])
 
 /** Все .mjs конструктора: пути от корня через «/». */
 export function codeFiles(root = ROOT) {

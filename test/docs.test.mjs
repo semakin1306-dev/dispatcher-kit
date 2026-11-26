@@ -55,7 +55,8 @@ test("SETUP.md: список функций код-надстройки совп
 
 test("файлы установки, которые пользователь не должен коммитить, закрыты .gitignore", () => {
   const ignore = read(".gitignore")
-  for (const p of ["/dispatcher.project.json", "/dispatcher.project.mjs", "/project/", "/.private-denylist"]) assert.ok(ignore.split("\n").includes(p), p)
+  const own = ["/dispatcher.project.json", "/dispatcher.project.mjs", "/project/", "/dispatcher.home.json", "/projects/", "/.hub/", "/.private-denylist"]
+  for (const p of own) assert.ok(ignore.split("\n").includes(p), p)
 })
 
 test("README: таблица модулей совпадает с каталогом в обе стороны", () => {

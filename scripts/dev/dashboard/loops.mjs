@@ -165,7 +165,9 @@ export function rotateDue(ctxTokens) {
 
 const ORCH_MSG = [
     { kind: "idle", re: /^\[Диспетчерская, сторож простоя\]/, wake: true, why: "толчок простоя: правило orchNudgeDue уже решило, что есть что решать" },
-    { kind: "gate", re: /^\[Диспетчерская\] Ворота не пустили/, wake: false, why: "ворота не пустили лишний прогон: результат на этом коде уже есть (или проверит поезд) — решать нечего" },
+    // untilMerge — сведение устаревает с вливом слота: копилка «Попутно» его тогда не выдаёт (heldLive).
+    { kind: "gate", re: /^\[Диспетчерская\] Ворота не пустили/, wake: false, untilMerge: true,
+        why: "ворота не пустили лишний прогон: результат на этом коде уже есть (или проверит поезд) — решать нечего" },
     { kind: "merged", re: /^\[Диспетчерская\] Влито по ожиданию/, wake: false, why: "ВЛИТЬ по слову владельца исполнен сам, когда проверки позеленели — сведение" },
     { kind: "service-ok", re: /^\[Диспетчерская\] Выкат [^\n]*✓ готово/, wake: false, why: "выкат сервиса прошёл — сведение" },
     { kind: "merge-stop", re: /^\[Диспетчерская\] (Влив [ПТ]\d+ на паузе|Ожидание влива снято)/, wake: true, why: "ожидание влива остановлено: красное или помеха — нужна правка или решение" },
@@ -180,7 +182,34 @@ const ORCH_MSG = [
 
 export function orchWake(text) {
     const s = String(text || "").trimStart(), m = ORCH_MSG.find((x) => x.re.test(s));
-    return m ? { wake: m.wake, kind: m.kind, why: m.why } : { wake: true, kind: "other", why: "сообщение владельца, окна диспетчерской или приёмки — решение оркестратора" };
+    return m ? { wake: m.wake, kind: m.kind, why: m.why, untilMerge: !!m.untilMerge }
+        : { wake: true,kind: "other", why: "сообщение владельца, окна диспетчерской или приёмки — решение оркестратора" };
+}
+
+/**
+ * Сведение в копилку «Попутно» (agents.mjs holdForOrch). У сведения — предмет: слот + вид + уточнение (задача и ввод
+ * у отказа ворот). Новое о том же предмете заменяет старое: оркестратор получает последнее состояние, а не «красный» рядом
+ * с уже «зелёным». Сведение без слота — предмет его текст: тот же текст дважды не копится. → новый список, не длиннее max.
+ */
+export function heldPut(list, item, max = 20) {
+    const subject = item.tree ? item.tree + "|" + (item.kind || "") + "|" + (item.what || "") : "text|" + item.text;
+    const out = (list || []).filter((x) => (x.subject || "text|" + x.text) !== subject);
+    out.push({ ...item, subject });
+    return out.slice(-max);
+}
+
+/**
+ * Что из копилки ещё правда к моменту выдачи. slotOf(tree) → null, если слота больше нет, или { merged }. Сведения
+ * о слоте, которого нет, выбрасываются; сведения «до влива» (untilMerge: отказ ворот в прогоне) — и о влитом слоте.
+ * → { keep, drop }.
+ */
+export function heldLive(list, slotOf) {
+    const keep = [], drop = [];
+    for (const x of list || []) {
+        const st = x.tree ? slotOf(x.tree) : {};
+        (!st || (x.untilMerge && st.merged) ? drop : keep).push(x);
+    }
+    return { keep, drop };
 }
 
 export function orchNudgeDue({

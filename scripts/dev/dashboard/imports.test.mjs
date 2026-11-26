@@ -15,8 +15,8 @@ const rel = (f) => relative(ROOT, f).replace(/\\/g, "/");
 const STATIC_RE = /^\s*(?:import|export)\s+(?:[^"';]*?\s+from\s+)?["'](\.{1,2}\/[^"']+\.m?js)["']/gm;
 const DYN_RE = /\bimport\(\s*["'](\.{1,2}\/[^"']+\.m?js)["']\s*\)/g;
 
-/** Папки кода диспетчерской: сервер, команды, рантаймы, хуки, настройка, инструменты. */
-export const CODE_DIRS = [HERE, DEV, join(DEV, "runtimes"), join(DEV, "hooks"), join(ROOT, "setup"), join(ROOT, "tools"), ROOT];
+/** Папки кода диспетчерской: сервер, команды, рантаймы, хуки, хаб дома, настройка, инструменты. */
+export const CODE_DIRS = [HERE, DEV, join(DEV, "runtimes"), join(DEV, "hooks"), join(DEV, "hub"), join(ROOT, "setup"), join(ROOT, "tools"), ROOT];
 
 export function importGraph(dirs = CODE_DIRS) {
     const files = [];
@@ -223,5 +223,31 @@ test("сторож «Не входит» ловит импорт вырезан�
 
 test("код диспетчерской — с переводами строк LF (CRLF ломает правки по образцу и диффы между ОС)", () => {
     const bad = codeFiles().concat(readdirSync(join(HERE, "ui")).filter((n) => n.endsWith(".js")).map((n) => join(HERE, "ui", n))).filter((f) => readFileSync(f, "utf8").includes("\r\n")).map(rel);
+    assert.deepEqual(bad, []);
+});
+
+// ── дом и ядро не знают друг о друге: хаб говорит с ядром только по HTTP, ядро получает обычный нормализованный проект ──
+/** Все модули, до которых транзитивно доходят импорты из start. */
+export function reachable(g, start) {
+    const seen = new Set(), st = [...start];
+    while (st.length) { const v = st.pop(); if (seen.has(v)) continue; seen.add(v); for (const w of g.get(v) || []) st.push(w) }
+    return seen;
+}
+const CORE_STATE = ["scripts/dev/slots.mjs", "scripts/dev/dashboard/config.mjs", "scripts/dev/dashboard/state.mjs", "scripts/dev/dashboard/boot.mjs"];
+
+test("хаб не загружает проект ядром: его модули транзитивно не импортируют slots.mjs, config.mjs, state.mjs, boot.mjs", () => {
+    const g = importGraph(), hub = [...g.keys()].filter((f) => f.startsWith("scripts/dev/hub/") && !f.endsWith(".test.mjs"));
+    assert.ok(hub.length >= 3, "модули хаба не найдены: " + hub.join(", "));
+    const reach = reachable(g, hub);
+    assert.deepEqual(CORE_STATE.filter((f) => reach.has(f)), []);
+    // самопроверка: связь через промежуточный модуль ловится
+    const fake = new Map([["scripts/dev/hub/x.mjs", ["scripts/dev/y.mjs"]], ["scripts/dev/y.mjs", ["scripts/dev/slots.mjs"]]]);
+    assert.ok(reachable(fake, ["scripts/dev/hub/x.mjs"]).has("scripts/dev/slots.mjs"));
+});
+
+test("ядро не знает о доме: модули сервера не читают файл дома, не зовут его загрузчик и не импортируют хаб", () => {
+    const words = ["dispatcher.home.json", "loadHome", "homeFile", "homeEntryFor", "DISPATCHER_HOME", "../hub/"], bad = [];
+    for (const n of readdirSync(HERE))
+        if (n.endsWith(".mjs") && !n.endsWith(".test.mjs")) for (const w of words) if (readFileSync(join(HERE, n), "utf8").includes(w)) bad.push(n + ": " + w);
     assert.deepEqual(bad, []);
 });

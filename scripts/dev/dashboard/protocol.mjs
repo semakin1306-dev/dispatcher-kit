@@ -1,5 +1,5 @@
 // protocol.mjs — строки текстового протокола слота, которые разбирает диспетчерская в ответе агента: решение
-// «ДАЛЬШЕ: …» после итога прогонов, «СВОДКА: …» для карточки ветки и статус «ЖДУ» в заголовке доклада.
+// «ДАЛЬШЕ: …» после итога прогонов, «СВОДКА: …» для карточки ветки, статус «ЖДУ» в заголовке доклада и сам блок доклада.
 // Формат задаёт персона инженера слота (agent-briefs/SLOT-ENGINEER-persona.md). Чистый модуль без импортов:
 // его проверяет тест на образце ответа из персоны.
 
@@ -29,6 +29,25 @@ export const hasDecision = (text) => DECISION_RE.test(tail(text));
 export function summaryOf(text) {
     const m = [...String(text || "").matchAll(SUMMARY_RE)].pop();
     return m ? m[1].replace(/\*+$/, "").trim() : "";
+}
+
+export const FENCE = "`".repeat(3);
+/** Блок кода ```язык … ```: язык «slot:П4» у оркестратора — адресат передачи, «text» у слота — доклад оркестратору. */
+export const BLOCK_RE = new RegExp(FENCE + "([^\\n`]*)\\n([\\s\\S]*?)" + FENCE, "g");
+/** Блок слота, который считается докладом: язык text (или без языка) и не пустая отписка. */
+export const isReportBlock = (lang, body) => (lang === "text" || lang === "") && body.length > 40;
+
+/**
+ * Тело первого блока-доклада в ответе слота или "". Передаётся только оно: остальной ответ — рассуждения и пересказ
+ * инструментов, которые адресату не предназначались.
+ */
+export function reportBlockOf(text) {
+    for (const m of String(text || "").matchAll(BLOCK_RE)) {
+        const body = m[2].trim();
+        if (isReportBlock(m[1].trim(), body))
+            return body;
+    }
+    return "";
 }
 
 /** Доклад слота со статусом «ЖДУ» (по первой строке). */

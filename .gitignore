@@ -6,6 +6,12 @@
 /project/
 /setup/answers.json
 
+# Дом нескольких проектов (setup.mjs add): файл дома, конфиги проектов дома и данные хаба — свои у установки.
+/dispatcher.home.json
+/dispatcher.home.json.prev
+/projects/
+/.hub/
+
 # Список частных слов для ворот публикации: сам список публиковать нельзя.
 /.private-denylist
 

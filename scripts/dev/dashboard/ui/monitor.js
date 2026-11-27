@@ -5,6 +5,11 @@ import { treeOf } from "./data.js";
 
 const loadColor = (p) => (p >= 85 ? "var(--bad)" : p >= 60 ? "var(--warn)" : "var(--good)");
 
+// Процент памяти машины прогона: удалённые присылают memUsedGB/memTotalGB без phys — без этого «undefined%» и полная полоса.
+function memPctOf(h) {
+    if (h && Number.isFinite(h.phys)) return h.phys;
+    return h && h.memTotalGB > 0 ? Math.round((100 * (h.memUsedGB || 0)) / h.memTotalGB) : 0;
+}
 function spark(arr, color) {
     const a = (arr || []).filter((v) => v != null);
     if (a.length < 2)
@@ -41,7 +46,7 @@ const monFold = (id, title, html, note) => !html ? "" : `<div class="sub" data-a
 function hostCards() {
     const H = S.hosts || {}, gbs = (v) => (v == null ? "?" : v.toFixed(1)) + " ГБ", mbs = (mb) => (mb >= 1024 ? (mb / 1024).toFixed(1) + " ГБ" : mb + " МБ");
     return Object.entries(H).map(([k, h]) => {
-        const c = loadColor(h.cpu), pc = loadColor(h.phys);
+        const c = loadColor(h.cpu), pc = loadColor(memPctOf(h));
         const cores = (h.cores || []).map((v) => `<i style="--h:${v}%;--c:${loadColor(v)}" title="ядро: ${v}%"></i>`).join("");
         const sw = h.swapTotalGB > 0.05 ? Math.round((100 * h.swapUsedGB) / h.swapTotalGB) : null;
         const disks = (h.disks || []).map((d) => {
@@ -64,7 +69,7 @@ function hostCards() {
         const tip = ["нагрузка 1 / 5 / 15 мин: " + la, h.upSec ? "работает " + fmtUp(h.upSec) : "", work ? "от диспетчерской: " + work : ""].filter(Boolean).join("\n");
         return `<div class="mc mach"><h3 title="${esc(tip)}"><span>🖥 ${esc(h.label || k)}</span><span class="mute">${(h.cores || []).length} ядер${h.tempC != null ? " · " + h.tempC + " °C" : ""} · нагр. ${h.loadAvg ? h.loadAvg[0].toFixed(1) : "?"}</span></h3>
       <div class="cpurow"><div class="ring" style="--p:${h.cpu};--c:${c}"><div><span><b>${h.cpu}%</b><small>ЦП</small></span></div></div><div class="cpuside"><div class="cores">${cores}</div>${spark((h.hist || {}).cpu || [], c)}</div></div>
-      <div class="kv"><span>память</span><b>${gbs(h.memUsedGB)} из ${(h.memTotalGB || 0).toFixed(0)} ГБ · ${h.phys}%</b></div><div class="bar" style="--c:${pc}"><i style="width:${h.phys}%"></i></div>
+      <div class="kv"><span>память</span><b>${gbs(h.memUsedGB)} из ${(h.memTotalGB || 0).toFixed(0)} ГБ · ${memPctOf(h)}%</b></div><div class="bar" style="--c:${pc}"><i style="width:${memPctOf(h)}%"></i></div>
       ${h.alarm ? `<div class="kv" style="color:var(--bad)" title="Страницы ходят в подкачку и обратно, или она занята больше половины при нехватке памяти"><span>⚠ тревога</span><b>${esc(h.alarm)}</b></div>` : ""}
       ${diskBad}
       ${monFold(k + "-store", "Подкачка и диски", store, storeNote)}

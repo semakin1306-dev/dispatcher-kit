@@ -808,13 +808,18 @@ export const withPrimer = (a, msg, slotOf = heldSlotOf) => {
 }
 
 /** Сообщение диспетчерской агенту: в ленту, в журнал эпика и ходом агенту. opt.owner — от имени владельца (по умолчанию — автоответ). */
+/** Метка слова владельца для агента слота (см. «СОБЕСЕДНИК» в slot-system.md). */
+export const OWNER_TAG = "[Владелец пишет тебе в чат слота — ответь ему, не оркестратору]\n"
 export function deliver(a, msg, kind = "msg", opt = {}) {
   msg = withPrimer(a, msg)
   const by = opt.by !== undefined ? opt.by : opt.owner ? "auto-owner" : ""
   logEvent("agent.message", { key: a.key, kind, chars: msg.length, brief: brief(msg), ...(by ? { by } : {}) })
   push(a, { id: "u-" + a.rev, t: "user", text: msg, ...(opt.owner ? { owner: true } : {}), ...(by ? { by } : {}) })
   a.turnKind = kind; a.busy = true
-  try { agentSend(a, msg) } catch (e) { a.busy = false; throw e }
+  // Агент слота должен знать, КТО с ним говорит: слово владельца из чата слота помечаем явно (оркестратор и диспетчерская
+  // приходят со своими шапками), иначе он отвечает на любой вопрос докладом оркестратору. В чате показываем без метки.
+  const toAgent = kind === "owner" && opt.owner && !isOrch(a.key) && !/^\[(Владелец|Диспетчерская)/.test(msg) ? OWNER_TAG + msg : msg
+  try { agentSend(a, toAgent) } catch (e) { a.busy = false; throw e }
 }
 
 /**

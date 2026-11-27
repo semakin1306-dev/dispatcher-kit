@@ -15,6 +15,7 @@ import {
     retrySpecs,
     rotateDue,
     runGate,
+    lastFreshOk,
     slotAsks,
     slotStatus,
 } from "./loops.mjs";
@@ -155,6 +156,17 @@ describe("runGate — ворота автоматического прогона
         assert.equal(r.why, "зелёный (" + g.id + "), и после него менялись только файлы вне его области — тесты, документы");
         assert.deepEqual(gate([job({ status: "fail", fpStart: FP2, fpEnd: FP2 })], { freshOk: () => true }), { run: true });
         assert.deepEqual(gate([job({ fpStart: FP2, fpEnd: FP2, input: "" })], { freshOk: () => true }), { run: true });
+    });
+    test("lastFreshOk — одно правило для ворот и проверки влива: годится любой свежий зелёный, а не только последний", () => {
+        const old = job({ fpStart: FP2, fpEnd: FP2, input: "" }), late = job({ fpStart: FP2, fpEnd: FP2, input: "" });
+        const fresh = (j) => j.id === old.id; // поздний — без снимка (удалённая машина), считается устаревшим
+        assert.equal(lastFreshOk([old, late], { tree: TREE, task: "api-test", fresh }), old);
+        assert.equal(lastFreshOk([old, late], { tree: TREE, task: "api-test", fresh: () => false }), null);
+        assert.equal(lastFreshOk([old, job({ status: "fail" })], { tree: TREE, task: "other", fresh: () => true }), null);
+        // ворота отказывают в повторе ровно на том прогоне, который проверка влива засчитает
+        const r = runGate({ jobs: [old, late], tree: TREE, task: "api-test", input: "", fp: FP, freshOk: fresh });
+        assert.equal(r.run, false);
+        assert.equal(r.job, old);
     });
 });
 

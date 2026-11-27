@@ -94,6 +94,17 @@ export function canonInput(task, input) {
     return s.split(/[,|]/).map((x) => x.trim().replace(/\\(.)/g, "$1").replace(/\.(spec|test)\.[cm]?[jt]sx?$/, "")).filter(Boolean).sort().join(",");
 }
 
+/**
+ * Последний зелёный прогон задачи в дереве, который годится «на этом коде»: fresh(j) — правило свежести (зелёный на этом
+ * же отпечатке или после него менялись только файлы вне области задачи). Берётся ЛЮБОЙ такой прогон, а не только самый
+ * последний зелёный: последний мог быть без снимка (удалённая машина) и считаться устаревшим. Одно правило для ворот
+ * прогона и проверки влива — иначе ворота не дают повтор («зелёный, менялось вне области»), а влив требует гардов
+ * «на этом коде», и поезд стоит.
+ */
+export function lastFreshOk(jobs, { tree, task, same = null, fresh = () => false }) {
+    return (jobs || []).filter((j) => j.tree === tree && j.task === task && j.status === "ok" && (!same || same(j)) && fresh(j)).pop() || null;
+}
+
 export const NO_GATE = new Set(["review", "commit", "merge", "accept-run", "accept-ask", "slot-up", "train", "deploy-staging"]);
 const LIVE = ["queued", "waiting", "running"];
 
@@ -111,7 +122,7 @@ export function runGate({ jobs, tree, task, input = "", fp, dist = false, covers
     const green = jobs.filter((j) => j.tree === tree && j.task === task && j.status === "ok" && onFp(j) && (same(j) || (covers && covers(j))) && (!dist || j.runOn || j.buildFp === j.fpStart)).pop();
     if (green)
         return { run: false, job: green, why: "зелёный на этом же коде (" + green.id + ")" };
-    const areaGreen = jobs.filter((j) => same(j) && j.status === "ok" && freshOk(j)).pop();
+    const areaGreen = lastFreshOk(jobs, { tree, task, same, fresh: freshOk });
     if (areaGreen)
         return { run: false, job: areaGreen, why: "зелёный (" + areaGreen.id + "), и после него менялись только файлы вне его области — тесты, документы" };
     const inh = jobs.filter((j) => same(j) && j.status === "fail" && onFp(j) && inherited(j)).pop();

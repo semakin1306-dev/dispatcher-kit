@@ -28,6 +28,7 @@ import { epicOfSlot, slotOf } from "./agents.mjs";
 import { DATA, MAIN_WT, logEvent } from "./config.mjs";
 import { TREES, epicOfKey, openEpics, treeByKey } from "./trees.mjs";
 import { codeFp, jobFresh } from "./fingerprint.mjs";
+import { lastFreshOk } from "./loops.mjs";
 import { git, pipelineState, stagingTreeSha, treeState, withGitPriority } from "./git.mjs";
 import { late, lateObject } from "./late.mjs";
 import { SAFE_GIT, failingSpecs, knownRed } from "./regress.mjs";
@@ -238,9 +239,11 @@ function guardsGreen(t, fp, { noProd, trainOk }) {
         return true;
     const sn = snapNow() && snapNow().trees.find((x) => x.key === t.key);
     return ids.every((g) => {
-        const last = [...jobList()].reverse().find((j) => j.tree === t.key && j.task === g && j.status === "ok");
+        // То же правило, что у ворот прогона (loops.mjs lastFreshOk): любой зелёный, годный «на этом коде», а не только
+        // самый последний — иначе ворота отказывают в повторе, а влив ждёт гардов, и поезд стоит.
+        const fresh = !!sn && sn.fp === fp ? lastFreshOk(jobList(), { tree: t.key, task: g, fresh: (j) => jobFresh(j, sn) === "ok" }) : null;
         return (
-            (!!last && !!sn && sn.fp === fp && jobFresh(last, sn) === "ok") ||
+            !!fresh ||
             lastOk(t.key, g, t.tree) ||
             jobList().some(
                 (j) =>

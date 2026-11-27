@@ -87,7 +87,10 @@ export async function tgRequest({ token, method, params = {}, proxy = "", timeou
     const body = Buffer.from(JSON.stringify(params), "utf8");
     const socket = proxy ? await connectVia(proxy, timeoutMs) : null;
     const raw = await new Promise((res, rej) => {
-        const req = https.request({ host: HOST, port: 443, method: "POST", path: "/bot" + token + "/" + method, agent: false, servername: HOST,
+        const req = https.request({ host: HOST, port: 443, method: "POST", path: "/bot" + token + "/" + method,
+            // Через прокси агента НЕ задаём: при agent:false Node создаёт новый Agent и молча игнорирует
+            // createConnection — запрос шёл мимо прокси напрямую (таймаут, AggregateError с пустым текстом).
+            agent: socket ? undefined : false, servername: HOST,
             headers: { "content-type": "application/json", "content-length": body.length },
             ...(socket ? { createConnection: () => tls.connect({ socket, servername: HOST }) } : {}) }, (r) => {
             const chunks = [];
@@ -128,7 +131,7 @@ export function tgProxy(env = process.env) {
  */
 export function createTgBot(deps) {
     const st = deps.store;
-    for (const k of ["cards", "merges", "btns", "prompts"])
+    for (const k of ["cards", "merges", "btns", "prompts", "notices"])
         st[k] ||= {};
     const now = () => deps.now();
     let chain = Promise.resolve();
@@ -271,11 +274,53 @@ export function createTgBot(deps) {
                 await edit(rec.mid, mergeDoneMessage(rec.who, "Уже не ждёт влива: влита или код изменился."));
             }
     }
+    // Прочее «нужен ты»: тупики правил, «запустить слот», «нужна проверка», тесты агента, которые ждут запуска, упавшие гейты.
+    // Без кнопок — уведомление со ссылкой на страницу; каждое — один раз по ключу, снятое правится «☑️ уже не ждёт».
+    async function syncNotices() {
+        if (!deps.notices)
+            return;
+        const list = deps.notices() || [], keys = new Set(list.map((n) => n.key)), t = now();
+        for (const n of list) {
+            if (st.notices[n.key])
+                continue;
+            try {
+                const r = await send(n.text + (deps.dashUrl ? "\n\nДиспетчерская: " + deps.dashUrl : ""));
+                st.notices[n.key] = { at: t, state: "open", mid: r.message_id, text: n.text };
+                deps.log("tg.sent", { notice: n.key.slice(0, 80) });
+            }
+            catch (e) {
+                if (failKind(e) !== "api")
+                    throw e;
+                st.notices[n.key] = { at: t, state: "failed" };
+                deps.log("tg.error", { op: "notice", error: e.message.slice(0, 200) });
+            }
+        }
+        for (const [k, rec] of Object.entries(st.notices))
+            if (rec.state === "open" && !keys.has(k)) {
+                rec.state = "gone";
+                rec.closedAt = t;
+                await edit(rec.mid, "☑️ Уже не ждёт: " + String(rec.text || "").split("\n")[0]);
+            }
+    }
+    /** Сводка: утром по расписанию и в конце ночного режима — одно сообщение (текст собирает deps.summary). */
+    async function sendSummary(title) {
+        if (!deps.summary)
+            return false;
+        const text = deps.summary(title);
+        if (!text)
+            return false;
+        await send(text + (deps.dashUrl ? "\n\nДиспетчерская: " + deps.dashUrl : ""));
+        deps.log("tg.sent", { summary: title });
+        return true;
+    }
     function prune() {
         const t = now();
         for (const [id, r] of Object.entries(st.cards))
             if (r.state !== "open" && t - (r.closedAt || r.at || 0) > KEEP_MS)
                 delete st.cards[id];
+        for (const [id, r] of Object.entries(st.notices))
+            if (r.state !== "open" && t - (r.closedAt || r.at || 0) > KEEP_MS)
+                delete st.notices[id];
         for (const [id, r] of Object.entries(st.merges))
             if (r.state !== "open" && t - (r.closedAt || r.at || 0) > KEEP_MS)
                 delete st.merges[id];
@@ -292,6 +337,7 @@ export function createTgBot(deps) {
         try {
             await syncCards();
             await syncMerges();
+            await syncNotices();
         }
         finally {
             prune();
@@ -458,7 +504,15 @@ export function createTgBot(deps) {
             deps.save();
         return (ups || []).length;
     }
-    return { sync, poll, handle, answered: (x) => serial(() => answered(x)), store: st };
+    const summary = (title) => serial(async () => {
+        try {
+            return await sendSummary(title);
+        }
+        finally {
+            deps.save();
+        }
+    });
+    return { sync, poll, handle, summary, answered: (x) => serial(() => answered(x)), store: st };
 }
 
 // ───── живой экземпляр ─────
@@ -576,9 +630,30 @@ export function startTg(deps) {
             return;
         if (wake && filesStamp() !== filesAt)
             wake();
-        if (S.tg.status.code === "ok")
+        if (S.tg.status.code === "ok") {
             bot.sync().catch(syncFail);
+            summaryDue(S.tg.store);
+        }
     }, 5000).unref();
+    // Утренняя сводка (settings.tgSummaryAt «ЧЧ:ММ», пояс settings.tgSummaryTz; по умолчанию 09:00 Europe/Berlin) — раз в
+    // сутки; и одна сводка, когда закончился ночной режим (autoOwnerUntil прошёл).
+    function summaryDue(st) {
+        const at = String(settings.tgSummaryAt || "09:00"), tz = settings.tgSummaryTz || "Europe/Berlin";
+        if (at !== "off") {
+            const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+                .formatToParts(new Date()).map((p) => [p.type, p.value]));
+            const day = parts.year + "-" + parts.month + "-" + parts.day, hm = parts.hour + ":" + parts.minute;
+            if (hm >= at && st.summaryDay !== day) {
+                st.summaryDay = day;
+                bot.summary("☀️ Утренняя сводка").catch(syncFail);
+            }
+        }
+        const until = settings.autoOwnerUntil || 0;
+        if (until && until <= Date.now() && st.nightSummaryFor !== until) {
+            st.nightSummaryFor = until;
+            bot.summary("🌙→☀️ Ночной режим закончился").catch(syncFail);
+        }
+    }
 }
 
 /** Ответ со страницы (подписка на ответ владельца): сообщение вопроса правится «✅ отвечено на дашборде». */

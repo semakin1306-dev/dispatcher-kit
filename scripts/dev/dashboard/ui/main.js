@@ -829,6 +829,12 @@ document.addEventListener("click", async (e) => {
         }
         else if (a === "tgbot")
             press("tgbot", () => call("/api/settings", { tgBot: !(S.settings && S.settings.tgBot) }), (r) => "Бот в Telegram: " + (r.settings.tgBot ? "включён" : "выключен"));
+        else if (a === "nightmode") {
+            const on = ((S.settings && S.settings.autoOwnerUntil) || 0) > Date.now();
+            // Включение ночного режима тянет за собой автопоезд и автоотчёт слоту: без них ночью поезда стоят.
+            press("nightmode", () => call("/api/settings", on ? { autoOwner: false } : { autoOwner: true, autoTrain: true, autoResults: true }),
+                (r) => "Ночной режим: " + (((r.settings || {}).autoOwnerUntil || 0) > Date.now() ? "включён до " + new Date(r.settings.autoOwnerUntil).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "выключен"));
+        }
         else if (a === "fullperm")
             press("fullperm", () => call("/api/settings", { fullPermissions: !(S.settings && S.settings.fullPermissions) }), (r) => "Полные разрешения агентам: " + (r.settings.fullPermissions ? "включены" : "выключены"));
         else if (a === "provision")

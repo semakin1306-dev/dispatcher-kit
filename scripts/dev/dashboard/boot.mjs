@@ -68,7 +68,9 @@ import {
     relayAfterPrep,
     slotPromptText,
     startOffered,
+    testReqsPublic,
 } from "./relay.mjs"
+import { TASKS as TASK_DEFS } from "./tasks.mjs"
 import { orchNudgeDue } from "./loops.mjs"
 import { autoSyncConflicts } from "./auto-merge.mjs"
 import { loadMergeWait } from "./merge-wait.mjs"
@@ -173,7 +175,7 @@ const noteExit = (extra) => {
 }
 process.on("exit", (code) => noteExit({ code }))
 process.on("uncaughtExceptionMonitor", (err, origin) => noteExit({ err, origin, code: 1 }))
-for (const sig of ["SIGBREAK", "SIGHUP", "SIGTERM"]) { try { process.on(sig, () => { noteExit({ signal: sig, code: 0 }); process.exit(0) }) } catch { /* сигнала нет на этой ОС */ } }
+for (const sig of ["SIGBREAK", "SIGHUP"]) { try { process.on(sig, () => { noteExit({ signal: sig, code: 0 }); process.exit(0) }) } catch { /* сигнала нет на этой ОС */ } }
 // очередь к ssh переполнена — событие не чаще раза в 30 с, иначе журнал эпика забьётся одинаковыми строками
 setSshGateHook((x) => { const now = Date.now(); if (now - (setSshGateHook.last || 0) < 30000) return; setSshGateHook.last = now; logEvent("ssh.gate", x) })
 const pulseRec = (lagMs) => ({ at: Date.now(), pid: process.pid, port: PORT, sha: CODE_SHA, startedAt: BOOT_STARTED, lagMs })
@@ -505,6 +507,56 @@ onModuleBoot("tg", () => {
               .map((t) => ({ mkey: mergeKey(t), slot: t.key, who: label(t) + (t.epic ? " · эпик " + t.epic : "") })),
       ownerAnswer: (tree, text, id) => ownerAnswer(tree, text, id, { via: "tg" }),
       merge: (slot) => pipelineStart({ action: "merge", slot }, { via: "tg" }),
+      dashUrl: process.env.DASH_PUBLIC_URL || "",
+      // Всё, что ждёт владельца, кроме вопросов агентов и вливов (их бот шлёт с кнопками сам): ключ — устойчивый, текст — одна мысль.
+      notices: () => {
+          const out = [], whoOf = (k) => {
+              const t = TREES.find((x) => x.key === k) || {}
+              return (t.kind === "orch" ? "Оркестратор" : label({ ...t, tag: t.tag || k })) + (t.epic ? " · эпик " + t.epic : "")
+          }
+          for (const c of inboxCards()) {
+              if (c.kind === "deadlock") {
+                  const why = "«" + (c.what || "") + "» отклонено " + (c.n || "?") + " раза подряд на том же коде: " + (c.why || "")
+                  out.push({ key: "dl|" + c.id, text: "⛔ Тупик правил — " + whoOf(c.tree) + "\n" + why + "\nНужно ваше решение." })
+              }
+              else if (c.kind === "slotstart") out.push({ key: "ss|" + c.id, text: "▶ " + whoOf(c.tree) + "\nПапка слота готова, план есть — агент ещё не запущен. Запустить слот — на странице." })
+              else if (c.kind === "verify") out.push({ key: "vf|" + c.id, text: "🔎 " + whoOf(c.tree) + "\nАгент изменил файлы (правок: " + (c.edits || "?") + ") — нужна проверка: сборка и тесты." })
+          }
+          try {
+              for (const g of testReqsPublic() || []) {
+                  const left = (g.items || []).filter((x) => !["ok", "skip", "run"].includes(x.status))
+                  if (!left.length) continue
+                  const names = left.map((x) => (TASK_DEFS[x.task] || {}).label || x.task).join(", ")
+                  const text = "🧪 " + whoOf(g.tree) + "\nАгент назвал прогоны — не запущено " + left.length + " из " + g.items.length + ": " + names + "."
+                  out.push({ key: "tr|" + g.tree + "|" + left.map((x) => x.id || x.task).join(","), text })
+              }
+          } catch { /* реестр просьб ещё не прочитан */ }
+          // упавшие гейты (задачи с gate) за 6 ч, если после них на том же слоте эта задача не позеленела
+          const recent = jobList().filter((j) => j.endedAt && Date.now() - j.endedAt < 6 * 3600e3)
+          for (const j of recent) {
+              const d = TASK_DEFS[j.task]
+              if (!d || !d.gate || j.status !== "fail" || /^orchestrator/.test(j.tree || "")) continue
+              if (recent.some((x) => x.tree === j.tree && x.task === j.task && x.status === "ok" && (x.endedAt || 0) > j.endedAt)) continue
+              out.push({ key: "gf|" + j.id, text: "✗ " + whoOf(j.tree) + "\nУпал гейт «" + (d.label || j.task) + "» (" + j.id + ")" + (j.summary ? ": " + String(j.summary).slice(0, 200) : "") })
+          }
+          return out
+      },
+      summary: (title) => {
+          const trees = ((snapNow() && snapNow().trees) || []).filter((t) => !t.archived)
+          const eps = openEpics()
+          const jobs = jobList().filter((j) => j.endedAt && Date.now() - j.endedAt < 24 * 3600e3)
+          const ok = jobs.filter((j) => j.status === "ok").length, bad = jobs.filter((j) => j.status === "fail").length
+          const L = [title, "Прогонов за сутки: " + ok + " зелёных, " + bad + " красных. Ждут вашего действия: " + inboxCards().length + "."]
+          for (const e of eps) {
+              const id = e.id || e
+              L.push("", "Эпик " + id + (e.title ? " — " + e.title : "") + ":")
+              for (const t of trees.filter((x) => x.kind === "slot" && x.epic === id)) {
+                  const st = t.verdict && t.verdict.merged ? "влита ✅" : "впереди staging " + (t.ahead || 0)
+                  L.push("• " + label(t) + " — " + st + (t.next && t.next.text ? ". " + String(t.next.text).slice(0, 160) : "") + (t.summary ? "\n  " + String(t.summary).slice(0, 200) : ""))
+              }
+          }
+          return L.join("\n")
+      },
   })
   onOwnerAnswer(tgAnswered)
 })
@@ -567,5 +619,11 @@ S.server = http.createServer(async (req, res) => {
 })
 S.server.listen(PORT, HOST, () => console.log(`Диспетчерская: http://${HOST}:${PORT}  (данные: ${fwd(DATA)})`))
 S.server.on("error", (e) => { console.error(e.code === "EADDRINUSE" ? `Порт ${PORT} занят — диспетчерская уже запущена? http://${HOST}:${PORT}` : e.message); process.exit(1) })
-// Ctrl+C: дети (прогоны, агенты) снимаются деревом, очередь прогонов и файлы состояния дописываются синхронно
-process.on("SIGINT", () => { for (const c of procs.values()) killTree(c); for (const a of agents.values()) if (!a.dead) killAgent(a); flushRuns(true); flushSync(); process.exit(0) })
+// Ctrl+C и SIGTERM (остановка службой systemd, docker stop): дети (прогоны, агенты) снимаются деревом, очередь прогонов
+// и файлы состояния дописываются синхронно. Раньше SIGTERM выходил сразу, без этого — сироты и недописанные журналы.
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => {
+  noteExit({ signal: sig, code: 0 })
+  for (const c of procs.values()) killTree(c)
+  for (const a of agents.values()) if (!a.dead) killAgent(a)
+  flushRuns(true); flushSync(); process.exit(0)
+})

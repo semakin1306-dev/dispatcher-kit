@@ -2756,8 +2756,8 @@ export function testReqsPublic() {
         if (!t)
             continue;
         const items = list.map((r) => {
-            const { j, status } = reqItemStatus(tree, r, t);
-            return { id: r.id, task: r.task, input: r.input, note: r.note, status, jobId: j ? j.id : null };
+            const { j, status, why } = reqItemStatus(tree, r, t);
+            return { id: r.id, task: r.task, input: r.input, note: r.note, status, why: why || "", jobId: j ? j.id : null };
         });
         const allOk = items.length && items.every((x) => x.status === "ok" || x.status === "skip");
         const g = S.testReqs[tree];

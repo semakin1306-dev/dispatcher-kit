@@ -7,6 +7,7 @@ import { oqFormHTML } from "./oqform.js";
 import { render } from "./render.js";
 import { treeOf } from "./data.js";
 import { renderRail, renderSide } from "./side.js";
+import { DISP_KEY, dispEnabled, dispRow, mountDispPane, startDispatcherPoll } from "./dispatcher-chat.js";
 
 const PLANE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14.2 1.8L7.2 8.8M14.2 1.8l-4.6 12.4-2.4-5.4-5.4-2.4z"/></svg>';
 
@@ -440,7 +441,7 @@ export let SIDECHAT = (() => {
 })();
 
 export const sideChatTrees = () => (S ? S.trees.filter((t) => (t.kind === "orch" || t.kind === "slot") && !t.archived && t.exists !== false) : []);
-export const sideChatKey = () => (sideChatTrees().some((t) => t.key === SIDECHAT) ? SIDECHAT : "orchestrator");
+export const sideChatKey = () => (SIDECHAT === DISP_KEY && dispEnabled() ? DISP_KEY : sideChatTrees().some((t) => t.key === SIDECHAT) ? SIDECHAT : "orchestrator");
 
 export function setSideChat(k) {
     SIDECHAT = k;
@@ -502,6 +503,7 @@ export function renderChatList() {
     const el = $("chatlist");
     if (!el || !S)
         return;
+    startDispatcherPoll(renderChatList);
     const cur = sideChatKey(), list = sideChatTrees();
     unreadTick(list, cur);
     const groupOf = (t) => {
@@ -513,7 +515,7 @@ export function renderChatList() {
         const sub = a.pending ? "🔐 ждёт вашего разрешения" : a.busy ? (a.activity || "думает…") : (t.wagon && !orch ? t.wagon + " · " : "") + (un ? "ответил" : CL_WORD[st] || "");
         return `<button type="button" class="cli ${t.key === cur ? "on" : ""} ${st}${a.pending ? " need" : ""}" data-act="sidechat" data-tree="${esc(t.key)}" title="${esc(t.tag + " · " + t.title)}" style="--c:${esc(t.color || "var(--accent)")}"><span class="clc">${agentIcon(t.color, st === "off" ? "sleep" : st, 20)}</span><span class="clt"><b>${esc(orch ? "Оркестратор" : t.tag + " · " + t.title)}</b><span class="cls">${a.busy && !a.pending ? SPIN + " " : ""}${esc(sub)}</span></span><span class="cla">${un ? `<i class="clun" title="Непрочитанных ответов: ${un}">${un > 9 ? "9+" : un}</i>` : a.pending ? "<i class=\"cldot need\"></i>" : a.busy ? "<i class=\"cldot run\"></i>" : esc(clAgo(a.lastAt))}</span></button>`;
     };
-    const html = `<div class="clh">Чаты<span class="sp"></span><button type="button" class="clfold" data-act="clfold" title="Свернуть или развернуть список чатов. Alt+↑ / Alt+↓ — соседний чат">⇤</button></div>`
+    const html = `<div class="clh">Чаты<span class="sp"></span><button type="button" class="clfold" data-act="clfold" title="Свернуть или развернуть список чатов. Alt+↑ / Alt+↓ — соседний чат">⇤</button></div>` + dispRow(cur)
         + CL_GROUPS.map(([g, name]) => {
             const ts = list.filter((t) => groupOf(t) === g);
             return ts.length ? `<div class="clg ${g}">${name}<span>${ts.length}</span></div>` + ts.map(row).join("") : "";
@@ -558,11 +560,15 @@ export function mountChats() {
             })());
         }
         renderChatList();
-        const c = getChat(sk, false);
-        c.el.classList.remove("inline");
-        if (c.el.parentNode !== host)
-            host.replaceChildren(c.el);
-        first(c);
+        if (sk === DISP_KEY)
+            mountDispPane(host);
+        else {
+            const c = getChat(sk, false);
+            c.el.classList.remove("inline");
+            if (c.el.parentNode !== host)
+                host.replaceChildren(c.el);
+            first(c);
+        }
     }
     document.querySelectorAll(".chatslot").forEach((ph) => {
         const here = inSide && ph.dataset.key === sk;

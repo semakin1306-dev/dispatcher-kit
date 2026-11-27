@@ -56,6 +56,7 @@ import { brief } from "./epic-journal.mjs";
 import { AUTO_OWNER_HOURS, autoOwnerToggle } from "./auto-owner.mjs";
 import { epicJournalOp, epicProgressOp } from "./epic-progress.mjs";
 import { retroGet, retroStart } from "./retro.mjs";
+import { dispatcherState, dispatcherSend, dispatcherRunNow } from "./dispatcher-agent.mjs";
 import { activateEpic, closeEpicOp, drainState, enqueueProvision, epicsPublic, setDrain, setEpicStatus, slotMissing, syncReport, syncSlot, taskSpecMatches } from "./epics.mjs";
 import { DIST_TASKS, codeFp, fpLast, jobFresh } from "./fingerprint.mjs";
 import { exists, git, pairs, pipelineState, treeState, withGitPriority } from "./git.mjs";
@@ -420,6 +421,8 @@ export async function api(req, res, url) {
         const r = await epicProgressOp(url.searchParams.get("epic") || "", url.searchParams.get("hours") || 24);
         return send(res, r.code, r.body);
     }
+    if (req.method === "GET" && url.pathname === "/api/dispatcher-agent")
+        return send(res, 200, await dispatcherState());
     if (req.method === "GET" && url.pathname === "/api/retro") {
         const r = retroGet(url.searchParams.get("epic") || "");
         return send(res, r.code, r.body);
@@ -582,6 +585,10 @@ export async function api(req, res, url) {
         !["/api/annot", "/api/ownerq-answer", "/api/retro"].includes(url.pathname)
     )
         return send(res, 403, { error: "сухой режим: это действие в пробном экземпляре не выполняется" });
+    if (url.pathname === "/api/dispatcher-agent") {
+        const r = b.op === "send" ? dispatcherSend(b.text) : b.op === "run" ? await dispatcherRunNow({ force: b.force === true }) : { code: 400, body: { error: "op: send или run" } };
+        return send(res, r.code, r.body);
+    }
     if (url.pathname === "/api/retro") {
         const r = await retroStart(String(b.epic || ""), { by: "кнопка", force: !!b.force });
         return send(res, r.code, r.body);

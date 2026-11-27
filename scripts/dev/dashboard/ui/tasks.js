@@ -240,14 +240,14 @@ export function pendingCards(run, wait) {
     return out.join("");
 }
 
-const reqLeft = (g) => g.items.filter((x) => x.status !== "ok" && x.status !== "run");
+const reqLeft = (g) => g.items.filter((x) => x.status !== "ok" && x.status !== "run" && x.status !== "skip");
 const ownerReqs = () => (S.testReqs || []).filter((g) => reqLeft(g).length);
 
 function reqCards() {
     return ownerReqs().map((g) => {
         const t = treeOf(g.tree) || {}, who = `<span class="dotc" style="--c:${t.color || "var(--accent)"}"></span>${esc(t.tag || g.tree)}`;
-        const left = reqLeft(g).length, ic = { ok: "✓", run: "⏳", fail: "✗", stale: "⟳", todo: "○" }, col = { ok: "var(--good)", fail: "var(--bad)", stale: "var(--warn)", run: "var(--run)", todo: "var(--text-2)" };
-        const rows = g.items.map((x) => `<div class="stf" style="grid-template-columns:20px minmax(0,1fr) auto;align-items:center"><span style="color:${col[x.status]};font-weight:700" title="${{ ok: "прогнан и зелёный на нынешнем коде", run: "идёт", fail: "упал", stale: "был зелёным, но код менялся", todo: "ещё не запускали" }[x.status]}">${ic[x.status]}</span><span style="min-width:0"><span style="font-size:12.5px">${esc((S.tasks[x.task] || {}).label || x.task)}</span> <span class="mono mute">${esc(x.input)}</span>${x.note ? `<div class="sub" style="font-size:11px">${esc(x.note)}</div>` : ""}</span>${x.status === "ok" || x.status === "run" ? "" : `<button class="sm" data-act="reqrun" data-tree="${esc(g.tree)}" data-task="${esc(x.task)}" data-input="${esc(x.input)}">▶</button>`}</div>`).join("");
+        const left = reqLeft(g).length, ic = { ok: "✓", run: "⏳", fail: "✗", stale: "⟳", todo: "○", skip: "∅" }, col = { ok: "var(--good)", fail: "var(--bad)", stale: "var(--warn)", run: "var(--run)", todo: "var(--text-2)", skip: "var(--text-3)" };
+        const rows = g.items.map((x) => `<div class="stf" style="grid-template-columns:20px minmax(0,1fr) auto;align-items:center"><span style="color:${col[x.status] || "var(--text-3)"};font-weight:700" title="${esc({ ok: "прогнан и зелёный на нынешнем коде", run: "идёт", fail: "упал", stale: "был зелёным, но код менялся", todo: "ещё не запускали", skip: "неприменимо — тесты не запускались" + (x.why ? ": " + x.why : "") }[x.status] || x.status || "")}">${ic[x.status] || "?"}</span><span style="min-width:0"><span style="font-size:12.5px">${esc((S.tasks[x.task] || {}).label || x.task)}</span> <span class="mono mute">${esc(x.input)}</span>${x.note ? `<div class="sub" style="font-size:11px">${esc(x.note)}</div>` : ""}</span>${x.status === "ok" || x.status === "run" || x.status === "skip" ? "" : `<button class="sm" data-act="reqrun" data-tree="${esc(g.tree)}" data-task="${esc(x.task)}" data-input="${esc(x.input)}">▶</button>`}</div>`).join("");
         return `<div class="tk ${left ? "go" : "ok"}"><div class="tkh"><b>${who}</b><span class="chip queued">не запущено: ${left} из ${g.items.length}</span></div><div class="tkt">Агент назвал тесты для запуска в своей ветке</div>${rows}${left > 1 ? `<div class="chips"><button class="sm primary" data-act="reqall" data-tree="${esc(g.tree)}">▶ Запустить незапущенные (${left})</button></div>` : ""}</div>`;
     }).join("");
 }

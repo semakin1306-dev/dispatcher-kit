@@ -1,0 +1,83 @@
+<!doctype html>
+<!-- full-run.html — страница /shard: полный прогон по частям на машинах прогонов (full-run.mjs). Читает GET /api/shard раз в 3 с;
+     кнопки — POST /api/shard { op: start | rerun | cancel } с токеном страницы (подставляется сервером, как в index.html). -->
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Полный прогон по частям</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2026;--mut:#6b717c;--line:#e3e6eb;--ok:#1f9d55;--bad:#d64545;--run:#2f6fde;--warn:#c98a0b}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0f13;--card:#161a20;--fg:#e6e8ec;--mut:#8d94a0;--line:#262c35;--ok:#3fbf75;--bad:#ef6a6a;--run:#5b93f0;--warn:#e0a63a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:16px}h1{font-size:19px;margin:0 0 4px}h2{font-size:15px;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:0 0 12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.mut{color:var(--mut)}.small{font-size:12px}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 12px;cursor:pointer}
+button.primary{background:var(--run);border-color:var(--run);color:#fff}button:disabled{opacity:.5;cursor:default}
+.chip{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;border:1px solid var(--line)}
+.ok{color:var(--ok)}.fail{color:var(--bad)}.running,.queued,.waiting{color:var(--run)}.skipped,.cancelled,.interrupted,.lost{color:var(--mut)}
+.mach{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}.m{border:1px solid var(--line);border-radius:10px;padding:10px}
+.bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--run)}
+table{width:100%;border-collapse:collapse}td,th{padding:5px 6px;border-top:1px solid var(--line);text-align:left;vertical-align:top}th{font-weight:600;color:var(--mut);font-size:12px}
+td.sum{font-size:12px;color:var(--mut);max-width:520px;white-space:pre-wrap;word-break:break-word}a{color:var(--run)}
+.prog{height:10px;background:var(--line);border-radius:6px;overflow:hidden;display:flex}.prog i{display:block;height:100%}
+#msg{min-height:20px}
+</style></head><body><main>
+<h1>Полный прогон по частям</h1>
+<div class="mut small">Каждая часть каталога проекта — отдельный прогон диспетчерской; места выдают машины прогонов. Окружное падение на удалённой машине повторяется один раз на этой.</div>
+<div class="card" style="margin-top:12px"><div class="row">
+  <button class="primary" id="b-start">▶ Полный прогон</button><button id="b-rerun">↻ Перепрогнать красные</button><button id="b-cancel">■ Остановить</button>
+  <span id="msg" class="mut"></span></div></div>
+<div class="card"><h2>Машины</h2><div class="mach" id="mach"></div></div>
+<div class="card"><h2 id="rh">Прогон</h2><div id="run" class="mut">Полного прогона ещё не было.</div></div>
+<div class="card"><h2>История</h2><div id="hist" class="mut">—</div></div>
+</main>
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const dur = (s) => s == null ? "" : s < 60 ? s + " с" : Math.floor(s / 60) + " мин " + (s % 60) + " с";
+const ST = { ok: "✓ зелёная", fail: "✗ красная", running: "идёт", queued: "в очереди", waiting: "ждёт", skipped: "неприменимо", cancelled: "снята", interrupted: "оборвана", lost: "потеряна" };
+async function op(o) {
+  $("msg").textContent = "…";
+  try {
+    const r = await fetch("/api/shard", { method: "POST", headers: { "content-type": "application/json", "x-dash-token": TOKEN }, body: JSON.stringify({ op: o }) });
+    const j = await r.json(); $("msg").textContent = j.error || j.message || (j.ok ? "ок" : "");
+  } catch (e) { $("msg").textContent = "ошибка: " + e.message; }
+  load();
+}
+$("b-start").onclick = () => { if (confirm("Запустить полный прогон всех частей на текущем коммите staging?")) op("start"); };
+$("b-rerun").onclick = () => op("rerun");
+$("b-cancel").onclick = () => { if (confirm("Остановить полный прогон? Идущие части будут сняты.")) op("cancel"); };
+function machines(ms) {
+  return (ms || []).map((m) => {
+    const ld = m.ld || {}, mem = ld.memTotalGB ? Math.round(100 * (ld.memUsedGB || 0) / ld.memTotalGB) : null;
+    return `<div class="m"><div class="row"><b>${esc(m.label)}</b><span class="chip ${m.online ? "ok" : "fail"}">${m.online ? "на связи" : "не на связи"}</span></div>
+      <div class="small mut">мест ${m.workers} · дорожки ${esc((m.lanes || ["любые"]).join(", "))} · занято ${m.reserved || 0}</div>
+      ${m.online && ld.cpu != null ? `<div class="small">ЦП ${Math.round(ld.cpu)}%</div><div class="bar"><i style="width:${Math.min(100, Math.round(ld.cpu))}%"></i></div>` : ""}
+      ${mem != null ? `<div class="small">память ${(ld.memUsedGB || 0).toFixed(1)} из ${ld.memTotalGB.toFixed(0)} ГБ · ${mem}%</div><div class="bar"><i style="width:${mem}%"></i></div>` : ""}</div>`;
+  }).join("");
+}
+function run(r) {
+  if (!r) return `<span class="mut">Полного прогона ещё не было.</span>`;
+  const t = r.total || 1, w = (n) => (100 * n / t).toFixed(2) + "%";
+  const bar = `<div class="prog"><i style="width:${w(r.ok)};background:var(--ok)"></i><i style="width:${w(r.fail)};background:var(--bad)"></i><i style="width:${w(r.running)};background:var(--run)"></i><i style="width:${w(r.skipped)};background:var(--mut)"></i></div>`;
+  const head = `<div class="row" style="margin-bottom:8px"><span class="chip ${r.status === "running" ? "running" : r.fail || r.notrun ? "fail" : "ok"}">${r.status === "running" ? "идёт" : r.status === "cancelled" ? "остановлен" : r.fail || r.notrun ? "есть красные" : "зелёный"}</span>
+    <span>staging <code>${esc(String(r.sha).slice(0, 10))}</code> ${esc(r.subject)}</span><span class="mut small">${r.rerunOf ? "перепрогон красных · " : ""}✓ ${r.ok} · ✗ ${r.fail} · идёт ${r.running} · неприменимо ${r.skipped} · не прогнано ${r.notrun} · всего ${r.total}</span></div>${bar}`;
+  const per = Object.entries(r.machines || {}).map(([k, m]) => `<span class="chip">${esc(m.label || k)}: готово ${m.done}${m.fail ? `, ✗ ${m.fail}` : ""}${m.running ? `, идёт ${m.running}${m.current ? " (" + esc(m.current) + ")" : ""}` : ""}</span>`).join(" ");
+  const rows = (r.parts || []).map((p) => `<tr><td><code>${esc(p.id)}</code></td><td class="${p.status}">${ST[p.status] || esc(p.status)}</td><td>${esc(p.mLabel || "")}</td><td>${dur(p.sec)}</td><td>${p.tries > 1 ? p.tries + "×" : ""}</td>
+    <td class="sum">${esc(p.note ? p.note + "\n" : "")}${esc(p.status === "running" ? (p.tail || []).join("\n") : p.summary)}</td><td>${p.jobId ? `<a href="/api/shard-log?f=${encodeURIComponent(p.jobId)}" target="_blank">лог</a>` : ""}</td></tr>`).join("");
+  return head + `<div style="margin:8px 0">${per}</div><table><thead><tr><th>часть</th><th>итог</th><th>машина</th><th>время</th><th>попытки</th><th>выжимка</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function hist(h) {
+  return (h || []).map((r) => r && `<div class="small">${new Date(r.startedAt).toLocaleString("ru-RU")} · <code>${esc(String(r.sha).slice(0, 10))}</code> · ${r.status === "running" ? "идёт" : r.status === "cancelled" ? "остановлен" : r.fail || r.notrun ? "✗ " + r.fail + (r.notrun ? ", не прогнано " + r.notrun : "") : "✓ зелёный"} · частей ${r.total}${r.rerunOf ? " · перепрогон" : ""}</div>`).join("") || "—";
+}
+async function load() {
+  try {
+    const r = await fetch("/api/shard?t=" + Date.now(), { cache: "no-store" }); const d = await r.json();
+    $("mach").innerHTML = machines(d.machines);
+    $("run").innerHTML = d.configured === false ? `<span class="fail">Полный прогон не настроен: в dispatcher.project.json нет fullRun.</span>` : run(d.run);
+    $("hist").innerHTML = hist(d.history);
+    const running = d.run && d.run.status === "running";
+    $("b-start").disabled = running || d.configured === false; $("b-cancel").disabled = !running; $("b-rerun").disabled = running || !(d.run && (d.run.fail || d.run.notrun));
+  } catch (e) { $("msg").textContent = "нет связи с диспетчерской: " + e.message; }
+}
+load(); setInterval(load, 3000);
+</script></body></html>

@@ -1,0 +1,108 @@
+<!doctype html>
+<!-- laptop-view.html — экран прогонов на удалённой машине (laptop-view.mjs). Только смотрит: раз в 2 с GET /api/laptop, никаких кнопок и действий.
+     Открывается в рамке клиента машины (~/snap/chromium/common/dispatcher-machine-view.html); пропала связь — клиент сам вернёт «Жду связи». -->
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Прогоны машины</title>
+<style>
+:root{--bg:#f3f4f6;--card:#fff;--fg:#1f2329;--mut:#5b616b;--line:#e3e5e9;--acc:#2563eb;--ok:#15803d;--okb:#dcfce7;--bad:#b91c1c;--badb:#fee2e2;--warn:#a16207;--warnb:#fef3c7;--track:#e5e7eb}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0d10;--card:#16181d;--fg:#e6e8eb;--mut:#9aa0aa;--line:#262a31;--acc:#60a5fa;--ok:#4ade80;--okb:#12301c;--bad:#f87171;--badb:#3a1616;--warn:#fbbf24;--warnb:#3a2e0e;--track:#2a2e36}}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+main{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+h2{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.top{display:flex;align-items:center;gap:10px}.top b{font-size:18px}.top .when{margin-left:auto;color:var(--mut);font-size:12px}
+.pill{display:inline-flex;gap:5px;align-items:center;padding:2px 9px;border-radius:999px;font-weight:600;font-size:13px}
+.s-busy{background:var(--okb);color:var(--ok)}.s-idle{background:var(--track);color:var(--mut)}.s-hot{background:var(--badb);color:var(--bad)}.s-offline{background:var(--warnb);color:var(--warn)}
+.head{margin-top:4px;font-size:15px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.tile .v{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}.tile .k{color:var(--mut);font-size:12px}
+.cores{display:flex;gap:3px;margin-top:6px;height:26px;align-items:flex-end}.cores i{flex:1;background:var(--acc);border-radius:2px 2px 0 0;min-height:2px}
+.sparks{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}.spark .k{color:var(--mut);font-size:12px;display:flex;justify-content:space-between}
+.spark svg{width:100%;height:44px;display:block}.spark polyline{fill:none;stroke:var(--acc);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.spark line{stroke:var(--line);stroke-width:1}
+.job{border-top:1px solid var(--line);padding:8px 0}.job:first-of-type{border-top:0;padding-top:2px}
+.job .t{font-weight:600}.job .m{color:var(--mut);font-size:12px}.mono{font:12px/1.35 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.bar{height:8px;background:var(--track);border-radius:4px;overflow:hidden;margin:6px 0 3px}.bar i{display:block;height:100%;background:var(--acc);border-radius:4px}
+.tail{margin-top:5px;padding:6px 8px;background:var(--bg);border-radius:6px;color:var(--mut)}
+.row{display:grid;grid-template-columns:110px 1fr auto;gap:8px;padding:4px 0;border-top:1px solid var(--line);align-items:baseline}.row:first-of-type{border-top:0}
+.r-ok{color:var(--ok)}.r-fail{color:var(--bad)}.r-warn{color:var(--warn)}.r-muted,.r-run{color:var(--mut)}
+.mut{color:var(--mut)}.small{font-size:12px}.warn{color:var(--warn)}.bad{color:var(--bad)}
+#lost{display:none;background:var(--warnb);color:var(--warn);border-radius:8px;padding:6px 10px;font-weight:600}
+</style></head>
+<body><main>
+<div id="lost"></div>
+<section class="card"><div class="top"><b id="mname">Машина</b><span id="pill" class="pill">…</span><span class="when" id="when"></span></div><div class="head" id="head">загружаю…</div></section>
+<section class="card"><h2>Загрузка</h2><div id="load"></div></section>
+<section class="card"><h2>Сейчас выполняет</h2><div id="cur"></div></section>
+<section class="card"><h2>Очередь проверок</h2><div id="queue"></div></section>
+<section class="card"><h2>Последние прогоны на этой машине</h2><div id="recent"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
+const dur = (s) => s == null ? "" : s < 60 ? s + " с" : s < 3600 ? Math.floor(s / 60) + " мин" + (s < 600 ? " " + (s % 60) + " с" : "") : Math.floor(s / 3600) + " ч " + Math.floor((s % 3600) / 60) + " мин"
+const ago = (t, now) => t ? dur(Math.round((now - t) / 1000)) + " назад" : ""
+const num = (x) => String(x).replace(".", ",")
+const STATE = { busy: ["●", "Работает"], idle: ["○", "Свободен"], hot: ["▲", "Горячо"], offline: ["✕", "Нет замеров"] }
+const RES = { ok: "✓", fail: "✗", warn: "!", muted: "–", run: "…" }
+
+function spark(vals, max, unit, name) {
+  const v = (vals || []).filter((x) => typeof x === "number"); if (v.length < 2) return `<div class="spark"><div class="k"><span>${name}</span></div><div class="mut small">мало замеров</div></div>`
+  const top = max || Math.max(...v, 1), w = 300, h = 44, step = w / (v.length - 1)
+  const pts = v.map((x, i) => (i * step).toFixed(1) + "," + (h - 3 - (Math.min(x, top) / top) * (h - 6)).toFixed(1)).join(" ")
+  return `<div class="spark"><div class="k"><span>${name}, ${Math.round(v.length * 3 / 60)} мин</span><span>мин ${Math.min(...v)}${unit} · макс ${Math.max(...v)}${unit}</span></div>
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${name}: сейчас ${v[v.length - 1]}${unit}"><title>${name}: сейчас ${v[v.length - 1]}${unit}</title><line x1="0" y1="${h - 1}" x2="${w}" y2="${h - 1}"/><polyline points="${pts}"/></svg></div>`
+}
+function load(m) {
+  if (!m || !m.online) return `<div class="warn">Замеров с этой машины нет 20 с и дольше: диспетчерская не видит её по ssh (сеть, сон, перезапуск диспетчерской).</div>` + (m && m.health ? `<div class="mut small">${esc(m.health.why || "")}</div>` : "")
+  const t = m.tempC == null ? "—" : m.tempC + " °C"
+  return `<div class="tiles">
+    <div class="tile"><div class="k">ЦП</div><div class="v">${m.cpu} %</div><div class="k">нагрузка ${esc((m.loadAvg || []).map(num).join(" / "))}</div><div class="cores" aria-label="ядра">${(m.cores || []).map((c) => `<i style="height:${Math.max(2, c)}%" title="${c} %"></i>`).join("")}</div></div>
+    <div class="tile"><div class="k">Память</div><div class="v">${num(m.memUsedGB)} / ${num(m.memTotalGB)} ГБ</div><div class="k">свободно ${num(m.memFreeGB)} ГБ${m.swapUsedGB ? " · своп " + num(m.swapUsedGB) + " ГБ" : ""}</div>${m.swapNote ? `<div class="warn small">${esc(m.swapNote)}</div>` : ""}</div>
+    <div class="tile"><div class="k">Температура</div><div class="v ${m.heat === "hard" ? "bad" : m.heat ? "warn" : ""}">${m.heat ? "▲ " : ""}${t}</div><div class="k">${m.heatWhy ? esc(m.heatWhy) : m.thermMode ? "режим " + esc(m.thermMode) : "в норме"}</div></div>
+  </div>
+  <div class="sparks">${spark(m.hist.cpu, 100, " %", "ЦП")}${spark(m.hist.temp, 0, " °C", "Температура")}</div>
+  ${m.alarm ? `<div class="bad small">${esc(m.alarm)}</div>` : ""}${m.health ? `<div class="mut small" style="margin-top:4px">Место для прогонов: ${esc(m.health.why || m.health.state || "")}</div>` : ""}`
+}
+function jobHtml(j) {
+  const p = j.prog, pct = p && p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : null
+  const who = [j.tag, j.epic, (j.waves || []).join(", ")].filter(Boolean).join(" · ")
+  return `<div class="job"><div class="t">${esc(who)} — ${esc(j.stage)}</div>
+    <div class="m">${esc(j.label)}${j.by ? " · запустил: " + esc(j.by) : ""}</div>
+    ${j.input ? `<div class="mono small">${esc(j.input)}</div>` : ""}
+    ${p ? `<div class="bar"><i style="width:${pct == null ? 0 : pct}%"></i></div><div class="m">${p.total ? (p.approx ? "≈ " : "") + p.done + " из " + p.total : p.done} ${esc(p.unit)}${p.phase ? " · " + esc(p.phase) : ""}${j.okN || j.failN ? ` · <span class="r-ok">✓ ${j.okN}</span>` + (j.failN ? ` <span class="r-fail">✗ ${j.failN}</span>` : "") : ""}</div>` : ""}
+    <div class="m">идёт ${dur(j.elapsedS)}${j.leftS != null ? (j.overdue ? ` · <span class="warn">дольше обычного</span>` : " · осталось ≈ " + dur(j.leftS)) : ""}${j.quietS > 120 ? ` · <span class="warn">вывода нет ${dur(j.quietS)}</span>` : ""}</div>
+    ${j.tail && j.tail.length ? `<div class="tail mono">${j.tail.map(esc).join("\n")}</div>` : ""}</div>`
+}
+function cur(s) {
+  let h = (s.current || []).map(jobHtml).join("")
+  const f = s.fullRun
+  if (f) h += `<div class="job"><div class="t">Полный прогон staging ${esc(f.sha)} — ${esc(f.status)}${f.phase ? " · " + esc(f.phase) : ""}</div><div class="m">${esc(f.subject)}</div>
+    <div class="m">частей этой машины: ${f.partsDone} из ${f.partsTotal}${f.partsFail ? ` · <span class="r-fail">✗ ${f.partsFail}</span>` : ""}${f.current ? " · сейчас: " + esc(f.current) : ""} · идёт ${dur(f.elapsedS)}</div>
+    ${f.tail.length ? `<div class="tail mono">${f.tail.map(esc).join("\n")}</div>` : ""}</div>`
+  return h || `<div class="mut">Ничего — ${s.state === "offline" ? "машина не на связи" : "ждёт, когда диспетчерская выдаст ему место"}.</div>`
+}
+function queue(q) {
+  const w = q.waiting || [], e = q.elsewhere || []
+  let h = w.length ? w.map((r) => `<div class="row"><span class="mut">ждёт ${dur(r.ageS)}</span><span><b>${esc(r.tag)}</b> ${esc(r.label)}${r.input ? ` <span class="mono">${esc(r.input)}</span>` : ""}${r.wait ? `<div class="mut small">${esc(r.wait)}</div>` : ""}</span><span></span></div>`).join("") : `<div class="mut">В очереди пусто.</div>`
+  if (e.length) h += `<div class="mut small" style="margin-top:6px">Идут на других машинах: ${e.map((r) => `${esc(r.tag)} ${esc(r.label)}${r.input ? " (" + esc(r.input.slice(0, 40)) + ")" : ""} — ${esc(r.machine)}, ${dur(r.ageS)}`).join("; ")}</div>`
+  return h
+}
+function recent(s) {
+  const d = s.day || {}
+  const rows = (s.recent || []).map((j) => `<div class="row"><span class="r-${j.result.tone}">${RES[j.result.tone] || ""} ${esc(j.result.text)}</span>
+    <span><b>${esc(j.tag)}</b> ${esc(j.stage)}${j.input ? ` <span class="mono">${esc(j.input.slice(0, 80))}</span>` : ""}${j.summary ? `<div class="mut small">${esc(j.summary)}</div>` : ""}</span>
+    <span class="mut small">${dur(j.elapsedS)}<br>${ago(j.endedAt, s.now)}</span></div>`).join("")
+  return (rows || `<div class="mut">Прогонов на этой машине ещё не было.</div>`) + `<div class="mut small" style="margin-top:6px">За сутки: зелёных ${d.ok || 0}, красных ${d.fail || 0}${d.other ? ", прочих " + d.other : ""} · в работе ${dur(d.busyS || 0)}</div>`
+}
+let lastOk = 0
+function render(s) { { const e=document.getElementById("mname"); if (e) e.textContent=(s.machine&&s.machine.label)||"Машина"; }
+  const st = STATE[s.state] || ["", s.state]
+  $("pill").className = "pill s-" + s.state; $("pill").textContent = st[0] + " " + st[1]
+  $("head").textContent = s.headline
+  $("when").textContent = "обновлено " + new Date(s.now).toLocaleTimeString("ru-RU")
+  $("load").innerHTML = load(s.machine); $("cur").innerHTML = cur(s); $("queue").innerHTML = queue(s.queue || {}); $("recent").innerHTML = recent(s)
+}
+async function tick() {
+  try { const r = await fetch("/api/laptop?t=" + Date.now(), { cache: "no-store" }); if (!r.ok) throw new Error(r.status); render(await r.json()); lastOk = Date.now(); $("lost").style.display = "none" }
+  catch { if (lastOk && Date.now() - lastOk > 6000) { $("lost").style.display = "block"; $("lost").textContent = "Нет ответа от ПК " + dur(Math.round((Date.now() - lastOk) / 1000)) + " — показано последнее известное" } }
+}
+tick(); setInterval(tick, 2000)
+</script></body></html>

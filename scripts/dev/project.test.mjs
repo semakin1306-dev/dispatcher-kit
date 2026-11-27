@@ -331,3 +331,24 @@ test("release.stand.stages: проверка формы, id и регуляро�
     assert.ok(paths(validateProject(bad).errors).some((p) => p.startsWith("release.stand.stages")), JSON.stringify(stages))
   }
 })
+
+test("fullRun: задача из tasks, команда каталога, регулярка с группой; нормализация; view у машины только с ssh", () => {
+  const id = Object.keys(demo().tasks)[0]
+  const ok = demo(); ok.fullRun = { task: id, listCmd: "node parts.mjs --list", listRe: "^  ([a-z-]+)\\s", exclude: ["x"], pin: { "go-a": ["local"] } }
+  assert.deepEqual(paths(validateProject(ok).errors), [])
+  const n = normalizeProject(ok, { baseDir: os.tmpdir(), cpus: 8 }).fullRun
+  assert.deepEqual(n, { task: id, listCmd: "node parts.mjs --list", listRe: "^  ([a-z-]+)\\s", exclude: ["x"], pin: { "go-a": ["local"] } })
+  assert.equal(normalizeProject(demo(), { baseDir: os.tmpdir(), cpus: 8 }).fullRun, null)
+  for (const [fr, p] of [
+    [{ task: "нет-такой", listCmd: "x", listRe: "(a)" }, "fullRun.task"],
+    [{ task: id, listRe: "(a)" }, "fullRun.listCmd"],
+    [{ task: id, listCmd: "x", listRe: "[a-z]+" }, "fullRun.listRe"],
+    [{ task: id, listCmd: "x", listRe: "(" }, "fullRun.listRe"],
+    [{ task: id, listCmd: "x", listRe: "(a)", pin: { a: [] } }, "fullRun.pin"],
+  ]) {
+    const bad = demo(); bad.fullRun = fr
+    assert.ok(paths(validateProject(bad).errors).includes(p), JSON.stringify(fr))
+  }
+  const v = demo(); v.machines = { local: { view: true } }
+  assert.ok(paths(validateProject(v).errors).includes("machines.local.view"))
+})

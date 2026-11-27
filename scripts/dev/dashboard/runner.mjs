@@ -409,7 +409,11 @@ const takesPlace = (j) => !!REMOTE_TASKS[j.task] || placedTrain(j);
 /** Прогон берёт место через модуль машин: машины включены, задача проекта (или поезд в её дорожке), у слота есть папка. */
 export const remoteEligible = (j) => remoteOn() && takesPlace(j) && (j.tree === "orchestrator-staging" || !!(treeByKey(j.tree) || {}).path);
 // Требования к месту: сколько прогон ждёт (правило мест со временем пускает его на эту машину) и тяжёлый ли он.
-export const placeOpts = (j) => ({ ageMs: Date.now() - (j.queuedAt || Date.now()), heavy: HEAVY.has(j.task) || !!(REMOTE_TASKS[j.task] || {}).heavy, only: null, needs: [] });
+// only — закрепление прогона за машинами (полный прогон: окружное падение на удалённой повторяется на этой, fullRun.pin).
+export const placeOpts = (j) => ({
+    ageMs: Date.now() - (j.queuedAt || Date.now()), heavy: HEAVY.has(j.task) || !!(REMOTE_TASKS[j.task] || {}).heavy,
+    only: Array.isArray(j.only) && j.only.length ? j.only : null, needs: [],
+});
 /** Прогон занял место удалённой машины (а не этой). */
 const onRemote = (job) => !!(job.runOn && job.runOn !== "local");
 /**

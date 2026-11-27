@@ -32,7 +32,7 @@ export const PROJECT_MODES = ["full", "light"]
 
 export const ID_RE = /^[a-z][a-z0-9-]{0,39}$/
 const REMOTE_RE = /^[A-Za-z0-9._-]+$/
-const TOP_KEYS = ["schema", "name", "mode", "repo", "agent", "areas", "deny", "protected", "slotPrepare", "tasks", "stations", "machines", "release", "accept", "ci", "modules", "limits"]
+const TOP_KEYS = ["schema", "name", "mode", "repo", "agent", "areas", "deny", "protected", "slotPrepare", "tasks", "stations", "machines", "release", "accept", "fullRun", "ci", "modules", "limits"]
 
 /**
  * Запреты для агента слота, которые действуют в любом проекте: история и ветки меняются только диспетчерской,
@@ -261,6 +261,22 @@ export function validateProject(raw) {
   }
   const accept = optObj("accept")
   if (accept) for (const k of ["run", "specGlob", "standUrl"]) optStr(accept, "accept", k)
+  // fullRun — полный прогон по частям (страница /shard): задача проекта на одну часть, команда каталога частей и
+  // регулярка id части в её выводе (группа 1); exclude — части мимо прогона; pin — { часть: [машины] }.
+  const fullRun = optObj("fullRun")
+  if (fullRun) {
+    if (!isStr(fullRun.task)) E("fullRun.task", "задача проекта, которая гоняет одну часть (ввод — id части)")
+    else if (!(raw.tasks && raw.tasks[fullRun.task])) E("fullRun.task", "нет такой задачи в `tasks`: " + fullRun.task)
+    if (!isStr(fullRun.listCmd)) E("fullRun.listCmd", "команда, печатающая каталог частей (выполняется в основной папке)")
+    if (!isStr(fullRun.listRe)) E("fullRun.listRe", "регулярка строки каталога, группа 1 — id части")
+    else {
+      try { if (new RegExp("(?:" + fullRun.listRe + ")|").exec("").length < 2) E("fullRun.listRe", "нужна группа 1 — id части") }
+      catch (e) { E("fullRun.listRe", "неверная регулярка: " + e.message) }
+    }
+    if (fullRun.exclude !== undefined && !isStrList(fullRun.exclude)) E("fullRun.exclude", "список id частей")
+    if (fullRun.pin !== undefined && !(isObj(fullRun.pin) && Object.values(fullRun.pin).every((v) => isStrList(v) && v.length)))
+      E("fullRun.pin", "pin — объект { <часть>: [<машина>, …] }")
+  }
   const ci = optObj("ci")
   if (ci) { optStr(ci, "ci", "kind"); optStr(ci, "ci", "runners"); optList(ci, "ci", "files") }
 
@@ -318,6 +334,8 @@ function validateMachines(machines, p0, E) {
     if (isStr(m.ssh) && !isStr(m.dir)) E(p + ".dir", "у удалённой машины обязательна рабочая папка `dir`")
     if (m.workers !== undefined && !(Number.isInteger(m.workers) && m.workers >= 1)) E(p + ".workers", "число воркеров — целое от 1")
     if (m.prefer !== undefined && typeof m.prefer !== "boolean") E(p + ".prefer", "prefer — true/false (машина первой в очереди мест)")
+    if (m.view !== undefined && typeof m.view !== "boolean") E(p + ".view", "view — true/false (экран прогонов на этой машине)")
+    if (m.view === true && !isStr(m.ssh)) E(p + ".view", "экран ставится на удалённую машину по ssh — у машины нужен `ssh`")
     if (m.laneMax !== undefined && !(isObj(m.laneMax) && Object.entries(m.laneMax).every(([k, v]) => ID_RE.test(k) && Number.isInteger(v) && v >= 1)))
       E(p + ".laneMax", "laneMax — объект { <дорожка>: целое от 1 }")
     if (m.lanes !== undefined) {
@@ -398,6 +416,7 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
     // prefer — машина в очереди мест первой и без ожидания (по умолчанию эта машина последняя: SPILL_MS);
     // laneMax — потолок одновременных прогонов дорожки на машине ({ "db": 4 }), сверх него места дорожке не даются.
     prefer: m.prefer === true, laneMax: isObj(m.laneMax) ? { ...m.laneMax } : null,
+    view: m.view === true, // экран прогонов этой машины (laptop-view.mjs): окно на машине, данные — только чтение отсюда
   })
   machines.local = mk("local", rawMachines.local || {})
   for (const [id, m] of Object.entries(rawMachines)) if (id !== "local") machines[id] = mk(id, m)
@@ -426,6 +445,10 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
       },
       prod: { run: (rel.prod && rel.prod.run) || "", verify: (rel.prod && rel.prod.verify) || "", pushDeploys: !!(rel.prod && rel.prod.pushDeploys) },
     },
+    fullRun: raw.fullRun && isObj(raw.fullRun) ? {
+      task: raw.fullRun.task, listCmd: raw.fullRun.listCmd, listRe: raw.fullRun.listRe,
+      exclude: raw.fullRun.exclude || [], pin: isObj(raw.fullRun.pin) ? { ...raw.fullRun.pin } : {},
+    } : null,
     accept: { run: (raw.accept && raw.accept.run) || "", specGlob: (raw.accept && raw.accept.specGlob) || "", standUrl: (raw.accept && raw.accept.standUrl) || "" },
     ci: { kind: (raw.ci && raw.ci.kind) || "", runners: (raw.ci && raw.ci.runners) || "", files: (raw.ci && raw.ci.files) || [] },
     modules: { ...(raw.modules || {}) },

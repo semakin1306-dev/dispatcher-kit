@@ -3,6 +3,13 @@
 export const EPIC_FIELDS = ["epic", "tree", "key", "slot", "orch", "from", "to"];
 
 export const GLOBAL_EVENTS = new Map([
+    ["dispatcher.inbox", "сообщение владельца агенту-диспетчеру — он один на установку, не эпика"],
+    ["dispatcher.run", "обход агента-диспетчера вне расписания — по всем эпикам"],
+    ["fullrun.start", "полный прогон по частям — на коммите staging, не эпика"],
+    ["fullrun.enqueue.fail", "полный прогон: часть не встала в очередь"],
+    ["fullrun.cancel", "полный прогон остановлен"],
+    ["fullrun.retry", "полный прогон: повтор окружного падения на этой машине"],
+    ["fullrun.done", "полный прогон закончен"],
     ["server.pulse", "пульс сервера раз в минуту"],
     ["slow.loop", "задержка цикла сервера"],
     ["server.start", "запуск диспетчерской"],

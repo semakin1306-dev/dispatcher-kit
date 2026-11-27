@@ -14,7 +14,7 @@
 //   - в сухом режиме (DRY, пробный экземпляр) таймеры с действиями не ставятся: агенты, прогоны и git не трогаются;
 //   - все интервалы — unref(): процесс держит только HTTP-сервер.
 import "./wiring.mjs"
-import { EPIC_FILE, fwd } from "../slots.mjs"
+import { EPIC_FILE, PROJECT, fwd } from "../slots.mjs"
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import http from "node:http"
@@ -90,7 +90,9 @@ import { hangsSince } from "./deadline.mjs"
 import { classifyPrevStop, exitRecord, pcGap } from "./lifecycle-rules.mjs"
 import { setSshGateHook } from "./spawner.mjs"
 import { epicRulesCheck } from "./epic-rules.mjs"
-import { shardApi } from "./shard.mjs"
+import { setShardApi, shardApi } from "./shard.mjs"
+import { createFullRun } from "./full-run.mjs"
+import { installViewer, startLaptopView } from "./laptop-view.mjs"
 import { initMachines } from "./machines.mjs"
 import { enabled, onModuleBoot, startModules } from "./modules.mjs"
 
@@ -458,6 +460,16 @@ setInterval(() => {
 // ── модули ──
 onModuleBoot("machines", () => {
   initMachines()
+  // полный прогон по частям (страница /shard): поверх реализации машин, если в конфиге есть fullRun
+  if (PROJECT.fullRun) {
+    const base = shardApi(), fr = createFullRun(base, { tickMs: DRY ? 0 : 5000 })
+    setShardApi({ ...base, ...fr })
+  }
+  // экран прогонов на удалённых машинах с view: true — HTTP только для чтения 127.0.0.1:4779 + обратный ssh-туннель
+  if (!DRY) for (const m of Object.values(PROJECT.machines).filter((x) => x.view && x.ssh)) {
+    startLaptopView({ machine: m.id, host: m.ssh, source: () => ({ jobs: jobList(), shard: shardApi().pub() }) })
+    installViewer(m.ssh, (code, out) => console.log("экран " + m.id + ":", code ? "клиент не поставлен (" + out.split("\n").pop() + ")" : out.replace(/\n/g, " · ")))
+  }
   // уборка папок прогонов слотов, которых больше нет, на удалённых машинах
   if (!DRY) {
       const prune = async () => {
@@ -603,6 +615,11 @@ S.server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`)
     if (url.pathname === "/" || url.pathname === "/index.html") {
       const html = fs.readFileSync(path.join(HERE, "index.html"), "utf8").replace("__TOKEN__", TOKEN).split("__UIVER__").join(String(uiStamp()))
+      return send(res, 200, html, "text/html; charset=utf-8")
+    }
+    // страница полного прогона по частям (кнопка «Полный прогон» на линии staging): токен — как у главной страницы
+    if (url.pathname === "/shard" && req.method === "GET") {
+      const html = fs.readFileSync(path.join(HERE, "full-run.html"), "utf8").replace("__TOKEN__", TOKEN)
       return send(res, 200, html, "text/html; charset=utf-8")
     }
     // файлы страницы: /ui/v<отметка>/x.js — вложенные импорты наследуют путь с отметкой, кеш на час

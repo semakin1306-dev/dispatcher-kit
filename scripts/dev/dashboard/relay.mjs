@@ -89,6 +89,7 @@ import { TASKS, matchAny } from "./tasks.mjs";
 import { enabled } from "./modules.mjs";
 const reviewEnabled = () => enabled("review");
 import { BLOCK_RE, DECISION_RE, FENCE, TESTS_HEAD_RE, hasDecision, isReportBlock, reportBlockOf, summaryOf, waitsHead } from "./protocol.mjs";
+import { markSlotDecision } from "./slot-done.mjs";
 import { slotReset } from "./slot-reset.mjs";
 import { BACKLOG_KEY } from "./backlog-agent.mjs";
 import { backlogAfterTurn } from "./backlog.mjs";
@@ -1459,8 +1460,15 @@ export async function applyDecision(a, text) {
         logEvent("slot.decision", { tree: key, word, detail: String(s).slice(0, 200) });
         return push(a, { id: "dec-" + a.rev + "-" + Math.random().toString(36).slice(2, 5), t: "status", text: "Диспетчерская: " + s });
     };
-    if (/^(ПРИНЯЛ|ЖДУ)/.test(word))
-        return logEvent("slot.decision", { tree: key, word, detail: "" });
+    if (/^(ПРИНЯЛ|ЖДУ)/.test(word)) {
+        // причина «ЖДУ» — остаток строки решения: автовлив держит ветку только при «ЖДУ <причина про код>»
+        const tail = text.split(/\r?\n/).slice(-6).join("\n"), at = tail.search(DECISION_RE);
+        const line = at >= 0 ? tail.slice(at).split(/\r?\n/)[0] : "";
+        const why = line.replace(DECISION_RE, "").replace(/^[\s*:—–.-]+/, "").trim().slice(0, 200);
+        const sn = snapNow() && snapNow().trees.find((x) => x.key === key);
+        markSlotDecision(key, { word, detail: why, fp: (sn && sn.fp) || "" });
+        return logEvent("slot.decision", { tree: key, word, detail: why });
+    }
     if (word.startsWith("ПЕРЕПРОГОН")) {
         const t = treeByKey(key), fails = unresolvedFails(key).filter((j) => j.task !== "review");
         if (!fails.length) {

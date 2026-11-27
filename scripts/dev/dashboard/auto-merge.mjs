@@ -6,9 +6,9 @@ import { agents, push, sendWhenFree } from "./agents.mjs";
 import { snapNow, rebuildOne } from "./snapshot.mjs";
 import { epicSlots, treeByKey, viewEpic } from "./trees.mjs";
 import { drainState, syncReport, syncSlot } from "./epics.mjs";
-import { waveFinalOf } from "./slot-done.mjs";
+import { slotDecisionOf, waveFinalOf } from "./slot-done.mjs";
 import { late } from "./late.mjs";
-import { askDoneAct, askDoneText, autoMergeAct, autoSyncAct, mergePin } from "./auto-merge-rules.mjs";
+import { askDoneAct, askDoneText, autoMergeAct, autoSyncAct, holdReason, mergePin } from "./auto-merge-rules.mjs";
 import { git } from "./git.mjs";
 import { TASKS } from "./tasks.mjs";
 import { MAIN } from "../slots.mjs";
@@ -41,7 +41,15 @@ export async function autoMerge(key, why = "автопоезд") {
     let t = (snapNow() && snapNow().trees.find((x) => x.key === key)) || null;
     if (t && t.ahead > 0 && t.conflict == null)
         t = (await rebuildOne(key).catch(() => null)) || t;
-    const d = autoMergeAct({ on: autoMergeOn(), drain: !!drainState(), t, final: !!t && waveFinalOf(t), mergeLive: mergeLive() });
+    const d = autoMergeAct({
+        on: autoMergeOn(),
+        drain: !!drainState(),
+        t,
+        final: !!t && waveFinalOf(t),
+        mergeLive: mergeLive(),
+        busy: busyOf(key),
+        hold: t ? holdReason(slotDecisionOf(key), t.fp) : "",
+    });
     if (d.act !== "merge")
         return { ok: false, why: d.why };
     inflight = true;
@@ -96,7 +104,7 @@ export async function autoMergeReady(why = "проверка простоя") {
         return;
     const keys = new Set(epicSlots().filter((x) => !x.archived).map((x) => x.slot));
     for (const t of snapNow().trees.filter((x) => keys.has(x.key))) {
-        if (autoMergeAct({ t: t.conflict == null ? { ...t, conflict: [] } : t, final: waveFinalOf(t) }).act !== "merge") {
+        if (autoMergeAct({ t: t.conflict == null ? { ...t, conflict: [] } : t, final: waveFinalOf(t), busy: busyOf(t.key), hold: holdReason(slotDecisionOf(t.key), t.fp) }).act !== "merge") {
             askDone(t);
             continue;
         }

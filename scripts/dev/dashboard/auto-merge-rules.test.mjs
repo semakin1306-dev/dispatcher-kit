@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { NOT_DONE_WHY, askDoneAct, askDoneText, autoMergeAct, autoSyncAct, wagonDone, wagonUnfinished, mergePin } from "./auto-merge-rules.mjs";
+import { NOT_DONE_WHY, askDoneAct, askDoneText, autoMergeAct, autoSyncAct, holdReason, wagonDone, wagonUnfinished, mergePin } from "./auto-merge-rules.mjs";
 
 const st = (over = {}) => ["build", "tests", "guards", "review", "regress", "staging"].map((id) => ({ id, label: id, done: id === "staging" ? false : over[id] !== false }));
 const ready = (o = {}) => ({ kind: "slot", exists: true, ahead: 3, behind: 0, dirtyTracked: 0, conflict: [], stages: st(), deps: [], verdict: {}, ...o });
@@ -29,8 +29,21 @@ describe("20.11 автовлив: autoMergeAct", () => {
         assert.equal(autoMergeAct({ t: ready({ kind: "orch" }), final: true }).act, "");
         assert.equal(autoMergeAct({ t: ready({ readOnly: true }), final: true }).act, "");
     });
-    test("без «ГОТОВО» не вливать; у вагона поезда «ГОТОВО» переживает подтягивание staging", () => {
-        assert.match(autoMergeAct({ t: ready(), final: false }).why, /ГОТОВО/);
+    test("27.11 правило владельца: ветка вливается сама без «ГОТОВО», если агент свободен и не держит влив причиной про код", () => {
+        const fp = "fpA";
+        assert.equal(autoMergeAct({ t: ready({ fp }), final: false }).act, "merge", "«ПРИНЯЛ» при зелёном — вливать");
+        assert.match(autoMergeAct({ t: ready({ fp }), final: false }).why, /ГОТОВО» не нужен/);
+        assert.match(autoMergeAct({ t: ready({ fp }), final: false, busy: true }).why, /занят ходом/);
+        const hold = holdReason({ word: "ЖДУ", detail: "ответа оркестратора: какой формат поля date_from", fp }, fp);
+        assert.match(autoMergeAct({ t: ready({ fp }), final: false, hold }).why, /агент ждёт: ответа оркестратора/);
+        assert.equal(holdReason({ word: "ЖДУ", detail: "ручной приёмки i1–i4 на стенде", fp }, fp), "", "«ЖДУ» ради приёмки — не причина");
+        assert.equal(holdReason({ word: "ЖДУ", detail: "вердикта владельца", fp }, fp), "");
+        assert.equal(holdReason({ word: "ЖДУ", detail: "", fp }, fp), "", "«ЖДУ» без причины — не держит");
+        assert.equal(holdReason({ word: "ПРИНЯЛ", detail: "что-то", fp }, fp), "");
+        assert.equal(holdReason({ word: "ЖДУ", detail: "правки схемы", fp: "старый" }, fp), "", "решение на другом коде не держит");
+    });
+    test("у вагона поезда без «ГОТОВО» не вливать; «ГОТОВО» вагона переживает подтягивание staging", () => {
+        assert.match(autoMergeAct({ t: ready({ train: true, wagon: "WV-9101", wagons: [{ wave: "WV-9101", times: {} }] }), final: false }).why, /ГОТОВО/);
         const tr = ready({ train: true, wagon: "WV-1113", wagons: [{ wave: "WV-1113", times: { doneAt: 1 } }, { wave: "WV-1114", times: {} }] });
         assert.equal(wagonDone(tr), true);
         assert.equal(autoMergeAct({ t: tr, final: false }).act, "merge");

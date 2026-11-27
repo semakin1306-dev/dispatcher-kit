@@ -1,5 +1,6 @@
 // auto-merge-rules.mjs — чистые правила автовлива: когда ветку можно влить в staging без слова человека (станции зелёные
-// на нынешнем коде, ревью «ЗА», агент доложил «ГОТОВО», конфликта нет) и когда подтянуть staging в ветку при конфликте.
+// на нынешнем коде, ревью «ЗА», конфликта нет, агент свободен и не держит влив «ЖДУ <причина>»; у вагона поезда — ещё
+// «ГОТОВО» вагона) и когда подтянуть staging в ветку при конфликте.
 export const MERGE_STATIONS = ["build", "tests", "guards", "review", "regress"];
 
 export function mergePin({ head = "", snapSha = "" } = {}) {
@@ -15,7 +16,19 @@ export function mergePin({ head = "", snapSha = "" } = {}) {
 
 export const NOT_DONE_WHY = "агент ещё не доложил «ГОТОВО»";
 
-export function autoMergeAct({ on = true, drain = false, t, final = false, mergeLive = false } = {}) {
+/**
+ * Причина держать влив из последнего решения агента на этом коде: «ЖДУ <причина про код>» держит, «ЖДУ» без причины и
+ * «ЖДУ» ради ручной приёмки/вердикта владельца/стенда — нет (приёмка идёт после влива). → строка причины или "".
+ */
+export const ACCEPT_WAIT_RE = /при[её]мк|руками|вердикт|стенд/i;
+export function holdReason(dec, fp) {
+    if (!dec || String(dec.word || "").toUpperCase() !== "ЖДУ" || !fp || dec.fp !== fp)
+        return "";
+    const why = String(dec.detail || "").trim();
+    return why && !ACCEPT_WAIT_RE.test(why) ? why : "";
+}
+
+export function autoMergeAct({ on = true, drain = false, t, final = false, mergeLive = false, busy = false, hold = "" } = {}) {
     if (!on)
         return { act: "", why: "автовлив выключен" };
     if (drain)
@@ -38,11 +51,27 @@ export function autoMergeAct({ on = true, drain = false, t, final = false, merge
     const dep = (t.deps || []).find((d) => !d.merged);
     if (dep)
         return { act: "", why: "сначала влить " + (dep.tag || dep.key) };
-    if (!final && !wagonDone(t))
-        return { act: "", why: NOT_DONE_WHY };
+    // Правило владельца (27.11): каждая ветка вливается в staging сама, когда проверки влива зелёные, — «ГОТОВО» агента
+    // больше не обязательно (агенты отвечают «ПРИНЯЛ»/«ПЕРЕПРОГОН»/«ЖДУ», и ветка стояла при зелёных станциях). Держат
+    // влив: агент занят ходом, или он явно сказал «ЖДУ <причина про код>». У вагона поезда ветка общая для очереди —
+    // там «ГОТОВО» вагона по-прежнему нужен.
+    if (!final && !wagonDone(t)) {
+        if (t.train && t.wagon)
+            return { act: "", why: NOT_DONE_WHY };
+        if (busy)
+            return { act: "", why: "агент слота занят ходом — решу после" };
+        if (hold)
+            return { act: "", why: "агент ждёт: " + hold };
+    }
     if (mergeLive)
         return { act: "", why: "идёт другой влив — после него" };
-    return { act: "merge", why: "станции зелёные, ревью «ЗА», агент доложил «ГОТОВО» — вливаю в staging" };
+    return {
+        act: "merge",
+        why:
+            final || wagonDone(t)
+                ? "станции зелёные, ревью «ЗА», агент доложил «ГОТОВО» — вливаю в staging"
+                : "станции зелёные, ревью «ЗА», агент свободен — вливаю в staging (доклад «ГОТОВО» не нужен)",
+    };
 }
 
 export function wagonDone(t) {

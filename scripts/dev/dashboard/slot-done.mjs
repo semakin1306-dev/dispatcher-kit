@@ -40,3 +40,13 @@ export function waveFinalOf(t) {
     const legacy = !!(r.since && t.last && t.last.ct && t.last.ct < r.since);
     return waveFinal({ mode: selfCommitMode(settings), fp, done: r.slots[t.key], commitOk, legacy });
 }
+
+// Последнее решение агента слота («ДАЛЬШЕ: ПРИНЯЛ / ЖДУ …») с причиной и отпечатком кода — для автовлива: «ЖДУ <причина
+// про код>» держит влив, остальное — нет (auto-merge-rules.mjs holdReason). Только в памяти: после перезапуска агент
+// ответит снова, а влив без причины держать незачем.
+const decisions = new Map();
+export function markSlotDecision(key, { word = "", detail = "", fp = "" } = {}) {
+    if (key)
+        decisions.set(key, { word: String(word || "").toUpperCase(), detail: String(detail || "").slice(0, 200), fp: fp || "", at: Date.now() });
+}
+export const slotDecisionOf = (key) => decisions.get(key) || null;

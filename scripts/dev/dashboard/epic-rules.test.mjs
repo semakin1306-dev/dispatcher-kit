@@ -78,3 +78,13 @@ test("запуск сервера проверяет правила открыт
     const boot = fs.readFileSync(new URL("./boot.mjs", import.meta.url), "utf8");
     assert.match(boot, /epicRulesCheck\(\)/);
 });
+
+test("новый эпик не затирает базу правил проекта: шаблон кладётся, только если файла нет; иначе — дописать «Правила эпика»", async () => {
+    const { RULES_TEMPLATE } = await import("./epic-rules.mjs");
+    const root = path.resolve(path.dirname(RULES_TEMPLATE), "..");
+    const skill = fs.readFileSync(path.join(root, "skills", "new-epic", "SKILL.md"), "utf8");
+    assert.match(skill, /уже есть в репозитории проекта/);
+    assert.match(skill, /НЕ заменяй его шаблоном/);
+    assert.match(fs.readFileSync(RULES_TEMPLATE, "utf8"), /только если такого файла в репозитории проекта ещё нет/);
+    assert.match(fs.readFileSync(path.join(root, "scripts", "dev", "prompts", "epic-rules-fix.md"), "utf8"), /целиком шаблоном не заменяй/);
+});

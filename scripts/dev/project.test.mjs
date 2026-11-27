@@ -301,3 +301,33 @@ test("agent.bin разворачивается как остальные пут�
   assert.equal(agentBinPath(""), "")
   assert.ok(isBareCommand("claude") && !isBareCommand("a/claude") && !isBareCommand("a\\claude") && !isBareCommand("~/claude"))
 })
+
+test("задача: naLog/naList — регэкспы «неприменимо»; неверные и naList без naLog — ошибки; в нормализацию переносятся", () => {
+  const ok = demo()
+  const id = Object.keys(ok.tasks)[0]
+  ok.tasks[id].naLog = "\\[parts\\] неизвестные части"
+  ok.tasks[id].naList = "^[ ·] ([a-z][\\w-]+)\\s{2,}"
+  assert.deepEqual(validateProject(ok).errors, [])
+  const p = normalizeProject(ok, { baseDir: os.tmpdir(), cpus: 8 })
+  assert.equal(p.tasks[id].naLog, "\\[parts\\] неизвестные части")
+  assert.equal(p.tasks[id].naList, "^[ ·] ([a-z][\\w-]+)\\s{2,}")
+  const bad = demo()
+  bad.tasks[id].naLog = "(["
+  assert.ok(paths(validateProject(bad).errors).includes("tasks." + id + ".naLog"))
+  const lone = demo()
+  lone.tasks[id].naList = "^(x)"
+  assert.ok(paths(validateProject(lone).errors).includes("tasks." + id + ".naList"))
+  assert.equal(normalizeProject(demo(), { baseDir: os.tmpdir(), cpus: 8 }).tasks[id].naLog, "")
+})
+
+test("release.stand.stages: проверка формы, id и регулярок; нормализация", () => {
+  const ok = demo(); ok.release = { stand: { run: "./stand.sh", stages: [["build", "Сборка", "^\\[1/2\\]"], ["done", "Стенд", "^=== complete"]] } }
+  assert.deepEqual(paths(validateProject(ok).errors), [])
+  assert.deepEqual(normalizeProject(ok).release.stand.stages, [["build", "Сборка", "^\\[1/2\\]"], ["done", "Стенд", "^=== complete"]])
+  const none = demo(); none.release = { stand: { run: "./stand.sh" } }
+  assert.deepEqual(normalizeProject(none).release.stand.stages, [])
+  for (const stages of ["не массив", [["a", "b"]], [["push", "Пуш", "x"]], [["a", "A", "("]], [["a", "A", "x"], ["a", "B", "y"]], [["1a", "A", "x"]]]) {
+    const bad = demo(); bad.release = { stand: { run: "./stand.sh", stages } }
+    assert.ok(paths(validateProject(bad).errors).some((p) => p.startsWith("release.stand.stages")), JSON.stringify(stages))
+  }
+})

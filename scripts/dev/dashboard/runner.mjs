@@ -63,10 +63,35 @@ import { autoSendReview, parseReview, reviewToChat } from "./review.mjs";
 import { kick, markMergedNow, rebuildFresh, rebuildMerged, rebuildOne, snapNow } from "./snapshot.mjs";
 import { bumpVer } from "./events.mjs";
 import { PROJECT_HOOKS, TASKS, findBash as findBashW, launchOf, stepOfTask, timeLimitMin } from "./tasks.mjs";
+import { naOfLog, naSummary } from "./na-rules.mjs";
+/** Лог прогона для «неприменимо»: начало и хвост (признак печатают до длинного каталога). */
+function naLogText(id) {
+    try {
+        const st = fs.statSync(logPath(id));
+        const fd = fs.openSync(logPath(id), "r");
+        try {
+            const head = Buffer.alloc(Math.min(st.size, 64000));
+            fs.readSync(fd, head, 0, head.length, 0);
+            let tailBuf = Buffer.alloc(0);
+            if (st.size > head.length) {
+                tailBuf = Buffer.alloc(Math.min(st.size - head.length, 64000));
+                fs.readSync(fd, tailBuf, 0, tailBuf.length, st.size - tailBuf.length);
+            }
+            return head.toString("utf8") + "\n" + tailBuf.toString("utf8");
+        }
+        finally {
+            fs.closeSync(fd);
+        }
+    }
+    catch {
+        return "";
+    }
+}
 import { areaRefusal, prepCap } from "./slot-rules.mjs";
 import { availMem } from "./free-mem.mjs";
 import { hangDue, hangLogLines, hangSummary, hungSpecs } from "./hang-rules.mjs";
 import { lineVerdict, parseTaskLog, specAware, specInput } from "./parsers.mjs";
+import { standLine, standStepStart } from "./deploy-stages.mjs";
 
 const kickTrainLate = (key) => autoChain(key, "после влива в staging: следующий вагон").catch((e) => console.error("поезд после влива:", e.message));
 
@@ -298,6 +323,8 @@ export function progFeed(job, chunk) {
             continue;
         }
         if (job.prog.kind === "marks") {
+            if (job.stagesDef)
+                standLine(job, l);
             const mm = /^\[(\d+)(?:\.\d+)?\/(\d+)\]\s*(.*)/.exec(l);
             if (mm) {
                 job.prog.done = Math.max(job.prog.done, Number(mm[1]) - 1);
@@ -377,6 +404,7 @@ export const HEAVY = new Set(["train"]);
  */
 const placedTrain = (j) => HEAVY.has(j.task) && PROJECT_LANES.includes(j.lane);
 /** Прогон берёт место через модуль машин: задача проекта или поезд в дорожке задач. */
+const PROJECT_LOCAL_PREFER = !!(((PROJECT || {}).machines || {}).local || {}).prefer;
 const takesPlace = (j) => !!REMOTE_TASKS[j.task] || placedTrain(j);
 /** Прогон берёт место через модуль машин: машины включены, задача проекта (или поезд в её дорожке), у слота есть папка. */
 export const remoteEligible = (j) => remoteOn() && takesPlace(j) && (j.tree === "orchestrator-staging" || !!(treeByKey(j.tree) || {}).path);
@@ -431,7 +459,9 @@ export const serverWait = (j) => {
         return !shardApi().slotAnyOnline()
             ? (fullRunNote() || "удалённые машины не на связи: жду их; ") +
                   "эта машина возьмёт проверку после ожидания, если на ней свободно"
-            : "ждёт место: удалённые машины → эта (после ожидания и при свободной памяти)";
+            : PROJECT_LOCAL_PREFER
+              ? "ждёт свободное место: эта машина → удалённые (по свободной памяти и ЦП)"
+              : "ждёт место: удалённые машины → эта (после ожидания и при свободной памяти)";
     if (isProjectLane(j.lane) && !localServes(j.lane))
         return "дорожку «" + j.lane + "» эта машина не обслуживает (machines.local.lanes) — нужна удалённая машина";
     return "";
@@ -647,6 +677,12 @@ export async function runJob(job) {
             phase: su ? SLOT_STAGES[0][1] : "",
             stages: su ? {} : undefined,
         };
+        // экран выката стенда: этапы из stagesDef запуска (пуш диспетчерской + этапы release.stand.stages)
+        if (mk && Array.isArray(job.stagesDef)) {
+            job.prog.stages = {};
+            job.prog.at = {};
+            job.prog.total = job.stagesDef.length;
+        }
     }
     const out = fs.createWriteStream(logPath(job.id), { flags: "a" });
     let tail = "";
@@ -751,6 +787,8 @@ export async function runJob(job) {
     for (const step of remoteRun || code ? [] : steps) {
         job.step = ++si;
         job.stepsTotal = steps.length;
+        if (job.stagesDef && job.prog)
+            standStepStart(job, si);
         if (job.cancelled) {
             code = 130;
             break;
@@ -819,6 +857,16 @@ export async function runJob(job) {
     // фильтр не совпал ни с одной спекой: тестов по волне ещё нет — не поломка кода (skipped не просит починки)
     if (job.status === "fail" && /0 matches|No tests found|No test files found|no tests ran|не совпал[аои]?\s+ни с одним/i.test(tail))
         job.status = "skipped";
+    // задаче дали несуществующее имя (часть, пакет, набор) — «неприменимо»: тестов не было, код ни при чём (na-rules.mjs)
+    if (job.status === "fail" && !job.timedOut && !job.hung && TASKS[job.task] && TASKS[job.task].naLog) {
+        // признак обычно в НАЧАЛЕ вывода (до каталога имён), а tail — последние 6000 знаков: читаем лог прогона
+        const na = naOfLog(naLogText(job.id) || tail, TASKS[job.task]);
+        if (na) {
+            job.status = "skipped";
+            job.na = na.line;
+            job.naList = na.list;
+        }
+    }
     // отметка сборки — только если код за время сборки не менялся: иначе собран не тот код, что сейчас в папке
     if (trPath && job.task === "build" && job.status === "ok" && job.fpStart && job.fpStart === job.fpEnd)
         setBuildStamp(job.tree, { fp: job.fpEnd, at: Date.now(), job: job.id });
@@ -829,6 +877,8 @@ export async function runJob(job) {
     job.summary = (key.length ? key.slice(-2) : lines.slice(-2)).join("  ·  ").slice(0, 260);
     if (job.infra)
         job.summary = "удалённая машина недоступна: " + job.infraWhy + " — не поломка кода, прогон вернётся в очередь сам" + ((job.infraTry || 0) >= 3 ? " (повторов исчерпано)" : "");
+    if (job.na)
+        job.summary = naSummary({ line: job.na });
     if (job.timedOut)
         job.summary = "⏱ СНЯТ ПО ВРЕМЕНИ (предел " + job.timedOut + " мин): " + job.summary;
     if (job.hung)

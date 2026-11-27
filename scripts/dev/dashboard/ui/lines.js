@@ -157,7 +157,7 @@ export function chipOf(j, pendingKey) {
         return `<span class="chip" title="${esc(j.advice.text || "")}">∅ устарел · ${dur(j)}</span>`;
     if (j.status === "fail" && j.advice && j.advice.act === "inherited")
         return `<span class="chip" title="${esc(j.advice.text || "")}">≈ упало только известное · ${dur(j)}</span>`;
-    const txt = j.status === "running" ? "идёт " + dur(j) : j.status === "ok" ? "зелёный · " + dur(j) : j.status === "fail" ? "упал · " + dur(j) : j.status === "queued" ? `в очереди${j.pos ? " · №" + j.pos : ""}` : j.status === "waiting" ? "ждёт память" : j.status === "cancelled" ? "отменён" : j.status === "skipped" ? "нет тестов" : "прерван";
+    const txt = j.status === "running" ? "идёт " + dur(j) : j.status === "ok" ? "зелёный · " + dur(j) : j.status === "fail" ? "упал · " + dur(j) : j.status === "queued" ? `в очереди${j.pos ? " · №" + j.pos : ""}` : j.status === "waiting" ? "ждёт память" : j.status === "cancelled" ? "отменён" : j.status === "skipped" ? (j.na ? "неприменимо" : "нет тестов") : "прерван";
     const fr = j.status === "ok" ? (S.fresh || {})[j.id] : null;
     if (fr && fr !== "ok") {
         const m = { stale: ["зелёный, код менялся после", "Прогон был зелёным, но файлы менялись после него или во время него: это не доказывает, что сейчас всё хорошо. Прогоните заново."], unknown: ["зелёный, код не сверен", "Прогон сделан до проверки кода: неизвестно, на каком коде он шёл. Прогоните заново."], nobuild: ["зелёный, без свежей сборки", "Тесты области берут собранный код, а сборки на этом коде не было: они могли исполнять старый код. Соберите и прогоните заново."] }[fr] || ["зелёный?", ""];

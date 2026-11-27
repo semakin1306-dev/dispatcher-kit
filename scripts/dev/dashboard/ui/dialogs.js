@@ -136,7 +136,7 @@ const STN_JOB_CHIP = { skipped: '<span class="chip">∅ нет тестов</spa
 function stnJobHead(j) {
     if (!j)
         return "";
-    return `<div class="chips" style="margin-bottom:6px"><b>${esc(j.label)}${j.input ? ` <span class="mono mute">${esc(j.input)}</span>` : ""}</b>${STN_JOB_CHIP[j.status] || ""}${j.sec != null ? `<span class="sub">${j.sec} с</span>` : ""}${j.at ? `<span class="sub">${new Date(j.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span>` : ""}${j.peakMB ? `<span class="sub">пик ${j.peakMB} МБ</span>` : ""}${j.id ? `<button class="sm ghost" data-stn="log" data-id="${esc(j.id)}">весь лог ▸</button>` : ""}${["fail", "interrupted"].includes(j.status) ? `<button class="sm primary" data-stn="report" data-id="${esc(j.id)}">→ Агенту</button>` : ""}</div>`;
+    return `<div class="chips" style="margin-bottom:6px"><b>${esc(j.label)}${j.input ? ` <span class="mono mute">${esc(j.input)}</span>` : ""}</b>${j.na ? '<span class="chip skipped">∅ неприменимо</span>' : STN_JOB_CHIP[j.status] || ""}${j.sec != null ? `<span class="sub">${j.sec} с</span>` : ""}${j.at ? `<span class="sub">${new Date(j.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span>` : ""}${j.peakMB ? `<span class="sub">пик ${j.peakMB} МБ</span>` : ""}${j.id ? `<button class="sm ghost" data-stn="log" data-id="${esc(j.id)}">весь лог ▸</button>` : ""}${["fail", "interrupted"].includes(j.status) ? `<button class="sm primary" data-stn="report" data-id="${esc(j.id)}">→ Агенту</button>` : ""}</div>`;
 }
 
 function stnBlock(b) {

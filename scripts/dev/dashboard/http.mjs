@@ -116,6 +116,7 @@ import { pipelineAction, wordGrants } from "./owner-word.mjs";
 import { caps } from "../runtimes/index.mjs";
 import { enabled, moduleHandler, moduleOfPath, modulesPublic, routeGate } from "./modules.mjs";
 import { closeWindow } from "./monitor-win.mjs";
+import { standStagesDef } from "./deploy-stages.mjs";
 import { killPosixTree } from "./proc-tree.mjs";
 
 /** Ответ: строка — как есть, иначе JSON. no-store — страница опрашивает состояние, кеш браузера показал бы старое. */
@@ -1620,7 +1621,7 @@ export async function pipelineStart(b, { view = null, via = "" } = {}) {
     if (action === "deploy-staging") {
         const wagons = ((snapNow() && snapNow().trees) || []).filter((x) => x.kind === "slot" && x.merge && !((x.stages || []).find((s) => s.id === "stand") || {}).done)
             .map((x) => ({ key: x.key, tag: x.tag, color: x.color, title: x.title }));
-        r.extra = { wagons, stagesDef: [["push", "Пуш staging"], ["stand", "Выкат стенда"]], epic: VIEW || null };
+        r.extra = { wagons, stagesDef: standStagesDef(PROJECT.release.stand.stages), epic: VIEW || null };
     }
     if (via === "tg")
         r.extra = { ...(r.extra || {}), by: "владелец через бота" };

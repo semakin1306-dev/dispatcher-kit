@@ -177,6 +177,14 @@ export function validateProject(raw) {
       optBool(t, p, "gate")
       if (t.timeoutMin !== undefined && !(typeof t.timeoutMin === "number" && t.timeoutMin > 0)) E(p + ".timeoutMin", "предел времени — положительное число минут")
       if (t.parser !== undefined) validateParser(t.parser, p + ".parser", E)
+      // «неприменимо»: признак в логе (naLog) и каталог существующих имён (naList, группа 1) — см. dashboard/na-rules.mjs
+      for (const k of ["naLog", "naList"])
+        if (t[k] !== undefined) {
+          let ok = isStr(t[k]) && t[k].length > 0
+          if (ok) try { new RegExp(t[k]) } catch { ok = false }
+          if (!ok) E(p + "." + k, "ожидается непустой регэксп (строка)")
+        }
+      if (t.naList !== undefined && t.naLog === undefined) E(p + ".naList", "naList работает только вместе с naLog")
     }
   }
   const refTasks = (list, p) => {
@@ -226,7 +234,26 @@ export function validateProject(raw) {
   const release = optObj("release")
   if (release) {
     for (const k of ["stand", "prod"]) if (release[k] !== undefined && !isObj(release[k])) E("release." + k, "ожидается объект")
-    if (isObj(release.stand)) { optStr(release.stand, "release.stand", "run"); optStr(release.stand, "release.stand", "url") }
+    if (isObj(release.stand)) {
+      optStr(release.stand, "release.stand", "run"); optStr(release.stand, "release.stand", "url")
+      // этапы экрана выката по меткам вывода команды выката: [[id, подпись, регулярка-строка], …]
+      const sg = release.stand.stages
+      if (sg !== undefined) {
+        if (!Array.isArray(sg)) E("release.stand.stages", "ожидается массив [id, подпись, регулярка]")
+        else {
+          const seen = new Set()
+          sg.forEach((x, i) => {
+            const at = "release.stand.stages[" + i + "]"
+            if (!Array.isArray(x) || x.length !== 3 || !x.every(isStr)) return E(at, "ожидается [id, подпись, регулярка] — три строки")
+            if (!/^[a-z][\w-]*$/i.test(x[0])) E(at, "id этапа — латиница/цифры/-/_")
+            else if (x[0] === "push") E(at, "id `push` занят: пуш staging делает сама диспетчерская до команды выката")
+            else if (seen.has(x[0])) E(at, "id `" + x[0] + "` повторяется")
+            seen.add(x[0])
+            try { new RegExp(x[2]) } catch (e) { E(at, "неверная регулярка: " + e.message) }
+          })
+        }
+      }
+    }
     if (isObj(release.prod)) {
       optStr(release.prod, "release.prod", "run"); optStr(release.prod, "release.prod", "verify"); optBool(release.prod, "release.prod", "pushDeploys")
       if (isObj(raw.repo) && isObj(raw.repo.upstream) && raw.repo.upstream.main == null) E("release.prod", "выкат прода описан, а прод-ветки нет: задайте `repo.upstream.main`")
@@ -290,6 +317,9 @@ function validateMachines(machines, p0, E) {
     if (id !== "local" && !isStr(m.ssh)) E(p + ".ssh", "у удалённой машины обязателен ssh-хост (как в ~/.ssh/config)")
     if (isStr(m.ssh) && !isStr(m.dir)) E(p + ".dir", "у удалённой машины обязательна рабочая папка `dir`")
     if (m.workers !== undefined && !(Number.isInteger(m.workers) && m.workers >= 1)) E(p + ".workers", "число воркеров — целое от 1")
+    if (m.prefer !== undefined && typeof m.prefer !== "boolean") E(p + ".prefer", "prefer — true/false (машина первой в очереди мест)")
+    if (m.laneMax !== undefined && !(isObj(m.laneMax) && Object.entries(m.laneMax).every(([k, v]) => ID_RE.test(k) && Number.isInteger(v) && v >= 1)))
+      E(p + ".laneMax", "laneMax — объект { <дорожка>: целое от 1 }")
     if (m.lanes !== undefined) {
       if (!isStrList(m.lanes) || !m.lanes.every((l) => ID_RE.test(l))) E(p + ".lanes", "дорожки — список id (строчная латиница, цифры, дефис)")
       else m.lanes.forEach((l) => servedLanes.add(l))
@@ -346,6 +376,7 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
       input: t.input ? { label: t.input.label, placeholder: t.input.placeholder || "" } : null,
       cwd: t.cwd ? fwd(t.cwd).replace(/\/+$/, "") : "", lane: t.lane || "main",
       parser: t.parser || "exit-code", gate: !!t.gate, timeoutMin: t.timeoutMin || 30,
+      naLog: t.naLog || "", naList: t.naList || "",
     }
   }
   const areas = {}
@@ -364,6 +395,9 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
     workers: m.workers || (id === "local" ? Math.max(1, Math.floor(cpus / 2)) : 1),
     lanes: m.lanes || null, // null — машина берёт любую дорожку
     prepare: m.prepare || [], services: (m.services || []).map((s) => ({ name: s.name, up: s.up, down: s.down || "", check: s.check || "" })),
+    // prefer — машина в очереди мест первой и без ожидания (по умолчанию эта машина последняя: SPILL_MS);
+    // laneMax — потолок одновременных прогонов дорожки на машине ({ "db": 4 }), сверх него места дорожке не даются.
+    prefer: m.prefer === true, laneMax: isObj(m.laneMax) ? { ...m.laneMax } : null,
   })
   machines.local = mk("local", rawMachines.local || {})
   for (const [id, m] of Object.entries(rawMachines)) if (id !== "local") machines[id] = mk(id, m)
@@ -386,7 +420,10 @@ export function normalizeProject(raw, { baseDir = HOME, file = "", cpus = os.cpu
     },
     machines,
     release: {
-      stand: { run: (rel.stand && rel.stand.run) || "", url: (rel.stand && rel.stand.url) || "" },
+      stand: {
+        run: (rel.stand && rel.stand.run) || "", url: (rel.stand && rel.stand.url) || "",
+        stages: (rel.stand && Array.isArray(rel.stand.stages) ? rel.stand.stages : []).map((x) => [x[0], x[1], x[2]]),
+      },
       prod: { run: (rel.prod && rel.prod.run) || "", verify: (rel.prod && rel.prod.verify) || "", pushDeploys: !!(rel.prod && rel.prod.pushDeploys) },
     },
     accept: { run: (raw.accept && raw.accept.run) || "", specGlob: (raw.accept && raw.accept.specGlob) || "", standUrl: (raw.accept && raw.accept.standUrl) || "" },

@@ -20,14 +20,19 @@ export const HEAVY_EXTRA_GB = 2;
 export function profilesOf(machines) {
     const ids = Object.keys(machines || {});
     const remote = ids.filter((id) => id !== "local");
-    const tiers = [...remote, ...(ids.includes("local") ? ["local"] : [])];
+    // Порядок: машины с prefer — первыми (в порядке конфига), затем удалённые, затем эта. Эта машина с prefer не ждёт
+    // SPILL_MS: она свободна — прогон идёт на неё сразу, удалённые — для разгрузки.
+    const pref = (id) => !!(machines[id] || {}).prefer;
+    const base = [...remote, ...(ids.includes("local") ? ["local"] : [])];
+    const tiers = [...base.filter(pref), ...base.filter((id) => !pref(id))];
     const profiles = {};
     for (const id of tiers) {
         const m = machines[id], local = id === "local";
         const n = Math.max(1, Number(m.workers) || 1);
         profiles[id] = {
             label: m.label || id, lanes: m.lanes || null, places: Array.from({ length: n }, (_, i) => i),
-            rule: local ? LOCAL_RULE : REMOTE_RULE, spillMs: local && remote.length ? SPILL_MS : 0,
+            rule: local ? LOCAL_RULE : REMOTE_RULE, spillMs: local && remote.length && !pref(id) ? SPILL_MS : 0,
+            laneMax: m.laneMax || null,
         };
     }
     return { tiers, profiles };
@@ -83,6 +88,8 @@ export function pickPlace(kind, ctx) {
             continue;
         const rule = P.rule, free = (ld.memTotalGB || 0) - (ld.memUsedGB || 0), cpu = ld.cpu || 0;
         const res = m.reserved || [], busy = new Set(res.map((x) => x.idx));
+        if (P.laneMax && P.laneMax[kind] !== undefined && res.filter((x) => x.kind === kind).length >= P.laneMax[kind])
+            continue;
         const idx = P.places.find((i) => !busy.has(i));
         if (idx === undefined)
             continue;

@@ -80,7 +80,7 @@ export function argvOf(run, input) {
 function taskOf(t) {
     const base = {
         id: t.id, label: t.label, group: t.group, lane: t.lane, gate: t.gate, parser: t.parser, timeoutMin: t.timeoutMin,
-        run: t.run, sub: t.cwd || "",
+        run: t.run, sub: t.cwd || "", naLog: t.naLog || "", naList: t.naList || "",
     };
     if (!t.input)
         return { ...base, input: null, text: t.run };

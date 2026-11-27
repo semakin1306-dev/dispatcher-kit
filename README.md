@@ -37,7 +37,7 @@
 
 - **Windows 10 и 11** — здесь диспетчерская писалась и здесь ею пользуются каждый день, с Claude Code.
 - **Linux и macOS** — вживую не проверялись. CI гоняет все тесты (`node --test`) на Ubuntu, macOS и Windows с Node 22 и 24; текущее состояние — на вкладке Actions. На этих системах проверено то, что покрывают тесты, и не больше.
-- **Ярлыки запуска и раскладка окон по слотам** — только Windows (модуль `win-desktop`: `desktop/*.bat`, `scripts/dev/slot-windows.ps1`). На Linux и macOS модуль не включается; сервер запускается командой `node scripts/dev/dashboard/server.mjs`, останавливается — `Ctrl+C` в его окне, безопасный перезапуск — `node tools/restart-dashboard.mjs`.
+- **Ярлыки запуска и раскладка окон по слотам** — только Windows (модуль `win-desktop`: `desktop/*.bat`, `scripts/dev/slot-windows.ps1`). На Linux и macOS модуль не включается; сервер запускается командой `node scripts/dev/dashboard/server.mjs`, останавливается — `Ctrl+C` в его окне, безопасный перезапуск — `node tools/restart-dashboard.mjs`. Чтобы страница поднималась сама после перезагрузки — служба systemd, [рецепт](docs/recipes/linux-systemd.md).
 - **Удалённые машины прогонов** (модуль `machines`) — машина с `/proc`, то есть Linux; macOS удалённой машиной не годится (подробнее — [рецепт](docs/recipes/remote-machine.md)).
 - **Codex CLI** — вживую не проверялся, см. раздел «Codex — экспериментально».
 

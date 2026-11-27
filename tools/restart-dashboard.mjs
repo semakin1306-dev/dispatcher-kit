@@ -56,6 +56,23 @@ const drain = async (on) => {
 }
 // Выход после сетевых запросов — через process.exitCode: немедленный process.exit на Windows бывает аварийным.
 class Quit { constructor(code) { this.code = code } }
+
+// Сервер под службой (systemd --user, launchd): после слива перезапускает служба, иначе новый сервер поднялся бы
+// отсоединённым процессом вне службы, а служба осталась бы остановленной или подняла бы второй экземпляр на занятом порту.
+// Пример: DASH_SERVICE_RESTART="systemctl --user restart dispatcher-dashboard"
+const SERVICE_RESTART = process.env.DASH_SERVICE_RESTART || ""
+async function serviceRestart() {
+  console.log("перезапуск через службу: " + SERVICE_RESTART)
+  try { execFileSync("sh", ["-c", SERVICE_RESTART], { stdio: "inherit" }) } catch { console.log("команда перезапуска службы упала"); throw new Quit(1) }
+  for (let i = 0; i < 40; i++) {
+    await sleep(1000)
+    let up = false
+    try { up = (await fetch(B + "/api/state", { signal: AbortSignal.timeout(4000) })).ok } catch { /* ещё поднимается */ }
+    if (up) { console.log("сервер поднят службой, pid", await listener()); return }
+  }
+  console.log("служба не подняла сервер за 40 с: см. журнал службы (journalctl --user -u <служба>)")
+  throw new Quit(1)
+}
 const drainPause = Number(process.env.DASH_DRAIN_PAUSE_MS) || DRAIN_PAUSE_MS
 const drainOrQuit = async () => {
   const r = await drainRetry(() => drain(true), { pauseMs: drainPause })
@@ -190,12 +207,14 @@ async function main() {
       }
       console.log("Тихо: перезапускаю (очередь переживёт перезапуск).")
     } else console.log("--force: идущие прогоны и ответы агентов оборвутся.")
+    if (SERVICE_RESTART) return await serviceRestart()
     if (pid < 0) { console.log("порт " + PORT + " занят, но чей процесс его держит, узнать не удалось — остановите сервер сами."); throw new Quit(1) }
     killPid(pid)
     for (let i = 0; i < 360 && (await portUp()); i++) { await sleep(500); if (i === 40 || i === 200) killPid(pid) }
     if (await portUp()) { console.log("не удалось остановить старый сервер"); throw new Quit(1) }
     await sleep(1500)
   }
+  if (SERVICE_RESTART) return await serviceRestart()
   const reason = reasonArg || (force ? "--force (restart-dashboard)" : pid ? "перезапуск со сливом (restart-dashboard)" : "запуск restart-dashboard: сервер не работал")
   fs.mkdirSync(DATA, { recursive: true })
   const out = fs.openSync(path.join(DATA, "server.log"), "a"), err = fs.openSync(path.join(DATA, "server.err.log"), "a")

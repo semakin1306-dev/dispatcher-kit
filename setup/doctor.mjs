@@ -173,6 +173,10 @@ export async function runDoctor({
   // git и ветки
   const repo = project.repo.main
   const gitVersion = run("git", ["--version"])
+  // README обещает git 2.31+ — проверяется версия, а не только наличие
+  const gitVer = gitVersion && /(\d+)\.(\d+)/.exec(gitVersion)
+  if (gitVer && (Number(gitVer[1]) < 2 || (Number(gitVer[1]) === 2 && Number(gitVer[2]) < 31)))
+    add({ id: "git-version", level: "error", title: "git", detail: `${gitVersion.trim()} — нужна 2.31 или новее`, fix: "обновите git" })
   if (!gitVersion) add({ id: "git", level: "error", title: "git", detail: "git не найден в PATH" })
   else if (git(repo, ["rev-parse", "--is-inside-work-tree"]) !== "true")
     add({

@@ -18,3 +18,4 @@
 | [Граф знаний и разведка перед волной](knowledge-graph.md) | — (идея) |
 | [Телеграм-бот](telegram.md) | `modules.tg`, `scripts/dev/tg-setup.mjs` |
 | [Codex вместо Claude Code](codex.md) | `agent.runtime`, `agent.network`, `agent.bin` |
+| [Linux: страница как служба systemd](linux-systemd.md) | `DASH_PORT`, `DASH_SERVICE_RESTART` |

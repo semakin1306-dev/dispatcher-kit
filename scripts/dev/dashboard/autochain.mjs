@@ -212,6 +212,9 @@ export function frozenAfterCommit(treeKey, fp, task = null, input = null) {
                 (task === "*" || j.task === task) &&
                 (input === null || (j.input || "") === (input || "")) &&
                 ["ok", "fail"].includes(j.status) &&
+                // падение из-за окружения (не собрано, нет каталога приложения…) кода не проверило: повтор разрешён,
+                // иначе ожидание влива ждёт зелёного, а ворота не дают его получить
+                !(j.status === "fail" && !realFail(j)) &&
                 j.fpStart === fp,
         );
         if (!checked)

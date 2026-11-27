@@ -11,6 +11,16 @@ export const MERGE_WAIT_FILE = path.join(DATA, "merge-wait.json");
 export function loadMergeWait() {
     const v = readJson(MERGE_WAIT_FILE, null) || {};
     S.mergeWait = { waits: v.waits || {}, words: v.words || {} };
+    // Очередь прогонов перезапуск не переживает (поставленные — «прерван»), а ожидание влива переживает. Без сброса
+    // «поставлено на этом коде» и счётчик попыток считали оборванные прогоны: после 2 перезапусков ожидание молча
+    // висело до «застряло» (20 мин), хотя проверок не было. Ставим заново.
+    for (const w of Object.values(S.mergeWait.waits)) {
+        if (w && w.state === "wait") {
+            delete w.queuedFp;
+            delete w.queuedAt;
+            w.tries = 0;
+        }
+    }
 }
 
 const st = () => {

@@ -68,6 +68,7 @@ import { relayToSlot, rerunByChain, slotIdleNudge, slotIdleText, startHeldByStub
 import { autoChain, autoTrainOffFor, nextHint, runTask } from "./autochain.mjs";
 import { workChanges } from "./changes.mjs";
 import { ANSI, DATA, DRY, FINAL, logEvent, logPath, readLog, settings, short } from "./config.mjs";
+import { naAdvice } from "./na-rules.mjs";
 import { PRESETS, TREES, epicOfKey, epicSlots, isOrch, orchKey, orchOfKey, trainWaveOf, treeByKey, viewEpic } from "./trees.mjs";
 import { DIST_TASKS, codeFp, jobFresh } from "./fingerprint.mjs";
 import { exists, git } from "./git.mjs";
@@ -1070,7 +1071,9 @@ export function inboxAfterTurn(a) {
             const rd = relayDecision({ body, prev: lr, cur: t ? { fp: t.fp, sha: t.last && t.last.sha } : null, sync: !!lastUser && isSyncAsk(lastUser.text) });
             if (!rd.relay) {
                 logEvent("relay.skipped", { tree: key, why: String(rd.why || "").slice(0, 200) });
-                push(a, { id: "nr-" + a.rev, t: "status", text: "Оркестратору не передаю: " + rd.why + ". Передать всё равно — кнопка «→ ОРК» над блоком." });
+                // Ответ на слово владельца в чате слота — разговор с человеком, а не доклад: пометку о непередаче не вешаем.
+                if (!(lastUser && lastUser.owner))
+                    push(a, { id: "nr-" + a.rev, t: "status", text: "Оркестратору не передаю: " + rd.why + ". Передать всё равно — кнопка «→ ОРК» над блоком." });
                 continue;
             }
             to = treeByKey(orchOfKey(key));
@@ -1243,7 +1246,7 @@ export async function slotFacts(key, record = true) {
             ? "не прогонялся"
             : ["running", "queued", "waiting"].includes(j.status)
               ? "идёт или в очереди, " + j.id
-              : (j.status === "ok" ? "зелёный" : j.status === "fail" ? "УПАЛ" : "нет тестов") +
+              : (j.status === "ok" ? "зелёный" : j.status === "fail" ? "УПАЛ" : j.na ? "неприменимо (тесты не запускались)" : "нет тестов") +
                 (j.status === "ok" ? (jobFresh(j, t) === "ok" ? ", на текущем коде" : ", на ДРУГОМ коде") : "") +
                 ", " +
                 j.id +
@@ -1804,7 +1807,7 @@ export function resultsText(ids, { to = "", record = true } = {}) {
             j.label +
             (j.input ? " — " + j.input : "") +
             ": " +
-            (word[j.status] || j.status) +
+            (j.na ? "НЕПРИМЕНИМО — тесты не запускались" : word[j.status] || j.status) +
             ", " +
             Math.round(((j.endedAt || Date.now()) - (j.startedAt || Date.now())) / 1000) +
             " с" +
@@ -1842,6 +1845,9 @@ export function resultsText(ids, { to = "", record = true } = {}) {
         catch { }
         return "── " + j.label + ": причина ──\n" + (note ? note + "\n" : "") + (grp ? grp + "\n" : "") + ses.log(j.id, legacy);
     });
+    for (const j of js)
+        if (j.na)
+            bad.push(naAdvice(j.label, j.input || "", { line: j.na, list: j.naList || [] }));
     const msg = resultsMessage({ lines, bad, hint: js.some((j) => j.status === "fail") ? "" : nextHint(snapNow() && js[0] && snapNow().trees.find((x) => x.key === js[0].tree)) });
     ses.close(msg);
     return msg;
@@ -2147,6 +2153,8 @@ export function inboxPublic() {
         len: x.text ? x.text.length : 0,
         preview: x.text ? x.text.slice(0, 240) : "",
         full: x.kind === "ownerq" ? x.text : undefined,
+        // Карточка тупика правил рисуется по своим полям (ui/tasks.js): без них страница показывала «» и «undefined раза».
+        ...(x.kind === "deadlock" ? { what: x.what || "", why: x.why || "", n: x.n || 0, since: x.since || x.at } : {}),
         jobIds: x.jobs || [],
         jobs: (x.jobs || [])
             .map((id) => {
@@ -2700,7 +2708,7 @@ export function reqItemStatus(tree, r, t) {
     if (!j && t) {
         const sk = [...jobList()].reverse().find((k) => same(k) && k.status === "skipped" && k.fpEnd === t.fp);
         if (sk)
-            return { j: sk, status: "skip", why: "фильтр не нашёл сьютов: " + String(sk.summary || "").slice(0, 160) };
+            return { j: sk, status: "skip", why: sk.na ? "неприменимо: " + String(sk.na).slice(0, 160) : "фильтр не нашёл сьютов: " + String(sk.summary || "").slice(0, 160) };
     }
     if (!j && t) {
         const prev = [...jobList()].reverse().find((k) => same(k) && ["ok", "fail"].includes(k.status));
@@ -2711,6 +2719,21 @@ export function reqItemStatus(tree, r, t) {
     }
     if (j && j.status === "fail" && onlyStagingRed(j.id))
         return { j, status: "ok", inherited: true };
+    // Прогон просьбы упал из-за окружения (не собран dist и т.п.), а её недостающие спеки уже зелёные на этом коде в
+    // других прогонах: просьба выполнена. Иначе тупик: ворота не дают повтор («зелёный на этом же коде»), а просьба
+    // висит красной, и станция «Тесты» не засчитывается.
+    const lastDone = j || (t ? [...jobList()].reverse().find((k) => same(k) && ["ok", "fail"].includes(k.status)) : null);
+    if (lastDone && lastDone.status === "fail" && t && !realFail(lastDone) && (!j || !["running", "queued", "waiting"].includes(j.status))) {
+        const es = (t.suites || []).find((x) => x.task === r.task && x.input === (r.input || ""));
+        if (es && Array.isArray(es.list) && es.list.length && es.list.length === es.total) {
+            const need = es.list.filter((x) => x.st !== "ok");
+            const greenOnFp = (spec) =>
+                jobList().some((k) => k.tree === tree && k.task === r.task && k.status === "ok" && k.fpStart === t.fp && k.fpEnd === t.fp &&
+                    jobCovers(k, { task: r.task, input: spec }));
+            if (need.every((x) => greenOnFp(x.spec)))
+                return { j, status: "ok", bySpecs: true };
+        }
+    }
     {
         const es = t && (t.suites || []).find((x) => x.task === r.task && x.input === (r.input || ""));
         if (es && es.state === "ok" && (!j || !["running", "queued", "waiting"].includes(j.status)))

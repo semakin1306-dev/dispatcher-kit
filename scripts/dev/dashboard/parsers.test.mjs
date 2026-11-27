@@ -67,6 +67,19 @@ test("jest", () => {
   assert.match(r.totals[0], /^Test Suites:/)
 })
 
+test("jest: хвост-итог обёртки (jest-batch) не входит в имя спеки", () => {
+  const log = [
+    "  FAIL  __tests__/integration/a/wv-9001-x.spec.ts  6 ✗ / 0 ✓ · 2с",
+    "  PASS  __tests__/unit/a/wv-9002-y.spec.ts  20 ✓ · 2с",
+    "  \x1b[31mFAIL\x1b[0m  __tests__/integration/a/wv-9003-z.spec.ts  \x1b[2m\x1b[31m5 ✗\x1b[0m / 0 ✓ · 3с\x1b[0m",
+    "PASS src/a.test.ts (2.1 s)",
+  ].join("\n")
+  const r = parseWith(PRESETS.jest, log)
+  assert.deepEqual(r.failed, ["__tests__/integration/a/wv-9001-x.spec.ts", "__tests__/integration/a/wv-9003-z.spec.ts"])
+  assert.deepEqual(r.passed, ["__tests__/unit/a/wv-9002-y.spec.ts", "src/a.test.ts"])
+  for (const p of [...r.failed, ...r.passed]) assert.doesNotMatch(p, /[✓✗·]|\s/)
+})
+
 test("vitest", () => {
   const r = parseWith(PRESETS.vitest, VITEST)
   assert.deepEqual(r.passed, ["src/a.test.ts", "src/c.spec.tsx"])

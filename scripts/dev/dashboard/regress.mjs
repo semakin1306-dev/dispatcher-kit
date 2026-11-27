@@ -390,8 +390,52 @@ export function foreignRedBaseline(job) {
 export const ENV_FAIL_RE =
     /Connection timed out|снимок не отправился|УПЁРЛОСЬ В ПОТОЛОК|СНЯТ ПО ВРЕМЕНИ|spawn UNKNOWN|ECONNRESET|banner exchange|kex_exchange_identification|Timeout, server [\w.:-]+ not responding|Read from remote host [\w.:-]+: Connection reset by peer|client_loop: send disconnect: Connection reset/i;
 
+/**
+ * Красное от неподготовленной папки слота — признаки в САМОМ журнале (итог прогона часто лишь «ELIFECYCLE … exit 1»):
+ * массово не находятся пакеты своего монорепо (не собраны/не установлены), команда сборки не найдена, у пакета нет
+ * node_modules, в частичной выкладке нет нужного каталога приложения. Такое красное не говорит о коде — повтор после
+ * подготовки окружения правилом «дважды красный» не запрещается. Порог по TS2307 — чтобы одна битая строка импорта
+ * в правке агента не сошла за окружение.
+ */
+const ENV_LOG_RE = [
+    /sh: \d+: [\w.-]+: not found/,
+    /Local package\.json exists, but node_modules missing/,
+    /не найден apps\/[\w-]+ — стеречь нечего/,
+    // гард не нашёл свой предмет в монорепо (частичная выкладка слота): «❌ …: нет packages/x/src/index.ts — …»
+    /❌ [^\n]*нет (?:packages|apps)\/[\w./-]+ —/,
+    // машина прогона без доступа к docker (служба теста не поднялась) или без ключей S3 в тестовом окружении машины
+    /permission denied while trying to connect to the docker API/,
+    /Access key ID and secret access key are required when using access key authentication/,
+    /ERR_PNPM_OUTDATED_LOCKFILE|ERR_PNPM_NO_MATCHING_VERSION_INSIDE_WORKSPACE/,
+    // интеграционные тесты грузят собранный бэкенд (apps/backend/dist): его нет — машина прогона не собрала dist
+    /Cannot find module '[^']*\/apps\/backend\/dist\/medusa-config'/,
+];
+const envFailMemo = new Map();
+export function envFailInLog(j) {
+    const mk = j && j.id && j.endedAt ? j.id + ":" + j.endedAt : "";
+    if (mk && envFailMemo.has(mk))
+        return envFailMemo.get(mk);
+    const v = envFailInLogRaw(j);
+    if (mk) {
+        if (envFailMemo.size > 2000)
+            envFailMemo.clear();
+        envFailMemo.set(mk, v);
+    }
+    return v;
+}
+function envFailInLogRaw(j) {
+    let log = "";
+    try { log = fs.readFileSync(logPath(j.id), "utf8"); } catch { return false; }
+    if (ENV_LOG_RE.some((re) => re.test(log)))
+        return true;
+    const missing = log.match(/error TS2307: Cannot find module '@[\w-]+\/[\w./-]+'/g);
+    return !!missing && missing.length >= 20;
+}
+
 export function realFail(j) {
     if (ENV_FAIL_RE.test(j.summary || ""))
+        return false;
+    if (j.status === "fail" && envFailInLog(j))
         return false;
     return TEST_LOG_TASKS.has(j.task) ? failingSpecs(j.id).length > 0 : true;
 }
@@ -410,6 +454,8 @@ export function loadSpecHist() {
 
 export function recordSpecs(job) {
     if (!TEST_LOG_TASKS.has(job.task) || !["ok", "fail"].includes(job.status))
+        return;
+    if (job.status === "fail" && envFailInLog(job))
         return;
     const code = job.baseline ? "stg:" + (job.treeSha || "") : job.train ? "train:" + job.id : job.tree + ":" + (job.fpEnd || job.treeSha || "");
     const add = (f, ok) => {
@@ -547,6 +593,9 @@ export function suiteLedger(t) {
     const L = new Map();
     for (const j of jobList()) {
         if (j.tree !== t.key || !SUITE_FAM[j.task] || !["ok", "fail"].includes(j.status))
+            continue;
+        // падение из-за окружения (не собран dist и т.п.) о спеках ничего не говорит — не перекрывает их зелёное
+        if (j.status === "fail" && envFailInLog(j))
             continue;
         const fails = new Set(failingSpecs(j.id).map(sbase)), fam = SUITE_FAM[j.task];
         for (const f of passingCached(j.id)) {

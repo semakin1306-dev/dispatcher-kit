@@ -10,13 +10,17 @@ import { PROJECT } from "../slots.mjs"
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g
 const SPEC = String.raw`\S+\.(?:spec|test)\.[cm]?[jt]sx?`
+// Хвост строки PASS/FAIL после имени спеки — не часть имени: у jest «(2.1 s)», у обёрток вроде
+// jest-batch итог через два пробела «  6 ✗ / 0 ✓ · 2с». Без отрезания итог попадал в историю спек
+// ключом и потом в шаблон прогона («0 ✓ · 2с» как имя), и раннер отказывался запускаться.
+const JEST_TAIL = String.raw`(?:\s+\(\d[\d.]*\s*m?s\)|\s{2,}(?:\d+\s*[✗✘×]\s*\/\s*)?\d+\s*[✓✔].*)?`
 
 /** Заготовки: по каждому ключу — список регулярок, строка подходит под любую. */
 export const PRESETS = {
   "exit-code": null,
   jest: {
-    pass: [/^\s*PASS\s+(\S.*?)(?:\s+\(\d[\d.]*\s*m?s\))?\s*$/],
-    fail: [/^\s*FAIL\s+(\S.*?)(?:\s+\(\d[\d.]*\s*m?s\))?\s*$/],
+    pass: [new RegExp(String.raw`^\s*PASS\s+(\S.*?)${JEST_TAIL}\s*$`)],
+    fail: [new RegExp(String.raw`^\s*FAIL\s+(\S.*?)${JEST_TAIL}\s*$`)],
     totals: [/^\s*(?:Tests|Test Suites|Snapshots):\s/],
     names: [/^\s*●\s+(.+?)\s*$/],
   },

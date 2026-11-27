@@ -1,6 +1,8 @@
 // areas.mjs — области проекта для эпиков, слотов и поездов: одно место, где из раздела `areas` конфига проекта выводятся
 // области поездов, запреты правки слота, тесты волны по умолчанию и перечень областей для подсказок.
 // Чистые функции над нормализованным конфигом (project.mjs normalizeProject); по умолчанию — конфиг этой установки.
+import fs from "node:fs"
+import path from "node:path"
 import { PROJECT } from "./slots.mjs"
 
 /** Перечень областей проекта для подсказок и ошибок: «api | web». */
@@ -55,9 +57,61 @@ export const slotAreaFields = (area) => ({ area: area.id, ...(area.build ? { bui
  * Запреты слота в нейтральной записи для рантайма (`runtime().writeSlotPolicy`): запреты конфига; правка закрыта путям
  * `denyEdit` области и `deny` записи слота, кроме разрешённых слоту `allowEdit`. Слоту «только чтение» закрыто всё.
  */
-export function slotPolicy(rec = {}, project = PROJECT) {
+export function slotPolicy(rec = {}, project = PROJECT, list = listDir) {
   const allow = new Set((rec.allowEdit || []).map(String))
   const area = areaOf(rec.area, project)
-  const editDeny = rec.readOnly ? ["/**"] : [...new Set([...areaDenyEdit(area), ...(rec.deny || []).map(String)])].filter((p) => !allow.has(p))
-  return { deny: { ...project.deny, edit: project.deny.edit.filter((p) => !allow.has(p)) }, editDeny, allowEdit: [...allow] }
+  let editDeny = rec.readOnly ? ["/**"] : [...new Set([...areaDenyEdit(area), ...(rec.deny || []).map(String)])].filter((p) => !allow.has(p))
+  // Приёмка: тест приёмки своей волны слот пишет и вне своей области (accept.specGlob). Запрет «/<папка>/**», накрывающий
+  // каталог спек, заменяется запретами соседей по пути к нему — остальное в этой папке слоту по-прежнему закрыто.
+  // dropEdit — раскрытые запреты: их надо убрать из уже записанных настроек слота (иначе общий запрет остаётся).
+  let dropEdit = []
+  const sg = project.accept && project.accept.run && project.accept.specGlob
+  if (sg && !rec.readOnly) {
+    const carved = carveSpecDir(editDeny, specDirOf(sg), (rel) => list(project.repo && project.repo.main, rel))
+    dropEdit = editDeny.filter((g) => !carved.includes(g))
+    editDeny = carved
+  }
+  return { deny: { ...project.deny, edit: project.deny.edit.filter((p) => !allow.has(p)) }, editDeny, allowEdit: [...allow], dropEdit }
+}
+
+/** Статическая часть шаблона спек: «apps/web/tests/acc/*.spec.ts» → «apps/web/tests/acc». */
+export function specDirOf(glob) {
+  const segs = String(glob).replace(/\\/g, "/").replace(/^\/+/, "").split("/").filter(Boolean)
+  const gi = segs.findIndex((x) => /[*?[{]/.test(x))
+  return (gi < 0 ? segs.slice(0, -1) : segs.slice(0, gi)).join("/")
+}
+
+/** Содержимое каталога репозитория (имена и признак каталога); нет каталога — пусто. */
+function listDir(root, rel) {
+  if (!root) return []
+  try {
+    return fs.readdirSync(path.join(root, rel), { withFileTypes: true }).map((d) => ({ name: d.name, dir: d.isDirectory() }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Запреты правки без каталога dir: шаблон «/A/**» (или «/A/B/**»), внутри которого лежит dir, раскрывается в запреты
+ * соседей на каждом уровне пути к dir (каталог — «/x/**», файл — «/x»). Чистая функция: list(rel) → [{ name, dir }].
+ */
+export function carveSpecDir(denies, dir, list) {
+  if (!dir) return denies
+  const out = []
+  for (const g of denies) {
+    const m = /^\/(.+)\/\*\*$/.exec(String(g))
+    const base = m ? m[1].replace(/\/+$/, "") : null
+    if (!base || !(dir === base || dir.startsWith(base + "/"))) { out.push(g); continue }
+    if (dir === base) continue // накрыт ровно каталог спек — запрет снимается целиком
+    const rest = dir.slice(base.length + 1).split("/")
+    let cur = base
+    for (const seg of rest) {
+      for (const e of list(cur)) {
+        if (e.name === seg) continue
+        out.push("/" + cur + "/" + e.name + (e.dir ? "/**" : ""))
+      }
+      cur += "/" + seg
+    }
+  }
+  return [...new Set(out)]
 }

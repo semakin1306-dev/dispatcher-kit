@@ -289,11 +289,11 @@ export function onceCommand({ prompt = "", model = "", readOnly = true, allowBas
  * (запреты его области), allowEdit — снятые для этого слота общие запреты }.
  * @returns {{file:string, deny:number, merged:boolean}|null} null — существующий файл не разобран, не тронут
  */
-export function writeSlotPolicy(dir, { deny = PROJECT.deny, editDeny = [], allowEdit = [] } = {}) {
+export function writeSlotPolicy(dir, { deny = PROJECT.deny, editDeny = [], allowEdit = [], dropEdit = [] } = {}) {
   const file = path.join(dir, ".claude", "settings.local.json")
   let cur = {}
   if (fs.existsSync(file)) { try { cur = JSON.parse(fs.readFileSync(file, "utf8")) } catch { return null } }
-  const rules = toClaudeRules(deny), allowed = new Set(allowEdit.map((p) => "Edit(" + fwd(p) + ")"))
+  const rules = toClaudeRules(deny), allowed = new Set([...allowEdit, ...dropEdit].map((p) => "Edit(" + fwd(p) + ")"))
   const perms = cur.permissions || {}
   const denyList = [
     ...new Set([

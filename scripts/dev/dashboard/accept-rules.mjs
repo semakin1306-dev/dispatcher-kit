@@ -225,7 +225,9 @@ const OK_LEAD = /^\s*(?:\d+\s+)?(?:[✓✔√]|PASS(?:ED)?\b|ok\b|--- PASS\b)/i;
 const FAIL_TAIL = /\s(?:FAILED|ERROR)\b/, SKIP_TAIL = /\s(?:SKIPPED|XFAIL)\b/, OK_TAIL = /\s(?:PASSED|XPASS)\b/;
 // Строки подробностей упавшего теста в заготовках разбора (jest «● …», vitest «FAIL файл > тест»): они тоже «✗».
 const FAIL_DETAIL = Object.values(PRESETS).filter(Boolean).flatMap((p) => p.names || []);
-const RANK = { bad: 3, flaky: 2, skip: 1, ok: 0 };
+// Худший итог пункта из нескольких проектов (стол, телефон): красный > пропущен (= «не проверено»: пропуск — не зелёный) >
+// зелёный со второй попытки > зелёный. Раньше flaky стоял выше skip, и пропуск прятался за «✓²».
+const RANK = { bad: 3, skip: 2, flaky: 1, ok: 0 };
 
 /** Итог одной строки вывода с меткой [iN]: "ok" | "bad" | "skip" | "" (строка без итога). */
 export function lineStatus(line) {

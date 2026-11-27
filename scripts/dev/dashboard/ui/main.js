@@ -6,7 +6,8 @@ import { manyMsg, runAsk, runMany, runPayload, started } from "./run.js";
 import { refresh, startData, treeOf } from "./data.js";
 import { GFOLD, linesList, renderKanban, runRegress, slotGroup, stgTasks } from "./lines.js";
 import { agentCommit, DISM, failedUnresolved, openNewEpic, renderTasks, runGuards } from "./tasks.js";
-import { ACC_FOLD, accJump, actBtn, applyPm, bnavBadges, ICONS, openKeyHelp, PM_Q, RAILM, railList, renderSide, setPv, setRail } from "./side.js";
+import { actBtn, applyPm, bnavBadges, ICONS, openKeyHelp, PM_Q, RAILM, railList, renderSide, setPv, setRail } from "./side.js";
+import { ACC_ACTS, accAct, accJump, accSearch } from "./accept.js"; // колонка «Приёмка»: фильтры, поиск, эпики, свёртка волн
 import { chatAction, CHATS, collapseAll, fitAll, fitInput, focusChat, pickSlot, pollChats, RELAY_SEEN, relayScene, relaySentMark, setSidebar, setSideChat, sideChatTrees, stepSideChat, SIDEBAR } from "./chat.js";
 import { MONOPEN, renderMon } from "./monitor.js";
 import { oqCollect, oqPick } from "./oqform.js";
@@ -618,6 +619,9 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("input", (e) => {
     if (e.target.tagName === "TEXTAREA" && e.target.closest(".ch-in"))
         fitInput(e.target);
+    // поиск колонки «Приёмка»: перерисовывается только список, фокус в поле остаётся
+    if (e.target.dataset && e.target.dataset.accq !== undefined)
+        accSearch(e.target.value);
 });
 
 window.addEventListener("resize", fitAll);
@@ -1132,12 +1136,8 @@ document.addEventListener("click", async (e) => {
             const key = el.dataset.key, ta = document.querySelector(`[data-accvc="${CSS.escape(key)}"]`), cur = ((S.accept && S.accept.waves) || []).find((w) => w.key === key);
             press("accv|" + key, () => call("/api/accept", { op: "verdict", key, verdict: cur && cur.verdict === el.dataset.v ? "" : el.dataset.v, comment: ta ? ta.value : undefined }));
         }
-        else if (a === "accfold") {
-            const k = el.dataset.key;
-            ACC_FOLD.has(k) ? ACC_FOLD.delete(k) : ACC_FOLD.add(k);
-            ls("dash.accfold", [...ACC_FOLD]);
-            renderSide();
-        }
+        else if (ACC_ACTS.has(a))
+            accAct(a, el); // колонка «Приёмка»: фильтр, вид эпиков, группы, свёртка волн и авто-пунктов, комментарий по клику
         else if (a === "monfold") {
             const f = el.dataset.f;
             MONOPEN.has(f) ? MONOPEN.delete(f) : MONOPEN.add(f);

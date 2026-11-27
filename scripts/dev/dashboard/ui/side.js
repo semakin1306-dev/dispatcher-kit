@@ -6,108 +6,13 @@ import { lastJobOf, loadAccept, treeOf } from "./data.js";
 import { chipOf, extraChips, farOf, GROUPS, nextStep, reviewBtn, slotGroup } from "./lines.js";
 import { failedUnresolved, flakyCards, FLY_MS, pendingCards, stgCards, taskCard, trainCard, trainStatusCard } from "./tasks.js";
 import { setSidebar, SIDEBAR, sideChatKey } from "./chat.js";
+import { DISP_KEY, dispHeader } from "./dispatcher-chat.js";
 import { NOTES } from "./dialogs.js";
+import { ACCF, acceptPanel } from "./accept.js";
+import { waveInScope } from "./accept-view.js"; // колонка «Приёмка» — фильтры, поиск, эпики, свёрнутые волны (ui/accept.js)
 
 export const ICONS = { "modules": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z\"/></svg>", "orch": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193q-.51.041-1.02.072v3.091l-3-3q-2.031 0-4.02-.163a2.1 2.1 0 0 1-.825-.242m9.345-8.334a2 2 0 0 0-.476-.095a48.6 48.6 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.5 48.5 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402c-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235q.865.113 1.74.194V21l4.155-4.155\"/></svg>", "slots": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75\"/></svg>", "runs": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\"><path d=\"M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0\"/><path d=\"M15.91 11.672a.375.375 0 0 1 0 .656l-5.603 3.113a.375.375 0 0 1-.557-.328V8.887c0-.286.307-.466.557-.327z\"/></g></svg>", "review": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m5.231 13.481L15 17.25m-4.5-15H5.625c-.621 0-1.125.504-1.125 1.125v16.5c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9m3.75 11.625a2.625 2.625 0 1 1-5.25 0a2.625 2.625 0 0 1 5.25 0\"/></svg>", "ship": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M15.59 14.37q.159.666.16 1.38a6 6 0 0 1-6 6v-4.8m5.84-2.58a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.631 8.41m5.96 5.96a14.9 14.9 0 0 1-5.841 2.58m-.119-8.54a6 6 0 0 0-7.381 5.84h4.8m2.581-5.84a14.9 14.9 0 0 0-2.58 5.84m2.699 2.7q-.155.032-.311.06a15 15 0 0 1-2.448-2.448l.06-.312m-2.24 2.39a4.49 4.49 0 0 0-1.757 4.306q.341.054.696.054a4.5 4.5 0 0 0 3.61-1.812M16.5 9a1.5 1.5 0 1 1-3 0a1.5 1.5 0 0 1 3 0\"/></svg>", "health": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104q-.376.034-.75.082m.75-.082a24.3 24.3 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104q.377.034.75.082M19.8 15.3l-1.57.393A9.07 9.07 0 0 1 12 15a9.07 9.07 0 0 0-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.3 48.3 0 0 1 12 21a48 48 0 0 1-8.135-.687c-1.718-.293-2.3-2.379-1.067-3.61L5 14.5\"/></svg>", "keys": "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M9.879 7.519c1.172-1.025 3.071-1.025 4.243 0c1.171 1.025 1.171 2.687 0 3.712q-.308.268-.67.442c-.746.361-1.452.999-1.452 1.827v.75M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0m-9 5.25h.008v.008H12z\"/></svg>" };
 const icon = (k) => ICONS[k] || "";
-// Адрес стенда — из конфига приёмки (accept.standUrl); путь в пункте чек-листа открывается на нём.
-const standBase = () => String((S && S.accept && S.accept.standUrl) || "").replace(/\/+$/, "");
-
-const accHref = (w) => {
-    const m = /(https?:\/\/\S+|\/[\w\-./:?=&%#]+)/.exec(w || "");
-    return m ? (m[1].startsWith("/") ? (standBase() ? standBase() + m[1] : "") : m[1]) : "";
-};
-
-function acceptPanel() {
-    const A = S.accept;
-    if (!A)
-        return '<div class="sub">Нет данных о приёмке.</div>';
-    if (A.brief) {
-        loadAccept();
-        return '<div class="sub">Загружаю чек-листы приёмки…</div>';
-    }
-    const ws = A.waves || [];
-    const sm = A.shard, st = A.stand;
-    const syncing = A.syncing ? `<div class="calm acc-sync">${SPIN} Сводятся записи приёмки… После запуска сервера git считает файлы вливов волн (обычно 1–3 мин): до этого чек-листы и вердикты не показываются, отметки ставить нельзя.</div>` : "";
-    const head = `<div class="acc-head">
-    <div class="sub">${st ? "Стенд выкачен " + new Date(st.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + " (" + esc(st.job) + ")" : "Стенд ещё не выкатывали из диспетчерской"}${sm ? " · полный прогон: " + (sm.status === "done" && !sm.fail && !sm.notrun ? "✓ зелёный" : sm.status === "running" ? "идёт" : "✗ " + sm.fail + " красных") : ""}</div>
-    <div class="acts" style="gap:6px;display:flex;flex-wrap:wrap"><button class="sm primary ${PENDING.has("accask") ? "busy" : ""}" data-act="accask" title="Попросить чек-листы у агентов всех волн, у которых его ещё нет. После выката на стенд это происходит само">${PENDING.has("accask") ? SPIN : "📋"} Опросить ветки</button>
-    <button class="sm ${PENDING.has("accspecall") ? "busy" : ""}" data-act="accspecall" title="Всем волнам, которые ждут вердикта и у которых есть чек-лист: агент волны заново пишет спеку приёмки. Ветки без своих коммитов перематываются на staging">🧪 Спеки всем</button><button class="sm ${PENDING.has("accsend") ? "busy" : ""}" data-act="accsend" title="Отправить вердикты: «не принято» — агенту его пункты на доделку, «принято» — короткое подтверждение; оркестратору — сводка">${PENDING.has("accsend") ? SPIN : "📨"} Отправить итоги</button></div></div>`;
-    const fmt = (t) => t ? new Date(t).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
-    const rn = A.run, live = (j) => j && ["queued", "waiting", "running"].includes(j.status);
-    const pers = `<div class="acc-ps">
-    <div class="row"><b>🤖 Автоприёмка</b><span class="sub">${A.runnable ? "команда приёмки из конфига" + (A.specGlob ? " · спеки " + esc(A.specGlob) : "") + (A.standUrl ? " · против " + esc(A.standUrl) : "") : "команда приёмки не задана (accept.run) — пункты проверяются руками"}</span>
-      <span class="sp"></span>
-      ${live(rn) ? `<span class="sub" style="flex-basis:100%">${SPIN} ${rn.live ? "тест " + rn.live.n + " из " + rn.live.of + " · " + esc(rn.live.wave) + " · " + esc(rn.live.title) : "готовлю прогон…"}</span>` : ""}
-      <button class="sm ${live(rn) || PENDING.has("accrun|") ? "busy" : ""}" data-act="accrun" ${A.runnable ? "" : "disabled"} title="Прогнать приёмку всех ждущих волн. Итог ляжет на пункты чек-листа как «авто ✓/✗» по меткам [iN]; вердикт — ваш">${live(rn) ? SPIN : "🤖"} Прогнать приёмку</button>${rn ? `<button class="sm ghost" data-act="log" data-id="${esc(rn.id)}" title="${esc(rn.summary)}">${rn.status === "ok" ? "✓" : rn.status === "fail" ? "✗" : "…"} ${fmt(rn.at)}</button>` : ""}</div></div>`;
-    if (A.syncing)
-        return syncing + pers;
-    if (!ws.length)
-        return head + pers + '<div class="sub" style="margin-top:8px">Волн, которые ждут приёмки, нет.</div>';
-    const okN = ws.filter((w) => w.verdict === "accepted").length, badN = ws.filter((w) => w.verdict === "rejected").length;
-    const sum = `<div class="sub" style="margin:6px 0">Волн: ${ws.length} · принято ${okN} · не принято ${badN} · без вердикта ${ws.length - okN - badN}</div>`;
-    const multi = new Set(ws.map((w) => w.epic)).size > 1;
-    let lastEp = null;
-    return head + pers + sum + ws.map((w) => {
-        const epHead = multi && w.epic !== lastEp ? `<div class="stt" style="margin:12px 0 2px;font-weight:600">📁 ${esc(w.epicTitle || w.epic || "")}${w.epic === S.activeEpic ? ' <span class="chip">эта вкладка</span>' : ""}</div>` : "";
-        lastEp = w.epic;
-        const items = w.items || [], done = items.filter((x) => x.state !== "todo").length, open = w.autoClosed ? ACC_FOLD.has(w.key) : !ACC_FOLD.has(w.key);
-        const vchip = w.verdict === "accepted" ? `<span class="chip ok" ${w.autoClosed ? `title="${esc(w.autoClosed)}"` : ""}>${w.autoClosed ? "🤖 принято: без кода продукта" : "принято"}</span>` : w.verdict === "rejected" ? '<span class="chip fail">не принято</span>' : w.reopened ? `<span class="chip queued" title="${esc(accReopenText(w.reopened))}">на разборе: новый код</span>` : "";
-        const sent = w.autoClosed ? "" : w.sentAt ? '<span class="chip">отправлено</span>' : w.verdict ? '<span class="chip queued">не отправлено</span>' : "";
-        const rows = items.map((x) => {
-            const h = accHref(x.where);
-            return `<div class="acc-it ${x.state}"><div class="acc-btns"><button class="sm ${x.state === "ok" ? "good" : ""}" data-act="accitem" data-key="${esc(w.key)}" data-id="${x.id}" data-st="${x.state === "ok" ? "todo" : "ok"}" title="Работает">✓</button><button class="sm ${x.state === "bad" ? "badb" : ""}" data-act="accitem" data-key="${esc(w.key)}" data-id="${x.id}" data-st="${x.state === "bad" ? "todo" : "bad"}" title="Не работает">✗</button></div>
-        <div class="acc-tx"><div><span class="accid" title="номер пункта чек-листа">${esc(x.id || "")}</span>${x.before && x.state !== "todo" ? `<span class="chip" title="Отмечено до влива ${esc(String(x.before).slice(0, 10))} с новым кодом продукта: проверьте заново и отметьте">до нового кода</span> ` : ""}${x.role ? `<span class="chip">${esc(x.role)}</span> ` : ""}${x.how ? `<span class="chip ${x.how === "auto" ? "queued" : ""}">${x.how === "auto" ? "авто" : "руками"}</span> ` : ""}${h ? `<a href="${esc(h)}" target="_blank" rel="noopener">${esc(x.where)}</a>` : esc(x.where)}</div><div>${esc(x.todo)}</div><div class="mute">→ ${esc(x.expect)}</div>${accAuto(x.auto, w, x)}
-        <input type="text" class="acc-cm" data-acccm="${esc(w.key)}|${x.id}" value="${esc(x.comment || "")}" placeholder="комментарий"></div></div>`;
-        }).join("");
-        const auto = `${w.autoClosed ? `<div class="sub">🤖 ${esc(w.autoClosed)}</div>` : ""}${(w.specs || []).length ? `<div class="acc-auto"><span class="chip queued" title="${w.specsLocal ? "Спека взята из папки слота: в staging её ещё нет или в слоте она изменена позже. Прогон возьмёт её оттуда; чтобы она жила как регрессия — коммит и влив." : "Спека в staging"}">🤖 спека: ${esc(w.specs.join(", "))}${w.specsLocal ? " · из папки слота" : ""}</span>${w.autoRun ? `<span class="mute">прогон ${esc(w.autoRun.job)}</span>` : ""}${(() => {
-            const rr = A.run;
-            const on = rr && ["queued", "waiting", "running"].includes(rr.status) && (rr.waves || []).includes(w.key);
-            return on ? `<span class="chip queued">${SPIN} идёт прогон ${esc(rr.id)}${rr.live && rr.live.wave && w.specs.some((f) => f.startsWith(rr.live.wave)) ? " · тест " + rr.live.n + "/" + rr.live.of : ""}</span>` : `<button class="sm" data-act="accrun" data-key="${esc(w.key)}" title="Прогнать спеку приёмки только этой волны">🤖 прогнать</button>`;
-        })()}</div>` : ""}${!(w.specs || []).length && !w.autoClosed && (w.items || []).length ? `<div class="acc-auto"><span class="mute">спеки приёмки нет${w.specAskedAt ? " · заказана " + new Date(w.specAskedAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</span><button class="sm" data-act="accaskspec" data-key="${esc(w.key)}" title="Агент волны напишет спеку приёмки в своей ветке: тесты [iN] по пунктам этого чек-листа. После коммита и влива «🤖 прогнать» закроет «авто»-пункты">🧪 ${w.specAskedAt ? "заказать снова" : "заказать спеку"}</button></div>` : ""}${(w.autoStray || []).length ? `<div class="sub">Тесты спеки без пункта в чек-листе: ${w.autoStray.map((a) => (a.st === "ok" ? "✓ " : "✗ ") + esc(a.title)).join("; ")}</div>` : ""}`;
-        const wait = w.asking ? `<div class="sub">${SPIN} агент составляет чек-лист…</div>` : !items.length ? `<div class="sub">${w.raw ? esc(w.raw).replace(/\n/g, "<br>") : "Чек-листа ещё нет."}</div><button class="sm" data-act="accaskone" data-key="${esc(w.key)}">📋 Спросить чек-лист</button>` : "";
-        return epHead + `<div class="acc-w" data-acckey="${esc(w.key)}" style="--c:${w.color}">
-      <div class="acc-wh" data-act="accfold" data-key="${esc(w.key)}"><span>${open ? "▾" : "▸"}</span><b>${w.emoji} ${esc(w.tag)} · ${esc(w.title)}</b><span class="sp"></span>${items.length ? `<span class="mute">${done}/${items.length}</span>` : ""}${vchip}${sent}</div>
-      ${open ? `<div class="acc-wb">${w.reopened ? `<div class="sub">⚠ ${esc(accReopenText(w.reopened))}</div>` : ""}<div class="mute" style="font-size:11px">влив ${esc(w.mergeSha)}${w.merges > 1 ? " · вливов волны: " + w.merges + " (приёмка одна на волну)" : ""}${w.onStand ? " · на стенде" : " · ещё НЕ выкачено на стенд"}${w.archived ? " · слот в архиве" : ""}</div>${auto}${wait}${rows}
-        <textarea class="acc-vc" data-accvc="${esc(w.key)}" rows="2" placeholder="Общий комментарий по волне">${esc(w.comment || "")}</textarea>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${items.length ? `<button class="sm" data-annot="checklist" data-tree="${esc(w.key)}" title="Разметить чек-лист по пунктам: замечания агенту волны одним сообщением">✎ Разметить</button>` : ""}<button class="sm ${w.verdict === "accepted" ? "good" : ""}" data-act="accverdict" data-key="${esc(w.key)}" data-v="accepted">✓ Принято</button><button class="sm ${w.verdict === "rejected" ? "badb" : ""}" data-act="accverdict" data-key="${esc(w.key)}" data-v="rejected">✗ Не принято</button>${items.length ? `<button class="sm ghost" data-act="accaskone" data-key="${esc(w.key)}" title="Спросить чек-лист заново (отметки сбросятся)">↻ чек-лист заново</button>` : ""}${w.sendNote ? `<span class="sub">${esc(w.sendNote)}</span>` : ""}</div></div>` : ""}
-    </div>`;
-    }).join("");
-}
-
-const accReopenText = (r) => r.why ? r.why + " — вердикт «принято» снят" : "После " + (r.prev === "accepted" ? "вердикта «принято»" : r.prev === "rejected" ? "вердикта «не принято»" : "отметок пунктов") + " влит новый код продукта (" + String(r.sha || "").slice(0, 10) + (r.n ? ", файлов " + r.n + ": " + (r.files || []).join(", ") : "") + ")" + (r.prev ? ": вердикт снят, волна на разборе" : "") + (r.marked ? "; отметки " + r.marked + " пункт(ов) — до этого кода" : "");
-
-// Итог автоприёмки по пункту: метка [iN] в выводе команды приёмки → ✓/✗.
-function accAuto(a, w, x) {
-    const one = w && x && (w.specs || []).length ? `<button class="lnk" data-act="accrun1" data-key="${esc(w.key)}" data-id="${esc(x.id)}" title="Перепрогнать только этот пункт (${esc(x.id)}) — тест [${esc(x.id)}] спеки волны">↻ только ${esc(x.id)}</button>` : "";
-    if (!a)
-        return one && x.how === "auto" ? `<div class="acc-auto">${one}</div>` : "";
-    const chip = a.st === "ok" ? '<span class="chip ok">авто ✓</span>' : a.st === "skip" ? '<span class="chip">авто: пропущен</span>' : a.st === "flaky" ? '<span class="chip queued">авто ✓ со второй попытки</span>' : '<span class="chip fail">авто ✗</span>';
-    return `<div class="acc-auto">${chip}<span class="mute">${esc(a.job)}${a.ms ? " · " + (a.ms / 1000).toFixed(1) + " с" : ""}</span>${one}${a.err ? `<div class="err">${esc(a.err)}</div>` : ""}</div>`;
-}
-
-
-export function accJump(key) {
-    const w = ((S.accept && S.accept.waves) || []).find((x) => x.key === key);
-    if (w) {
-        if (w.autoClosed)
-            ACC_FOLD.add(key);
-        else
-            ACC_FOLD.delete(key);
-        ls("dash.accfold", [...ACC_FOLD]);
-    }
-    renderSide();
-    requestAnimationFrame(() => {
-        const el = document.querySelector(`.acc-w[data-acckey="${CSS.escape(key)}"]`);
-        if (!el)
-            return;
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-        el.classList.remove("accflash");
-        void el.offsetWidth;
-        el.classList.add("accflash");
-    });
-}
-
 function orchBranchChip() {
     const t = (S.trees || []).find((x) => x.key === "orchestrator");
     if (!t || !t.exists)
@@ -117,14 +22,6 @@ function orchBranchChip() {
     return `<span class="chip ${t.behind ? "queued" : ""}" style="font-weight:400;font-family:ui-monospace,monospace;font-size:11px" title="${esc(tip)}">⎇ ${esc(t.branch)}${dirty ? "*" : ""}${t.ahead || t.behind ? " ↑" + (t.ahead || 0) + " ↓" + (t.behind || 0) : ""}</span> `;
 }
 
-export const ACC_FOLD = new Set((() => {
-    try {
-        return JSON.parse(localStorage.getItem("dash.accfold") || "[]");
-    }
-    catch {
-        return [];
-    }
-})());
 
 // Разделы рейла: [id, значок, название, подсказка, модуль]. Раздел с модулем виден, только когда модуль включён.
 export const RAIL = [
@@ -190,7 +87,8 @@ function railBadge(m) {
     if (m === "modules")
         return 0;
     if (m === "accept")
-        return S.accept && S.accept.brief ? S.accept.waiting || 0 : ((S.accept && S.accept.waves) || []).filter((w) => !w.verdict && (w.items || []).length).length;
+        // счётчик — по виду колонки: «этот эпик» — только волны эпика вкладки (метки П1/П2 разных эпиков не складываются)
+        return S.accept && S.accept.brief ? S.accept.waiting || 0 : ((S.accept && S.accept.waves) || []).filter((w) => !w.verdict && (w.items || []).length && waveInScope(w, ACCF.scope, S.activeEpic || "")).length;
     return 0;
 }
 
@@ -232,6 +130,7 @@ export function renderSide() {
     side.classList.toggle("noepic", orch && noEpic);
     const r = RAIL.find((x) => x[0] === RAILM) || RAIL[0];
     const hh = orch && noEpic ? `🟥 Оркестратор <span class="sub" style="font-weight:400">открытых эпиков нет — у нового эпика будет свой оркестратор («+ новый эпик» вверху)</span>`
+        : orch && sideChatKey() === DISP_KEY ? dispHeader()
         : orch && sideChatKey() !== "orchestrator" ? (() => {
             const t = S.trees.find((x) => x.key === sideChatKey());
             return `<span class="dotc" style="background:${esc(t.color || "var(--accent)")}"></span>${esc(t.tag)} · ${esc(t.title)}<span class="sub" style="font-weight:400">${esc(t.branch || "")}${t.wagon ? " · вагон " + esc(t.wagon) : ""}</span>`;

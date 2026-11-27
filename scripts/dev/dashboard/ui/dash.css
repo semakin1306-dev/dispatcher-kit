@@ -296,9 +296,38 @@
   .tio pre{margin:0;padding:7px 10px;font:12px/1.45 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;border:0}
   .ch-log .msg.assistant{background:none;border-radius:0;padding:6px 38px 6px 20px;position:relative}
   .ch-log .msg.assistant::before{content:"";position:absolute;left:4px;top:13px;width:7px;height:7px;border-radius:50%;background:var(--ink);opacity:.8}
+  /* колонка «Приёмка»: инструменты — строками, липкая панель фильтров, волны — одной строкой, группы по эпикам */
   .acc-head{display:grid;gap:6px;margin-bottom:6px}
-  .acc-w{border:1px solid var(--line);border-left:3px solid var(--c);border-radius:10px;margin:8px 0;background:var(--card)}
-  .acc-wh{display:flex;gap:6px;align-items:center;padding:8px 10px;cursor:pointer;font-size:13px}
+  .acc-tools{display:grid;gap:2px;padding:4px 8px;border:1px solid var(--line);border-radius:10px;background:var(--soft);margin-bottom:6px}
+  .acc-tl{display:flex;gap:6px;align-items:center;min-height:30px;font-size:12.5px;min-width:0;flex-wrap:wrap}
+  .acc-tl>b{white-space:nowrap} .acc-tl .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:12px}
+  .acc-tl .sp{flex:1 1 auto} .acc-tl .sm{padding:3px 9px;font-size:12px}
+  .acc-tg{background:none;border:0;padding:0;color:var(--ink);cursor:pointer;font:inherit;white-space:nowrap}
+  .acc-bar{position:sticky;top:-10px;z-index:3;margin:0 -12px;padding:8px 12px 6px;background:var(--card);border-bottom:1px solid var(--line);display:grid;gap:6px}
+  .acc-fs{display:flex;gap:4px;flex-wrap:wrap} .acc-fs .sm{padding:3px 9px;font-size:12px} .acc-fs .sm i{font-style:normal;opacity:.6;margin-left:2px}
+  .acc-fs .sm.on{background:var(--ink);color:var(--card);border-color:var(--ink)}
+  .acc-sr{display:flex;gap:6px;align-items:center;flex-wrap:wrap} .acc-sr input{flex:1 1 160px;min-width:0;font:inherit;font-size:12.5px;padding:5px 10px;border-radius:var(--r-pill);border:1px solid var(--line);background:var(--soft);color:var(--ink)}
+  .acc-sr input:focus{outline:none;border-color:var(--accent)} .acc-gr button{font-size:12px;padding:3px 9px}
+  .acc-g{display:flex;gap:6px;align-items:center;margin:12px 2px 2px;font-size:12px;color:var(--text-2)} .acc-g b{color:var(--ink)}
+  .acc-g.ep{font-size:12.5px;margin-top:16px;padding-bottom:3px;border-bottom:1px solid var(--line)}
+  .acc-g .dotc{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .acc-w{border:1px solid var(--line);border-left:3px solid var(--c);border-radius:8px;margin:4px 0;background:var(--card)}
+  .acc-w.open{margin:8px 0;box-shadow:var(--shadow)}
+  .acc-wh{display:flex;gap:6px;align-items:center;padding:6px 8px;cursor:pointer;font-size:12.5px;min-width:0}
+  .acc-wh:hover{background:var(--soft)} .acc-car{color:var(--text-3);width:10px}
+  .acc-n{font-family:var(--mono);font-size:12px;white-space:nowrap} .acc-t{min-width:0;flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-2)}
+  .acc-wh .sp{flex:1 1 auto} .acc-wh .chip{font-size:11px;padding:1px 7px;white-space:nowrap}
+  .acc-c{font-size:11px;white-space:nowrap;padding:1px 6px;border-radius:6px;background:var(--chip);color:var(--text-2);font-variant-numeric:tabular-nums}
+  .acc-c.ok{color:var(--good);background:var(--good-bg)} .acc-c.bad{color:var(--bad);background:var(--bad-bg)} .acc-c.todo{color:var(--warn-text);background:var(--warn-bg)}
+  .acc-q{display:inline-flex;gap:2px} .acc-q .sm{padding:1px 8px;font-size:12px}
+  .acc-sec{font-size:11.5px;font-weight:600;color:var(--text-2);margin-top:2px}
+  .acc-al{justify-self:start;background:var(--chip);border:0;border-radius:8px;padding:4px 10px;font:inherit;font-size:12px;color:var(--text-2);cursor:pointer}
+  .acc-al.ok{color:var(--good);background:var(--good-bg)} .acc-al.bad{color:var(--bad);background:var(--bad-bg)}
+  .acc-ih{display:flex;gap:6px;align-items:center;flex-wrap:wrap} .acc-ih .chip{font-size:11px;padding:1px 7px}
+  .acc-wh2{min-width:0;word-break:break-word;font-size:12px} .acc-cmb{margin-left:auto;opacity:.55} .acc-cmb:hover{opacity:1}
+  .acc-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .acc-ge{margin-top:16px}
+  .acc-er{display:flex;gap:6px;align-items:center;padding:4px 8px;margin:3px 0;border-left:3px solid var(--c);border-radius:6px;background:var(--soft);font-size:12px;min-width:0}
   .acc-wb{display:grid;gap:8px;padding:0 10px 10px}
   .acc-it{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;padding:6px;border-radius:8px;background:var(--soft);font-size:12.5px}
   .acc-it.ok{box-shadow:inset 3px 0 0 var(--good)} .acc-it.bad{box-shadow:inset 3px 0 0 var(--bad)}
@@ -313,7 +342,7 @@
   .acc-auto .err{color:var(--bad);word-break:break-word}
   .acc-tx button.lnk{color:var(--accent);background:none;border:0;padding:0;cursor:pointer;font:inherit;text-decoration:underline;text-align:left;word-break:break-word}
   .chip.pers{cursor:pointer} .chip.pers:hover{outline:1px solid var(--accent)}
-  .acc-cm{margin-top:4px;font:inherit;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+  .acc-cm{width:100%;margin-top:4px;font:inherit;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
   .acc-vc{font:inherit;font-size:12.5px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);resize:vertical}
   .flash{outline:2px solid var(--accent);outline-offset:2px;transition:outline-color .8s}
   .more3{display:grid;grid-template-columns:minmax(280px,1fr) minmax(340px,1.2fr) minmax(260px,.8fr);border-top:1px solid var(--line);background:var(--soft);align-items:stretch}
@@ -924,3 +953,14 @@
   .tgrow.on .tgl{background:var(--good);border-color:var(--good)} .tgrow.on .tgl::after{transform:translateX(13px);background:#fff} .tgrow.busy{opacity:.6}
   .hlp{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--line);color:var(--text-3);font-size:10px;font-weight:600;cursor:help;vertical-align:middle;margin-left:2px} .hlp:hover{color:var(--ink);border-color:var(--text-3)}
   .kv.lim{font-size:11px;color:var(--text-3)} .kv.lim b{color:var(--text-2)}
+
+/* агент-диспетчер в списке чатов (dispatcher-chat.js) */
+.clg.disp{color:#7c5cff}
+.cli.disp .dspi,.dsp .dspi{font-size:16px;line-height:1}
+.dsp .ch-log{display:flex;flex-direction:column;gap:10px;padding:10px;overflow:auto}
+.dsp-j{border:1px solid var(--line, rgba(127,127,127,.2));border-left:3px solid #7c5cff;border-radius:8px;padding:8px 10px;background:var(--soft)}
+.dsp-j.dry{border-left-color:var(--text-3);opacity:.85}
+.dsp-jh{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px}
+.dsp-md{font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
+.dsp-md h2{font-size:13px;margin:4px 0} .dsp-md h3,.dsp-md p strong{font-size:12.5px}
+.dsp-inbox{font-size:11.5px;color:var(--text-3);padding:4px 8px} .dsp-msg{color:var(--text);padding:2px 0}

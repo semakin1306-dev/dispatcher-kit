@@ -194,3 +194,16 @@ test("правила подтягивания staging живут в sync-rules.m
     for (const k of ["conflictNext", "dirtyBlockers", "inEpic", "isSyncAsk", "parseSync", "syncConflictText", "syncDirtyText"])
         assert.equal(R[k], undefined, k);
 });
+
+test("худший итог пункта из нескольких проектов: пропуск (не проверено) не прячется за зелёным со второй попытки", () => {
+    const e = { items: [{ id: "i1", how: "auto", state: "todo" }, { id: "i2", how: "auto", state: "todo" }] };
+    const res = [
+        { id: "i1", st: "flaky", title: "стол [i1]" },
+        { id: "i1", st: "skip", title: "телефон [i1]" },
+        { id: "i2", st: "skip", title: "стол [i2]" },
+        { id: "i2", st: "bad", title: "телефон [i2]" },
+    ];
+    R.applyResults(e, res, { job: "j1" });
+    assert.equal(e.items[0].auto.st, "skip", "skip хуже flaky");
+    assert.equal(e.items[1].auto.st, "bad", "красный хуже пропуска");
+});
